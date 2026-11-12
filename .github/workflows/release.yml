@@ -2,8 +2,10 @@ name: Publish image and deploy
 
 # On every push to main (and on version tags) this builds the Docker image and publishes it to
 # GitHub Container Registry: ghcr.io/<owner>/<repo>.
-# If the repository variable AZURE_WEBAPP_NAME and the secret AZURE_WEBAPP_PUBLISH_PROFILE are set,
-# it then deploys that exact image to Azure App Service. Forks without them only publish.
+# If the repository variables AZURE_WEBAPP_NAME, AZURE_CLIENT_ID, AZURE_TENANT_ID and
+# AZURE_SUBSCRIPTION_ID are set, it then deploys that exact image to Azure App Service.
+# Azure sign-in uses OpenID Connect: no passwords or publish profiles are stored in GitHub.
+# Forks without these variables only publish the image.
 
 on:
   push:
@@ -56,13 +58,25 @@ jobs:
     needs: publish
     if: ${{ vars.AZURE_WEBAPP_NAME != '' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    # The Azure federated credential trusts this environment
+    # (subject: repo:<owner>/<repo>:environment:production).
+    # Add yourself as a required reviewer on it to approve each deploy.
     environment:
       name: production
       url: ${{ steps.deploy.outputs.webapp-url }}
+    permissions:
+      id-token: write # lets the job request a short-lived OIDC token for Azure
+      contents: read
     steps:
-      - id: deploy
+      - name: Sign in to Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy the exact image built above
+        id: deploy
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ vars.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           images: ${{ needs.publish.outputs.image }}

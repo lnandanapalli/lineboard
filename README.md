@@ -89,13 +89,28 @@ The container listens on port 80 and exposes a health check at `/healthz`.
      SUPABASE_URL=https://<project>.supabase.co SUPABASE_ANON_KEY=<anon-key> WEBSITES_PORT=80
    ```
    In the portal, also set **Monitoring -> Health check** to `/healthz`.
-3. **Connect GitHub to Azure.** In the portal, open the web app and choose **Download publish profile**.
-   If that option is greyed out, first turn on **Configuration -> General settings -> SCM Basic Auth Publishing Credentials**.
-   Then, in the GitHub repository settings:
-   - **Secrets and variables -> Actions -> Secrets**: add `AZURE_WEBAPP_PUBLISH_PROFILE` with the file's contents.
-   - **Secrets and variables -> Actions -> Variables**: add `AZURE_WEBAPP_NAME` with your app name.
+3. **Let GitHub deploy to Azure (OpenID Connect, no passwords).**
+   1. Azure portal -> **Microsoft Entra ID -> App registrations -> New registration**. Name it e.g. `lineboard-github-deploy`, keep the defaults, **Register**.
+      Note its **Application (client) ID** and **Directory (tenant) ID**.
+   2. In that app registration: **Certificates & secrets -> Federated credentials -> Add credential**.
+      Scenario **GitHub Actions deploying Azure resources**, Organization `<owner>`, Repository `<repo>`,
+      Entity type **Environment**, Environment name `production`. **Add**.
+   3. Open your web app -> **Access control (IAM) -> Add -> Add role assignment** -> role **Website Contributor** ->
+      Members: **User, group, or service principal** -> select `lineboard-github-deploy` -> **Review + assign**.
+      This lets GitHub deploy to this one web app and nothing else.
+   4. GitHub repository -> **Settings -> Secrets and variables -> Actions -> Variables** -> add:
 
-From then on, every push to `main` runs the tests, publishes a new image and deploys that exact image. Forks without these settings only publish the image.
+      | Variable | Value |
+      | --- | --- |
+      | `AZURE_WEBAPP_NAME` | your web app name |
+      | `AZURE_CLIENT_ID` | Application (client) ID |
+      | `AZURE_TENANT_ID` | Directory (tenant) ID |
+      | `AZURE_SUBSCRIPTION_ID` | subscription ID (shown on the web app's Overview) |
+
+      These are identifiers, not secrets. Basic authentication on the web app can stay **off**.
+   5. Recommended: **Settings -> Environments -> production -> Required reviewers** -> add yourself, so every deploy waits for your approval.
+
+From then on, every push to `main` publishes a new image and deploys that exact version (`sha-<commit>`), after your approval if you added it. Forks without these settings only publish the image.
 
 #### Option B: manual deploy with Azure Container Registry
 
