@@ -74,7 +74,6 @@ The container reads two environment variables when it starts:
 
 The same image works for every environment. If both are empty, the app runs in local mode.
 The container listens on port 80 and exposes a health check at `/healthz`.
-Requests to `www.<your-domain>` are redirected to `<your-domain>`, so bind both hostnames to the app and the site always uses one address.
 
 #### Option A: automatic deploys with GitHub Actions (recommended)
 
