@@ -9,7 +9,7 @@ COPY . .
 RUN npm run build
 
 # ---- serve ----
-FROM nginx:1.27-alpine
+FROM nginx:1.31-alpine
 LABEL org.opencontainers.image.title="Lineboard" \
       org.opencontainers.image.description="Handwriting whiteboard with strip-lock palm rejection" \
       org.opencontainers.image.licenses="MIT"
