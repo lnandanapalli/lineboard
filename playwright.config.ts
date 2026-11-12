@@ -12,6 +12,8 @@ export default defineConfig({
     // Roughly a Galaxy Tab A9+ in portrait.
     viewport: { width: 800, height: 1280 },
     hasTouch: true,
+    // Request mocks (tests/mockSupabase.ts) can't see requests made by the app's service worker.
+    serviceWorkers: 'block',
     launchOptions: process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {},
   },
   webServer: {

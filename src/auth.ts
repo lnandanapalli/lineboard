@@ -3,8 +3,15 @@ import { h } from './util';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
 
+export interface AuthOptions {
+  /** Offer "Try it without an account" (shown to new visitors). */
+  onTryLocal?: () => void;
+  /** The visitor came from guest mode: explain that their notes will be saved, and offer a way back. */
+  guest?: { noteCount: number; onBack: () => void };
+}
+
 /** Renders the sign-in screen. The app reacts to Supabase auth state changes, not to this function. */
-export function renderAuth(root: HTMLElement, sb: SupabaseClient) {
+export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOptions = {}) {
   let mode: Mode = 'signin';
   const redirectTo = window.location.origin + window.location.pathname;
 
@@ -80,6 +87,36 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient) {
   });
 
   render();
+
+  let guestBox: HTMLElement | null = null;
+  if (opts.guest) {
+    const n = opts.guest.noteCount;
+    const back = h('button', { type: 'button', class: 'link' }, 'Back to my notes without signing in');
+    back.addEventListener('click', opts.guest.onBack);
+    guestBox = h(
+      'div',
+      { class: 'guest-box' },
+      h(
+        'p',
+        {},
+        n
+          ? `Sign in or create a free account and the ${n === 1 ? 'note' : `${n} notes`} you made on this device will be saved to it.`
+          : 'Sign in or create a free account to save your notes and use them on other devices.',
+      ),
+      back,
+    );
+  } else if (opts.onTryLocal) {
+    const tryBtn = h('button', { type: 'button', class: 'btn wide try-local' }, 'Try it without an account');
+    tryBtn.addEventListener('click', opts.onTryLocal);
+    guestBox = h(
+      'div',
+      { class: 'guest-box' },
+      h('div', { class: 'or' }, h('span', {}, 'or')),
+      tryBtn,
+      h('small', {}, 'Your notes stay in this browser. Sign in any time to save them to an account.'),
+    );
+  }
+
   root.replaceChildren(
     h(
       'div',
@@ -93,6 +130,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient) {
         form,
         extra,
         msg,
+        guestBox,
       ),
     ),
   );

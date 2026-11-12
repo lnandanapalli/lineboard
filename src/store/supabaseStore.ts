@@ -43,6 +43,14 @@ export class SupabaseStore implements Store {
     return data as NoteMeta;
   }
 
+  /** Insert or update notes keeping their ids (used to move notes made without an account). Idempotent. */
+  async importNotes(notes: NoteMeta[]) {
+    if (!notes.length) return;
+    const rows = notes.map((n) => ({ id: n.id, user_id: this.userId, title: n.title, created_at: n.created_at, updated_at: n.updated_at }));
+    const { error } = await this.sb.from('notes').upsert(rows, { onConflict: 'id' });
+    check(error);
+  }
+
   async renameNote(id: string, title: string) {
     const { error } = await this.sb.from('notes').update({ title }).eq('id', id);
     check(error);

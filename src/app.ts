@@ -13,6 +13,13 @@ const HL_WIDTHS = [14, 22, 32];
 
 type Action = { type: 'add' | 'remove'; strokes: Stroke[] };
 
+export interface AppOptions {
+  /** Signed in: sign out of the account. */
+  signOut?: () => Promise<void>;
+  /** Trying without an account: go to sign-in; notes on this device are moved into the account afterwards. */
+  signIn?: () => void;
+}
+
 export class App {
   private settings: Settings;
   private board!: Board;
@@ -49,7 +56,7 @@ export class App {
     root: HTMLElement,
     private store: Store,
     private user: AppUser,
-    private signOut: (() => Promise<void>) | null,
+    private opts: AppOptions = {},
   ) {
     this.root = root;
     this.settings = { ...DEFAULT_SETTINGS, ...lsGet<Partial<Settings>>(this.lsKey('settings'), {}) };
@@ -68,6 +75,17 @@ export class App {
       { signal: this.abort.signal },
     );
     void this.init();
+  }
+
+  /** Wait (briefly) until queued saves are written, e.g. before leaving guest mode. */
+  async flush(timeoutMs = 3000) {
+    const end = Date.now() + timeoutMs;
+    while (this.queue.pending && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+  }
+
+  private async goSignIn() {
+    await this.flush();
+    this.opts.signIn?.();
   }
 
   /** Tear down before switching user. */
@@ -159,6 +177,7 @@ export class App {
         this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
       ),
       h('div', { class: 'spacer' }),
+      this.opts.signIn ? this.signInButton('toolbar') : null,
       this.status,
       this.iconBtn(icons.download, 'Export as PNG', () => void this.exportPNG()),
       this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
@@ -175,7 +194,16 @@ export class App {
       h('div', { class: 'sidebar-head' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')), this.iconBtn(icons.close, 'Close', () => this.toggleSidebar(false))),
       newBtn,
       this.noteList,
-      h('div', { class: 'sidebar-foot' }, this.store.mode === 'local' ? 'Local mode: notes stay on this device.' : this.user.email ?? ''),
+      h(
+        'div',
+        { class: 'sidebar-foot' },
+        this.opts.signIn
+          ? 'Trying without an account: notes are saved in this browser only.'
+          : this.store.mode === 'local'
+            ? 'Local mode: notes stay on this device.'
+            : (this.user.email ?? ''),
+      ),
+      this.opts.signIn ? this.signInButton('sidebar') : null,
     );
     const scrim = h('div', { class: 'scrim' });
     scrim.addEventListener('click', () => this.toggleSidebar(false));
@@ -236,6 +264,16 @@ export class App {
         if (e.key === 'm') this.setMulti(!this.board.isMulti());
       }
     }, { signal: this.abort.signal });
+  }
+
+  private signInButton(where: 'toolbar' | 'sidebar' | 'settings') {
+    const b = h('button', { class: 'btn primary signin-save signin-' + where, type: 'button', title: 'Sign in or create an account to save your notes' }) as HTMLButtonElement;
+    b.innerHTML = `${icons.cloud}<span>Sign in to save</span>`;
+    b.addEventListener('click', () => {
+      if (where === 'settings') this.settingsDlg.close();
+      void this.goSignIn();
+    });
+    return b;
   }
 
   private toggleSidebar(force?: boolean) {
@@ -356,8 +394,11 @@ export class App {
   private renderStatus(s: SyncState) {
     const local = this.store.mode === 'local';
     const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: 'Offline, will retry' }[s];
-    this.status.className = 'status ' + s;
+    // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.
+    this.status.className = 'status ' + s + (this.opts.signIn ? ' compact' : '');
     this.status.textContent = text;
+    this.status.title = text;
+    this.status.setAttribute('aria-label', text);
   }
 
   private bumpCurrent() {
@@ -574,16 +615,21 @@ export class App {
     this.contactReadout = h('p', { class: 'readout' }, 'Last contact on page: none yet');
 
     const account = h('div', { class: 'set-account' });
-    if (this.signOut) {
+    if (this.opts.signOut) {
       const out = h('button', { class: 'btn', type: 'button' }, 'Sign out');
       out.addEventListener('click', async () => {
         if (this.queue.pending) {
           const ok = await dialog({ title: 'Unsaved changes', message: 'Some strokes are still being saved. Sign out anyway?', ok: 'Sign out', danger: true });
           if (!ok) return;
         }
-        await this.signOut!();
+        await this.opts.signOut!();
       });
       account.append(h('span', {}, 'Signed in as ', h('b', {}, this.user.email ?? '')), out);
+    } else if (this.opts.signIn) {
+      account.append(
+        h('span', {}, "You're trying Lineboard without an account. Notes are saved only in this browser. Sign in or create a free account to keep them and use them on other devices."),
+        this.signInButton('settings'),
+      );
     } else {
       account.append(h('span', {}, 'Local mode. Configure Supabase to sync across devices.'));
     }

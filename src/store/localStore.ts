@@ -71,6 +71,24 @@ export class LocalStore implements Store {
       }
     }
   }
+  /** Remove every note, stroke and setting kept on this device. */
+  clearAll() {
+    for (const m of this.notes()) {
+      try {
+        localStorage.removeItem(this.strokesKey(m.id));
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const k of ['lb-local-notes', 'lb-local-settings']) {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   async loadSettings() {
     return lsGet<Partial<Settings> | null>('lb-local-settings', null);
   }

@@ -65,6 +65,14 @@ export function lsSet(key: string, value: unknown) {
   }
 }
 
+export function lsDel(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* unavailable */
+  }
+}
+
 /** In-page confirm/prompt dialog. Resolves null on cancel. */
 export function dialog(opts: { title: string; message?: string; input?: string; ok?: string; danger?: boolean }): Promise<string | null> {
   return new Promise((resolve) => {
