@@ -47,4 +47,5 @@ jobs:
           curl -fsS http://localhost:8080/ | grep -q '<title>Lineboard</title>'
           curl -fsS http://localhost:8080/config.js | grep -q 'https://example.supabase.co'
           curl -fsSI http://localhost:8080/ | grep -qi 'content-security-policy'
+          curl -sSI -H 'Host: www.example.com' 'http://localhost:8080/some/path?x=1' | grep -qi '^location: https://example.com/some/path?x=1'
           docker rm -f lb
