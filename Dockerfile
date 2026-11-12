@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- build ----
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -9,7 +9,7 @@ COPY . .
 RUN npm run build
 
 # ---- serve ----
-FROM nginx:1.27-alpine
+FROM nginx:1.31-alpine
 LABEL org.opencontainers.image.title="Lineboard" \
       org.opencontainers.image.description="Handwriting whiteboard with strip-lock palm rejection" \
       org.opencontainers.image.licenses="MIT"
