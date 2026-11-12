@@ -23,7 +23,8 @@ and only the strip you unlock accepts ink. Rest your palm anywhere else.
 - Pen (pressure-aware with active pens), highlighter, stroke eraser, undo / redo, multiple notes, PNG export.
 - Accounts and sync with **Supabase**. Strokes save in the background through a queue that survives reloads and retries while offline.
 - Installable as an app (PWA). Works in portrait and landscape: notes scale to the screen width.
-- **Local mode**: with no backend configured, notes are stored in the browser. Handy for trying it out and for development.
+- **Try it without an account.** Visitors can start writing straight away; notes stay in the browser. When they sign in or create an account, those notes (and their settings) move into the account.
+- **Local mode**: with no backend configured, the whole app runs in the browser with no sign-in. Handy for self-hosting on one device and for development.
 
 ## How it is built
 

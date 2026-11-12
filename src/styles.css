@@ -27,10 +27,10 @@ button { font: inherit; color: inherit; }
 }
 .toolbar .group { display: flex; align-items: center; gap: 2px; }
 .toolbar .sep { width: 1px; height: 28px; background: var(--line); margin: 0 2px; flex: none; }
-.toolbar .spacer { flex: 1; min-width: 8px; }
+.toolbar .spacer { flex: 1; min-width: 4px; }
 .title-input {
   font: inherit; font-weight: 600; border: 1px solid transparent; border-radius: 8px;
-  padding: 6px 8px; width: 150px; min-width: 100px; background: transparent; flex: none; text-overflow: ellipsis;
+  padding: 6px 8px; width: 128px; min-width: 100px; background: transparent; flex: none; text-overflow: ellipsis;
 }
 .title-input:hover, .title-input:focus { border-color: var(--line); outline: none; background: #fafafa; }
 
@@ -70,6 +70,7 @@ button { font: inherit; color: inherit; }
 .status.saving::before { background: #f59e0b; }
 .status.retrying::before { background: var(--danger); }
 .status.retrying { color: var(--danger); }
+.status.compact { font-size: 0; gap: 0; padding: 0 6px; }
 
 .main { position: relative; flex: 1; min-height: 0; display: flex; }
 .board-host { position: relative; flex: 1; min-width: 0; }
@@ -177,8 +178,20 @@ button { font: inherit; color: inherit; }
 .auth-msg { margin: 0; font-size: 14px; min-height: 1em; }
 .auth-msg.err { color: var(--danger); }
 .auth-msg.ok { color: var(--muted); }
+.guest-box { display: flex; flex-direction: column; gap: 10px; font-size: 14px; color: var(--muted); }
+.guest-box p { margin: 0; color: var(--ink); background: var(--accent-soft); padding: 10px 12px; border-radius: 10px; }
+.guest-box .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.guest-box .or::before, .guest-box .or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.guest-box small { text-align: center; }
+
+/* "Sign in to save" (guest mode) */
+.signin-save { height: 36px; padding: 0 10px; flex: none; white-space: nowrap; font-size: 14px; }
+.signin-sidebar { width: 100%; }
+.migrate-card p { margin: 0; color: var(--muted); }
+.migrate-actions { display: flex; flex-direction: column; gap: 8px; }
 
 @media (max-width: 700px) {
   .title-input { width: 120px; }
   .toggle span { display: none; }
+  .signin-toolbar span { display: none; }
 }
