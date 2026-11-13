@@ -7,6 +7,12 @@ export const PAGE_W = 1000;
 const SETTLE_MS = 90;
 const ERASER_RADIUS = 12;
 const MIN_POINT_DIST = 0.6;
+/** Free mode: two fingers that land within this many ms of each other start a two-finger scroll. */
+const PAN_PAIR_MS = 300;
+/** ...and a stroke the first finger already started is dropped only if it is this young. */
+const PAN_DROP_STROKE_MS = 250;
+/** Free mode pinch-zoom range (1 = page fits the width, as in strip mode). */
+const MAX_ZOOM = 4;
 
 export interface BoardCallbacks {
   onStrokesAdded(strokes: Stroke[]): void;
@@ -71,6 +77,11 @@ export class Board {
   private noteId = '';
 
   private scrollY = 0;
+  /** Horizontal scroll, only non-zero when zoomed in (free mode). */
+  private scrollX = 0;
+  /** Width-fit scale; `scale` = baseScale * zoom. */
+  private baseScale = 1;
+  private zoom = 1;
   private scale = 1;
   private dpr = 1;
   private viewW = 0;
@@ -83,6 +94,10 @@ export class Board {
 
   private active: ActiveInput | null = null;
   private marginDrag: MarginDrag | null = null;
+  /** Free mode: finger-sized touches currently on the page, for two-finger scrolling. */
+  private fingers = new Map<number, { x: number; y: number; t: number }>();
+  /** Two-finger gesture: the page point under the fingers stays under them while they move and pinch. */
+  private pan: { startDist: number; startZoom: number; anchorX: number; anchorY: number } | null = null;
   private eraserCursor: { x: number; y: number } | null = null;
 
   private dirty = { bg: false, ink: false, live: false, margin: false };
@@ -108,6 +123,7 @@ export class Board {
     this.el.append(this.margin, this.area);
     host.append(this.el);
 
+    this.settings = { ...settings };
     this.bgCtx = this.bg.getContext('2d')!;
     this.inkCtx = this.ink.getContext('2d')!;
     this.liveCtx = this.live.getContext('2d')!;
@@ -151,7 +167,16 @@ export class Board {
 
   updateSettings(s: Settings) {
     const oldH = this.settings.stripHeight;
-    this.settings = s;
+    this.settings = { ...s }; // own copy, so changes can be compared with the previous settings
+    if (!s.freeMode) {
+      this.fingers.clear();
+      this.pan = null;
+      if (this.zoom !== 1 || this.scrollX) {
+        this.zoom = 1; // back to strips: normal size again
+        this.scrollX = 0;
+        this.scale = this.baseScale;
+      }
+    }
     if (s.stripHeight !== oldH) {
       // Keep the same place on the page: map each unlocked strip to the new strip under its centre.
       this.unlocked = new Set([...this.unlocked].map((i) => Math.floor(((i + 0.5) * oldH) / s.stripHeight)));
@@ -274,11 +299,13 @@ export class Board {
     return Math.max(this.contentBottom() + H * 8, (maxUnlocked + 6) * H, this.viewH / this.scale + H);
   }
 
-  private setScroll(y: number) {
+  private setScroll(y: number, x = this.scrollX) {
     const max = Math.max(0, this.pageHeight() - this.viewH / this.scale);
     const ny = Math.min(Math.max(0, y), max);
-    if (ny === this.scrollY) return;
+    const nx = Math.min(Math.max(0, x), Math.max(0, PAGE_W - this.viewW / this.scale));
+    if (ny === this.scrollY && nx === this.scrollX) return;
     this.scrollY = ny;
+    this.scrollX = nx;
     this.invalidate('bg', 'ink', 'live', 'margin');
   }
 
@@ -309,17 +336,22 @@ export class Board {
     return [...this.unlocked].sort((a, b) => a - b);
   }
 
+  private get free(): boolean {
+    return this.settings.freeMode;
+  }
+
   private isUnlockedAt(y: number): boolean {
+    if (this.free) return y >= 0; // free whiteboard: the whole page takes ink
     return y >= 0 && this.unlocked.has(Math.floor(y / this.settings.stripHeight));
   }
 
   private toLogical(clientX: number, clientY: number) {
     const r = this.live.getBoundingClientRect();
-    return { x: (clientX - r.left) / this.scale, y: (clientY - r.top) / this.scale + this.scrollY };
+    return { x: (clientX - r.left) / this.scale + this.scrollX, y: (clientY - r.top) / this.scale + this.scrollY };
   }
 
   private toggleStrip(i: number) {
-    if (i < 0) return;
+    if (i < 0 || this.free) return;
     if (this.multi) {
       if (this.unlocked.has(i)) this.unlocked.delete(i);
       else this.unlocked.add(i);
@@ -334,6 +366,7 @@ export class Board {
 
   private applyMarginSide() {
     this.el.classList.toggle('margin-right', this.settings.marginSide === 'right');
+    this.el.classList.toggle('free', this.free);
   }
 
   // ----------------------------- input -----------------------------
@@ -352,12 +385,29 @@ export class Board {
     });
     L.addEventListener('contextmenu', (e) => e.preventDefault());
 
+    // Touches on the board are fully handled here. Cancelling the touch events stops the browser
+    // from treating a sideways stroke as a gesture, such as swipe-to-go-back navigation.
+    // (Pointer events, which do the drawing, still arrive.)
+    const block = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+    };
+    this.el.addEventListener('touchstart', block, { passive: false });
+    this.el.addEventListener('touchmove', block, { passive: false });
+
     this.el.addEventListener(
       'wheel',
       (e) => {
         e.preventDefault();
         const mult = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.viewH : 1;
-        this.setScroll(this.scrollY + (e.deltaY * mult) / this.scale);
+        if (e.ctrlKey && this.free) {
+          // Trackpad pinch / Ctrl+wheel: zoom around the pointer.
+          const at = this.toLogical(e.clientX, e.clientY);
+          this.setZoom(this.zoom * Math.exp(-e.deltaY * mult * 0.002));
+          const r = this.live.getBoundingClientRect();
+          this.setScroll(at.y - (e.clientY - r.top) / this.scale, at.x - (e.clientX - r.left) / this.scale);
+          return;
+        }
+        this.setScroll(this.scrollY + (e.deltaY * mult) / this.scale, this.scrollX + (e.deltaX * mult) / this.scale);
       },
       { passive: false },
     );
@@ -396,6 +446,7 @@ export class Board {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const size = contactSize(e);
     const pt = this.toLogical(e.clientX, e.clientY);
+    if (this.free && e.pointerType === 'touch' && size <= this.settings.touchThreshold && this.tryStartPan(e)) return;
 
     let accept = true;
     if (this.active) accept = false; // first-touch lock: one stroke at a time
@@ -425,6 +476,16 @@ export class Board {
   }
 
   private onMove(e: PointerEvent) {
+    if (this.fingers.has(e.pointerId)) {
+      this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: this.fingers.get(e.pointerId)!.t });
+      if (this.pan) {
+        const g = this.fingerGeometry();
+        if (this.pan.startDist > 0) this.setZoom((this.pan.startZoom * g.dist) / this.pan.startDist);
+        const r = this.live.getBoundingClientRect();
+        this.setScroll(this.pan.anchorY - (g.cy - r.top) / this.scale, this.pan.anchorX - (g.cx - r.left) / this.scale);
+        return;
+      }
+    }
     const a = this.active;
     if (!a || a.pointerId !== e.pointerId) {
       if (!a && this.tool === 'eraser' && e.pointerType === 'mouse') {
@@ -448,6 +509,10 @@ export class Board {
   }
 
   private onUp(e: PointerEvent, cancelled: boolean) {
+    if (this.fingers.delete(e.pointerId) && this.pan) {
+      if (this.fingers.size < 2) this.pan = null;
+      return;
+    }
     const a = this.active;
     if (!a || a.pointerId !== e.pointerId) return;
     const dur = performance.now() - a.start;
@@ -456,6 +521,50 @@ export class Board {
       return;
     }
     this.finish();
+  }
+
+  /**
+   * Free mode two-finger scroll. Records finger-sized touches; when a second one lands within
+   * PAN_PAIR_MS of the first, scrolling starts (and a just-started stroke from the first finger is dropped).
+   * A resting palm plus a pen never qualifies: they don't land together. Returns true if this touch now scrolls.
+   */
+  private tryStartPan(e: PointerEvent): boolean {
+    const now = performance.now();
+    for (const [id, f] of this.fingers) if (now - f.t > 5000) this.fingers.delete(id); // stale entries
+    this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    if (this.pan || this.fingers.size !== 2) return !!this.pan;
+    const [a, b] = [...this.fingers.values()];
+    if (Math.abs(a.t - b.t) > PAN_PAIR_MS) return false;
+    const act = this.active;
+    if (act) {
+      if (!this.fingers.has(act.pointerId) || now - act.start > PAN_DROP_STROKE_MS) return false;
+      this.cancelActive();
+    }
+    try {
+      this.live.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const g = this.fingerGeometry();
+    const anchor = this.toLogical(g.cx, g.cy);
+    this.pan = { startDist: g.dist, startZoom: this.zoom, anchorX: anchor.x, anchorY: anchor.y };
+    return true;
+  }
+
+  /** Centre of the (first two) fingers and the distance between them. */
+  private fingerGeometry() {
+    const [a, b] = [...this.fingers.values()];
+    if (!b) return { cx: a.x, cy: a.y, dist: 0 };
+    return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+  }
+
+  /** Free mode only: zoom between 1x (page fits the width) and MAX_ZOOM. */
+  private setZoom(z: number) {
+    const nz = this.free ? Math.min(MAX_ZOOM, Math.max(1, z)) : 1;
+    if (nz === this.zoom) return;
+    this.zoom = nz;
+    this.scale = this.baseScale * nz;
+    this.invalidate('bg', 'ink', 'live', 'margin');
   }
 
   private pressureOf(e: PointerEvent): number {
@@ -570,7 +679,8 @@ export class Board {
     this.dpr = Math.min(window.devicePixelRatio || 1, 3);
     this.viewW = w;
     this.viewH = h;
-    this.scale = w / PAGE_W;
+    this.baseScale = w / PAGE_W;
+    this.scale = this.baseScale * this.zoom;
     for (const c of [this.bg, this.ink, this.live]) {
       c.width = Math.round(w * this.dpr);
       c.height = Math.round(h * this.dpr);
@@ -608,6 +718,12 @@ export class Board {
     const { dpr, scale: s } = this;
     const H = this.settings.stripHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (this.free) {
+      // Plain whiteboard: white page, no strips, lines or locks.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
+      return;
+    }
     ctx.fillStyle = '#eef0f3';
     ctx.fillRect(0, 0, this.viewW, this.viewH);
     const [first, last] = this.visibleStrips();
@@ -640,7 +756,7 @@ export class Board {
 
   private setPageTransform(ctx: CanvasRenderingContext2D) {
     const k = this.scale * this.dpr;
-    ctx.setTransform(k, 0, 0, k, 0, -this.scrollY * k);
+    ctx.setTransform(k, 0, 0, k, -this.scrollX * k, -this.scrollY * k);
   }
 
   private drawInk() {
@@ -717,6 +833,10 @@ export class Board {
   }
 
   private drawMargin() {
+    if (this.free) {
+      this.margin.replaceChildren(); // hidden in free mode
+      return;
+    }
     const H = this.settings.stripHeight;
     const s = this.scale;
     const [first, last] = this.visibleStrips();

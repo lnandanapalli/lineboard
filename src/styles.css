@@ -15,6 +15,10 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg); }
+/* No browser gestures from sideways swipes anywhere in the app (e.g. swipe-to-go-back);
+   lists can still scroll vertically. The board sets touch-action: none on itself. */
+.app { touch-action: pan-y; }
+.sidebar, .note-list, .book-panel { overscroll-behavior: contain; }
 #app { height: 100%; }
 button { font: inherit; color: inherit; }
 
@@ -26,6 +30,7 @@ button { font: inherit; color: inherit; }
   flex-wrap: wrap; row-gap: 2px; user-select: none; -webkit-user-select: none;
 }
 .toolbar .group { display: flex; align-items: center; gap: 2px; }
+.toolbar [hidden] { display: none !important; }
 .toolbar .sep { width: 1px; height: 28px; background: var(--line); margin: 0 2px; flex: none; }
 .toolbar .spacer { flex: 1; min-width: 4px; }
 .title-input {
@@ -96,6 +101,25 @@ button { font: inherit; color: inherit; }
 .note-date { font-size: 12px; color: var(--muted); }
 .note-actions { display: flex; opacity: 0.6; }
 .note-list li.active .note-actions, .note-list li:hover .note-actions { opacity: 1; }
+.section-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: -4px; }
+.book-button {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--panel); cursor: pointer; font-weight: 600; text-align: left;
+}
+.book-button svg { flex: none; width: 20px; height: 20px; }
+.book-button .book-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-button svg:last-child { transition: transform 0.15s; color: var(--muted); }
+.book-button.open svg:last-child { transform: rotate(180deg); }
+.book-panel { border: 1px solid var(--line); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; gap: 6px; background: #fafafa; max-height: 45vh; overflow-y: auto; }
+.book-panel[hidden] { display: none; }
+.book-list { list-style: none; margin: 0; padding: 0; }
+.book-list li { display: flex; align-items: center; border-radius: 8px; }
+.book-list li.active { background: var(--accent-soft); }
+.book-list li:hover:not(.active) { background: var(--bg); }
+.book-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 9px 10px; cursor: pointer; text-align: left; }
+.book-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-count { font-size: 12px; color: var(--muted); background: var(--bg); border-radius: 999px; padding: 1px 8px; }
+.book-new { width: 100%; height: 36px; }
 .sidebar-foot { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ----- Board ----- */
@@ -103,6 +127,7 @@ button { font: inherit; color: inherit; }
 .board.margin-right { flex-direction: row-reverse; }
 .margin { position: relative; width: 52px; flex: none; overflow: hidden; background: #e5e7eb; touch-action: none; cursor: ns-resize; border-right: 1px solid #d1d5db; }
 .board.margin-right .margin { border-right: 0; border-left: 1px solid #d1d5db; }
+.board.free .margin { display: none; }
 .strip-btn {
   position: absolute; left: 0; right: 0; display: flex; align-items: center; justify-content: center;
   color: #9ca3af; border-bottom: 1px solid #d1d5db; pointer-events: none;
@@ -189,6 +214,12 @@ button { font: inherit; color: inherit; }
 .signin-sidebar { width: 100%; }
 .migrate-card p { margin: 0; color: var(--muted); }
 .migrate-actions { display: flex; flex-direction: column; gap: 8px; }
+
+/* Tablet landscape and smaller: switches show icon + knob only (labels are in their tooltips). */
+@media (max-width: 1400px) {
+  .toggle span { display: none; }
+  .toggle { padding: 0 8px; }
+}
 
 @media (max-width: 700px) {
   .title-input { width: 120px; }

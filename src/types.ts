@@ -15,9 +15,20 @@ export interface Stroke {
 export interface NoteMeta {
   id: string;
   title: string;
+  /** Null only for notes made before notebooks existed; the app moves them into the default notebook. */
+  notebook_id: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export interface Notebook {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const DEFAULT_NOTEBOOK_NAME = 'My Notebook';
 
 export interface Settings {
   /** Strip height in page units (page width = 1000). */
@@ -27,6 +38,8 @@ export interface Settings {
   /** If an active pen (pointerType "pen") is ever seen, ignore finger touches entirely. */
   penOnlyWhenPenSeen: boolean;
   showLines: boolean;
+  /** Free whiteboard: no strips or locks; the whole page takes ink and two fingers scroll. */
+  freeMode: boolean;
   marginSide: 'left' | 'right';
   penColor: string;
   penWidth: number;
@@ -39,6 +52,7 @@ export const DEFAULT_SETTINGS: Settings = {
   touchThreshold: 45,
   penOnlyWhenPenSeen: true,
   showLines: true,
+  freeMode: false,
   marginSide: 'left',
   penColor: '#111827',
   penWidth: 3.5,

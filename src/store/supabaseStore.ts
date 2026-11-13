@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { NoteMeta, Settings, Stroke } from '../types';
+import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { StoreError, type Store } from './store';
 
 const PAGE = 1000; // PostgREST default max rows per request
@@ -24,20 +24,72 @@ export class SupabaseStore implements Store {
     private userId: string,
   ) {}
 
+  async listNotebooks(): Promise<Notebook[]> {
+    const { data, error } = await this.sb.from('notebooks').select('id,name,created_at,updated_at').order('created_at', { ascending: true });
+    check(error);
+    return (data ?? []) as Notebook[];
+  }
+
+  async ensureDefaultNotebook(): Promise<Notebook> {
+    const existing = await this.listNotebooks();
+    if (existing.length) return existing[0];
+    // The default notebook's id is the user's own id, so two devices creating it at once end up with one.
+    const { error } = await this.sb
+      .from('notebooks')
+      .upsert({ id: this.userId, user_id: this.userId, name: DEFAULT_NOTEBOOK_NAME }, { onConflict: 'id', ignoreDuplicates: true });
+    check(error);
+    return (await this.listNotebooks())[0];
+  }
+
+  async createNotebook(name: string): Promise<Notebook> {
+    const { data, error } = await this.sb
+      .from('notebooks')
+      .insert({ name, user_id: this.userId })
+      .select('id,name,created_at,updated_at')
+      .single();
+    check(error);
+    return data as Notebook;
+  }
+
+  async renameNotebook(id: string, name: string) {
+    const { error } = await this.sb.from('notebooks').update({ name, updated_at: new Date().toISOString() }).eq('id', id);
+    check(error);
+  }
+
+  async deleteNotebook(id: string) {
+    const { error } = await this.sb.from('notebooks').delete().eq('id', id);
+    check(error);
+  }
+
+  /** Insert notebooks keeping their ids (used to move notebooks made without an account). Idempotent. */
+  async importNotebooks(notebooks: Notebook[]) {
+    if (!notebooks.length) return;
+    const rows = notebooks.map((b) => ({ id: b.id, user_id: this.userId, name: b.name, created_at: b.created_at, updated_at: b.updated_at }));
+    const { error } = await this.sb.from('notebooks').upsert(rows, { onConflict: 'id' });
+    check(error);
+  }
+
+  async moveNotes(noteIds: string[], notebookId: string) {
+    for (let i = 0; i < noteIds.length; i += CHUNK) {
+      const { error } = await this.sb.from('notes').update({ notebook_id: notebookId }).in('id', noteIds.slice(i, i + CHUNK));
+      check(error);
+    }
+  }
+
   async listNotes(): Promise<NoteMeta[]> {
     const { data, error } = await this.sb
       .from('notes')
-      .select('id,title,created_at,updated_at')
+      .select('id,title,notebook_id,created_at,updated_at')
       .order('updated_at', { ascending: false });
     check(error);
     return (data ?? []) as NoteMeta[];
   }
 
-  async createNote(title: string): Promise<NoteMeta> {
+  async createNote(title: string, notebookId: string): Promise<NoteMeta> {
     const { data, error } = await this.sb
       .from('notes')
-      .insert({ title, user_id: this.userId })
-      .select('id,title,created_at,updated_at')
+      .insert({ title, user_id: this.userId, notebook_id: notebookId })
+      .select('id,title,notebook_id,created_at,updated_at')
       .single();
     check(error);
     return data as NoteMeta;
@@ -46,7 +98,14 @@ export class SupabaseStore implements Store {
   /** Insert or update notes keeping their ids (used to move notes made without an account). Idempotent. */
   async importNotes(notes: NoteMeta[]) {
     if (!notes.length) return;
-    const rows = notes.map((n) => ({ id: n.id, user_id: this.userId, title: n.title, created_at: n.created_at, updated_at: n.updated_at }));
+    const rows = notes.map((n) => ({
+      id: n.id,
+      user_id: this.userId,
+      title: n.title,
+      notebook_id: n.notebook_id,
+      created_at: n.created_at,
+      updated_at: n.updated_at,
+    }));
     const { error } = await this.sb.from('notes').upsert(rows, { onConflict: 'id' });
     check(error);
   }
