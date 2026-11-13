@@ -10,6 +10,7 @@ export const USER_ID = '11111111-1111-4111-8111-111111111111';
 
 type Row = Record<string, unknown>;
 export interface MockDb {
+  notebooks: Row[];
   notes: Row[];
   strokes: Row[];
   settings: Row | null;
@@ -23,7 +24,7 @@ const cors = {
 };
 
 export async function mockSupabase(page: Page): Promise<MockDb> {
-  const db: MockDb = { notes: [], strokes: [], settings: null };
+  const db: MockDb = { notebooks: [], notes: [], strokes: [], settings: null };
 
   await page.route('**/config.js', (r) =>
     r.fulfill({
@@ -66,6 +67,46 @@ export async function mockSupabase(page: Page): Promise<MockDb> {
       return d ? JSON.parse(d) : null;
     };
     const eqParam = (name: string) => url.searchParams.get(name)?.replace(/^eq\./, '');
+    const inParam = (name: string) =>
+      (url.searchParams.get(name) ?? '')
+        .replace(/^in\.\(|\)$/g, '')
+        .split(',')
+        .map((x) => x.replace(/"/g, ''));
+    const matchIds = (name: string) => {
+      const v = url.searchParams.get(name) ?? '';
+      return v.startsWith('in.') ? inParam(name) : [eqParam(name)];
+    };
+    const prefer = req.headers()['prefer'] ?? '';
+
+    // ---- notebooks ----
+    if (path === '/rest/v1/notebooks') {
+      if (method === 'GET') return json(route, 200, [...db.notebooks].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))));
+      if (method === 'POST') {
+        const rows: Row[] = [body()].flat();
+        const saved = rows.map((r) => {
+          const now = new Date().toISOString();
+          const row = { id: r.id ?? crypto.randomUUID(), created_at: now, updated_at: now, ...r };
+          const exists = db.notebooks.some((b) => b.id === row.id);
+          if (exists && prefer.includes('ignore-duplicates')) return db.notebooks.find((b) => b.id === row.id)!;
+          db.notebooks = db.notebooks.filter((b) => b.id !== row.id).concat(row);
+          return row;
+        });
+        return wantsObject ? json(route, 201, saved[0]) : route.fulfill({ status: 201, headers: cors });
+      }
+      if (method === 'PATCH') {
+        const ids = matchIds('id');
+        db.notebooks = db.notebooks.map((b) => (ids.includes(String(b.id)) ? { ...b, ...body() } : b));
+        return route.fulfill({ status: 204, headers: cors });
+      }
+      if (method === 'DELETE') {
+        const ids = matchIds('id');
+        const gone = db.notes.filter((n) => ids.includes(String(n.notebook_id))).map((n) => n.id);
+        db.notebooks = db.notebooks.filter((b) => !ids.includes(String(b.id)));
+        db.notes = db.notes.filter((n) => !gone.includes(n.id));
+        db.strokes = db.strokes.filter((st) => !gone.includes(st.note_id));
+        return route.fulfill({ status: 204, headers: cors });
+      }
+    }
 
     // ---- notes ----
     if (path === '/rest/v1/notes') {
@@ -74,15 +115,15 @@ export async function mockSupabase(page: Page): Promise<MockDb> {
         const rows: Row[] = [body()].flat();
         const saved = rows.map((r) => {
           const now = new Date().toISOString();
-          const row = { id: r.id ?? crypto.randomUUID(), created_at: now, updated_at: now, ...r };
+          const row = { id: r.id ?? crypto.randomUUID(), notebook_id: null, created_at: now, updated_at: now, ...r };
           db.notes = db.notes.filter((n) => n.id !== row.id).concat(row);
           return row;
         });
         return wantsObject ? json(route, 201, saved[0]) : route.fulfill({ status: 201, headers: cors });
       }
       if (method === 'PATCH') {
-        const id = eqParam('id');
-        db.notes = db.notes.map((n) => (n.id === id ? { ...n, ...body() } : n));
+        const ids = matchIds('id');
+        db.notes = db.notes.map((n) => (ids.includes(String(n.id)) ? { ...n, ...body() } : n));
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {

@@ -3,7 +3,7 @@ import { icons } from './icons';
 import { logo } from './auth';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import { DEFAULT_SETTINGS, type AppUser, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
+import { DEFAULT_SETTINGS, type AppUser, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { debounce, dialog, h, lsGet, lsSet, toast } from './util';
 
 const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
@@ -25,6 +25,8 @@ export class App {
   private board!: Board;
   private queue: SyncQueue;
   private notes: NoteMeta[] = [];
+  private notebooks: Notebook[] = [];
+  private currentBook: Notebook | null = null;
   private current: NoteMeta | null = null;
   private undoStack: Action[] = [];
   private redoStack: Action[] = [];
@@ -36,6 +38,8 @@ export class App {
   private root: HTMLElement;
   private sidebar!: HTMLElement;
   private noteList!: HTMLElement;
+  private bookButton!: HTMLButtonElement;
+  private bookPanel!: HTMLElement;
   private titleInput!: HTMLInputElement;
   private toolBtns = new Map<Tool, HTMLButtonElement>();
   private swatches!: HTMLElement;
@@ -43,6 +47,8 @@ export class App {
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private multiBtn!: HTMLButtonElement;
+  private freeBtn!: HTMLButtonElement;
+  private stripControls!: HTMLElement;
   private status!: HTMLElement;
   private settingsDlg!: HTMLDialogElement;
   private contactReadout!: HTMLElement;
@@ -106,15 +112,38 @@ export class App {
         lsSet(this.lsKey('settings'), this.settings);
         this.board.updateSettings(this.settings);
         this.renderToolOptions();
+        this.renderFree();
       }
     } catch (e) {
       console.warn('Could not load settings', e);
     }
-    await this.refreshNotes();
-    const lastId = lsGet<string | null>(this.lsKey('last-note'), null);
-    const target = this.notes.find((n) => n.id === lastId) ?? this.notes[0];
-    if (target) await this.openNote(target);
-    else await this.newNote();
+    await this.loadLibrary();
+    const lastNote = this.notes.find((n) => n.id === lsGet<string | null>(this.lsKey('last-note'), null));
+    const lastBookId = lastNote?.notebook_id ?? lsGet<string | null>(this.lsKey('last-notebook'), null);
+    const book = this.notebooks.find((b) => b.id === lastBookId) ?? this.notebooks[0];
+    if (book) await this.switchNotebook(book, lastNote);
+  }
+
+  /** Load notebooks and notes; create the default notebook and file older, notebook-less notes into it. */
+  private async loadLibrary() {
+    try {
+      let books = await this.store.listNotebooks();
+      if (!books.length) books = [await this.store.ensureDefaultNotebook()];
+      this.notebooks = books;
+      this.notes = await this.store.listNotes();
+      const known = new Set(books.map((b) => b.id));
+      const orphans = this.notes.filter((n) => !n.notebook_id || !known.has(n.notebook_id));
+      if (orphans.length) {
+        const home = books.find((b) => b.id === this.user.id) ?? books[0];
+        await this.store.moveNotes(
+          orphans.map((n) => n.id),
+          home.id,
+        );
+        for (const n of orphans) n.notebook_id = home.id;
+      }
+    } catch (e) {
+      toast('Could not load your notebooks: ' + (e as Error).message, 'error');
+    }
   }
 
   // ----------------------------- layout -----------------------------
@@ -150,9 +179,27 @@ export class App {
     this.undoBtn = this.iconBtn(icons.undo, 'Undo (Ctrl+Z)', () => this.undo());
     this.redoBtn = this.iconBtn(icons.redo, 'Redo (Ctrl+Shift+Z)', () => this.redo());
 
-    this.multiBtn = h('button', { class: 'toggle', type: 'button', role: 'switch', 'aria-checked': 'false', title: 'Unlock several strips at once' }) as HTMLButtonElement;
+    this.multiBtn = h('button', {
+      class: 'toggle',
+      type: 'button',
+      role: 'switch',
+      'aria-checked': 'false',
+      'aria-label': 'Multi-strip',
+      title: 'Multi-strip: unlock several strips at once (M)',
+    }) as HTMLButtonElement;
     this.multiBtn.innerHTML = `${icons.multi}<span>Multi-strip</span><i class="knob"></i>`;
     this.multiBtn.addEventListener('click', () => this.setMulti(!this.board.isMulti()));
+
+    this.freeBtn = h('button', {
+      class: 'toggle free-toggle',
+      type: 'button',
+      role: 'switch',
+      'aria-checked': 'false',
+      'aria-label': 'Free whiteboard',
+      title: 'Free whiteboard: no strips or locks (F). Two fingers scroll and zoom.',
+    }) as HTMLButtonElement;
+    this.freeBtn.innerHTML = `${icons.free}<span>Free</span><i class="knob"></i>`;
+    this.freeBtn.addEventListener('click', () => this.setFree(!this.settings.freeMode));
 
     this.status = h('div', { class: 'status', title: '' });
 
@@ -168,14 +215,15 @@ export class App {
       h('div', { class: 'sep' }),
       h('div', { class: 'group' }, this.undoBtn, this.redoBtn),
       h('div', { class: 'sep' }),
-      this.multiBtn,
-      h(
+      this.freeBtn,
+      (this.stripControls = h(
         'div',
-        { class: 'group' },
+        { class: 'group strip-controls' },
+        this.multiBtn,
         this.iconBtn(icons.up, 'Previous strip (Up arrow)', () => this.board.stepLine(-1)),
         this.iconBtn(icons.down, 'Next strip (Down arrow)', () => this.board.stepLine(1)),
         this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
-      ),
+      )),
       h('div', { class: 'spacer' }),
       this.opts.signIn ? this.signInButton('toolbar') : null,
       this.status,
@@ -184,6 +232,9 @@ export class App {
     );
 
     // Sidebar
+    this.bookButton = h('button', { class: 'book-button', type: 'button', 'aria-expanded': 'false', title: 'Switch notebook' }) as HTMLButtonElement;
+    this.bookButton.addEventListener('click', () => this.toggleBookPanel());
+    this.bookPanel = h('div', { class: 'book-panel', hidden: true });
     this.noteList = h('ul', { class: 'note-list' });
     const newBtn = h('button', { class: 'btn primary', type: 'button' });
     newBtn.innerHTML = `${icons.plus}<span>New note</span>`;
@@ -192,6 +243,9 @@ export class App {
       'aside',
       { class: 'sidebar' },
       h('div', { class: 'sidebar-head' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')), this.iconBtn(icons.close, 'Close', () => this.toggleSidebar(false))),
+      h('div', { class: 'section-label' }, 'Notebook'),
+      this.bookButton,
+      this.bookPanel,
       newBtn,
       this.noteList,
       h(
@@ -232,6 +286,7 @@ export class App {
 
     this.buildSettings();
     this.renderToolOptions();
+    this.renderFree();
     this.renderUndo();
     this.bindKeys();
   }
@@ -261,7 +316,8 @@ export class App {
         if (e.key === 'p') this.setTool('pen');
         if (e.key === 'h') this.setTool('highlighter');
         if (e.key === 'e') this.setTool('eraser');
-        if (e.key === 'm') this.setMulti(!this.board.isMulti());
+        if (e.key === 'm' && !this.settings.freeMode) this.setMulti(!this.board.isMulti());
+        if (e.key === 'f') this.setFree(!this.settings.freeMode);
       }
     }, { signal: this.abort.signal });
   }
@@ -287,6 +343,21 @@ export class App {
     this.tool = t;
     this.board.setTool(t);
     this.renderToolOptions();
+  }
+
+  /** Free whiteboard on/off. Strokes are unaffected; only how input is taken changes. */
+  private setFree(on: boolean) {
+    this.settings.freeMode = on;
+    this.settingsChanged();
+    this.renderFree();
+    toast(on ? 'Free whiteboard: write anywhere. Two fingers scroll and pinch to zoom.' : 'Strips are back: tap a lock in the margin to write.');
+  }
+
+  private renderFree() {
+    const on = this.settings.freeMode;
+    this.freeBtn.classList.toggle('on', on);
+    this.freeBtn.setAttribute('aria-checked', String(on));
+    this.stripControls.hidden = on;
   }
 
   private setMulti(on: boolean) {
@@ -408,19 +479,16 @@ export class App {
 
   // ----------------------------- notes -----------------------------
 
-  private async refreshNotes() {
-    try {
-      this.notes = await this.store.listNotes();
-    } catch (e) {
-      toast('Could not load notes: ' + (e as Error).message, 'error');
-    }
-    this.renderNoteList();
+  /** Notes in the current notebook, most recently changed first. */
+  private visibleNotes(): NoteMeta[] {
+    const id = this.currentBook?.id;
+    return this.notes.filter((n) => n.notebook_id === id).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
 
   private renderNoteList() {
     const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
     this.noteList.replaceChildren(
-      ...this.notes.map((n) => {
+      ...this.visibleNotes().map((n) => {
         const active = n.id === this.current?.id;
         const open = h('button', { class: 'note-open', type: 'button' }, h('span', { class: 'note-title' }, n.title || 'Untitled'), h('span', { class: 'note-date' }, fmt.format(new Date(n.updated_at))));
         open.addEventListener('click', () => {
@@ -429,9 +497,11 @@ export class App {
         });
         const del = this.iconBtn(icons.trash, 'Delete note', () => void this.deleteNote(n), 'small');
         const ren = this.iconBtn(icons.edit, 'Rename note', () => void this.promptRename(n), 'small');
-        return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, del));
+        const mv = this.iconBtn(icons.move, 'Move to another notebook', () => void this.moveNote(n), 'small');
+        return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, mv, del));
       }),
     );
+    this.renderNotebooks(); // keep the per-notebook note counts current
   }
 
   private async openNote(n: NoteMeta) {
@@ -459,7 +529,8 @@ export class App {
   private async newNote() {
     const d = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date());
     try {
-      const n = await this.store.createNote(`Note ${d}`);
+      if (!this.currentBook) return;
+      const n = await this.store.createNote(`Note ${d}`, this.currentBook.id);
       this.notes.unshift(n);
       await this.openNote(n);
     } catch (e) {
@@ -503,12 +574,142 @@ export class App {
       this.notes = this.notes.filter((x) => x.id !== n.id);
       if (this.current?.id === n.id) {
         this.current = null;
-        if (this.notes[0]) await this.openNote(this.notes[0]);
+        const next = this.visibleNotes()[0];
+        if (next) await this.openNote(next);
         else await this.newNote();
       }
       this.renderNoteList();
     } catch (e) {
       toast('Delete failed: ' + (e as Error).message, 'error');
+    }
+  }
+
+  // ----------------------------- notebooks -----------------------------
+
+  private renderNotebooks() {
+    const b = this.currentBook;
+    this.bookButton.innerHTML = `${icons.notebook}<span class="book-name"></span>${icons.chevron}`;
+    this.bookButton.querySelector('.book-name')!.textContent = b?.name ?? '';
+    const counts = new Map<string, number>();
+    for (const n of this.notes) if (n.notebook_id) counts.set(n.notebook_id, (counts.get(n.notebook_id) ?? 0) + 1);
+    const items = this.notebooks.map((nb) => {
+      const open = h(
+        'button',
+        { class: 'book-open', type: 'button' },
+        h('span', { class: 'book-title' }, nb.name),
+        h('span', { class: 'book-count' }, String(counts.get(nb.id) ?? 0)),
+      );
+      open.addEventListener('click', () => {
+        this.toggleBookPanel(false);
+        if (nb.id !== this.currentBook?.id) void this.switchNotebook(nb);
+      });
+      const ren = this.iconBtn(icons.edit, 'Rename notebook', () => void this.renameNotebook(nb), 'small');
+      const del = this.iconBtn(icons.trash, 'Delete notebook', () => void this.deleteNotebook(nb), 'small');
+      return h('li', { class: nb.id === b?.id ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, del));
+    });
+    const add = h('button', { class: 'btn book-new', type: 'button' });
+    add.innerHTML = `${icons.plus}<span>New notebook</span>`;
+    add.addEventListener('click', () => void this.newNotebook());
+    this.bookPanel.replaceChildren(h('ul', { class: 'book-list' }, ...items), add);
+  }
+
+  private toggleBookPanel(force?: boolean) {
+    const open = force ?? this.bookPanel.hidden === true;
+    this.bookPanel.hidden = !open;
+    this.bookButton.setAttribute('aria-expanded', String(open));
+    this.bookButton.classList.toggle('open', open);
+  }
+
+  /** Show a notebook and open one of its notes (a fresh note if it has none). */
+  private async switchNotebook(book: Notebook, note?: NoteMeta) {
+    this.currentBook = book;
+    lsSet(this.lsKey('last-notebook'), book.id);
+    this.renderNotebooks();
+    const target = note && note.notebook_id === book.id ? note : this.visibleNotes()[0];
+    if (target) await this.openNote(target);
+    else await this.newNote();
+  }
+
+  private async newNotebook() {
+    const name = await dialog({ title: 'New notebook', input: `Notebook ${this.notebooks.length + 1}`, ok: 'Create' });
+    if (name === null) return;
+    try {
+      const b = await this.store.createNotebook(name.trim() || 'Untitled notebook');
+      this.notebooks.push(b);
+      this.toggleBookPanel(false);
+      await this.switchNotebook(b);
+    } catch (e) {
+      toast('Could not create notebook: ' + (e as Error).message, 'error');
+    }
+  }
+
+  private async renameNotebook(b: Notebook) {
+    const name = await dialog({ title: 'Rename notebook', input: b.name, ok: 'Rename' });
+    if (name === null) return;
+    const old = b.name;
+    b.name = name.trim() || 'Untitled notebook';
+    this.renderNotebooks();
+    try {
+      await this.store.renameNotebook(b.id, b.name);
+    } catch (e) {
+      b.name = old;
+      this.renderNotebooks();
+      toast('Rename failed: ' + (e as Error).message, 'error');
+    }
+  }
+
+  private async deleteNotebook(b: Notebook) {
+    const inside = this.notes.filter((n) => n.notebook_id === b.id);
+    const what = inside.length === 1 ? 'its 1 note' : `its ${inside.length} notes`;
+    const ok = await dialog({
+      title: 'Delete notebook?',
+      message: `"${b.name}" and ${what} will be deleted permanently.`,
+      ok: 'Delete notebook',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      for (const n of inside) this.queue.dropNote(n.id);
+      await this.store.deleteNotebook(b.id);
+      const gone = new Set(inside.map((n) => n.id));
+      this.notes = this.notes.filter((n) => !gone.has(n.id));
+      this.notebooks = this.notebooks.filter((x) => x.id !== b.id);
+      if (!this.notebooks.length) this.notebooks = [await this.store.ensureDefaultNotebook()];
+      if (this.currentBook?.id === b.id) {
+        this.current = null;
+        await this.switchNotebook(this.notebooks[0]);
+      } else this.renderNotebooks();
+    } catch (e) {
+      toast('Delete failed: ' + (e as Error).message, 'error');
+    }
+  }
+
+  private async moveNote(n: NoteMeta) {
+    const others = this.notebooks.filter((b) => b.id !== n.notebook_id);
+    if (!others.length) return toast('Create another notebook first, then move notes into it.');
+    const target = await dialog({
+      title: 'Move note',
+      message: `Move "${n.title}" to:`,
+      choices: others.map((b) => ({ value: b.id, label: b.name })),
+      ok: 'Move',
+    });
+    if (target === null) return;
+    const book = this.notebooks.find((b) => b.id === target);
+    if (!book) return;
+    const from = n.notebook_id;
+    n.notebook_id = book.id;
+    try {
+      await this.store.moveNotes([n.id], book.id);
+      // Follow the note if it is the one open; otherwise it just leaves this list.
+      if (n.id === this.current?.id) await this.switchNotebook(book, n);
+      else {
+        this.renderNotebooks();
+        this.renderNoteList();
+      }
+      toast(`Moved to "${book.name}".`);
+    } catch (e) {
+      n.notebook_id = from;
+      toast('Move failed: ' + (e as Error).message, 'error');
     }
   }
 
@@ -601,6 +802,8 @@ export class App {
       s().penOnlyWhenPenSeen = penOnly.checked;
       this.settingsChanged();
     });
+    const free = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    free.addEventListener('change', () => this.setFree(free.checked));
     const lines = h('input', { type: 'checkbox' }) as HTMLInputElement;
     lines.addEventListener('change', () => {
       s().showLines = lines.checked;
@@ -646,6 +849,7 @@ export class App {
         row('Strip height', h('div', { class: 'range' }, strip, stripVal), 'Taller strips leave more room for big handwriting.'),
         row('Lock icons on the', side),
         h('label', { class: 'set-check' }, lines, h('span', {}, 'Show ruled lines between strips')),
+        h('label', { class: 'set-check' }, free, h('span', {}, 'Free whiteboard: no strips or locks, write anywhere (two fingers scroll and zoom)')),
         h('h4', {}, 'Palm rejection inside the unlocked strip'),
         row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts. Calibrate below for your stylus.'),
         h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
@@ -669,6 +873,7 @@ export class App {
       thrVal.textContent = s().touchThreshold + ' px';
       penOnly.checked = s().penOnlyWhenPenSeen;
       lines.checked = s().showLines;
+      free.checked = s().freeMode;
       side.value = s().marginSide;
     };
   }

@@ -74,10 +74,21 @@ export function lsDel(key: string) {
 }
 
 /** In-page confirm/prompt dialog. Resolves null on cancel. */
-export function dialog(opts: { title: string; message?: string; input?: string; ok?: string; danger?: boolean }): Promise<string | null> {
+export function dialog(opts: {
+  title: string;
+  message?: string;
+  input?: string;
+  /** Show a list to pick from; resolves to the chosen value. */
+  choices?: { value: string; label: string }[];
+  ok?: string;
+  danger?: boolean;
+}): Promise<string | null> {
   return new Promise((resolve) => {
     const input = opts.input !== undefined ? (h('input', { type: 'text', class: 'dlg-input' }) as HTMLInputElement) : null;
     if (input) input.value = opts.input!;
+    const select = opts.choices
+      ? (h('select', { class: 'dlg-input' }, ...opts.choices.map((c) => h('option', { value: c.value }, c.label))) as HTMLSelectElement)
+      : null;
     const okBtn = h('button', { class: 'btn ' + (opts.danger ? 'danger' : 'primary'), type: 'submit' }, opts.ok ?? 'OK');
     const cancelBtn = h('button', { class: 'btn', type: 'button' }, 'Cancel');
     const form = h(
@@ -86,6 +97,7 @@ export function dialog(opts: { title: string; message?: string; input?: string; 
       h('h3', {}, opts.title),
       opts.message ? h('p', {}, opts.message) : null,
       input,
+      select,
       h('div', { class: 'dlg-actions' }, cancelBtn, okBtn),
     );
     const d = h('dialog', { class: 'modal small' }, form);
@@ -102,7 +114,7 @@ export function dialog(opts: { title: string; message?: string; input?: string; 
     });
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      done(input ? input.value : 'ok');
+      done(input ? input.value : select ? select.value : 'ok');
     });
     d.showModal();
     if (input) {

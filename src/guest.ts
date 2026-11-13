@@ -16,7 +16,7 @@ export const GUEST_MIGRATE = 'lb-guest-migrate';
 export const keepSeparateKey = (uid: string) => `lb-guest-keep-${uid}`;
 
 /** App keys the guest session uses (App namespaces them by user id, which is "local" here). */
-const GUEST_APP_KEYS = ['lb-settings-local', 'lb-queue-local', 'lb-last-note-local'];
+const GUEST_APP_KEYS = ['lb-settings-local', 'lb-queue-local', 'lb-last-note-local', 'lb-last-notebook-local'];
 
 export const isGuestActive = () => lsGet<boolean>(GUEST_ACTIVE, false);
 export const setGuestActive = (on: boolean) => (on ? lsSet(GUEST_ACTIVE, true) : lsDel(GUEST_ACTIVE));
@@ -44,8 +44,25 @@ export function clearGuestData(local: LocalStore) {
  */
 export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, uid: string): Promise<number> {
   const notes = (await guestNotesWithInk(local)).sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+
+  // Notebooks: reuse an account notebook with the same name (so there is one "My Notebook", not two),
+  // otherwise bring the guest's notebook across with its id.
+  const cloudBooks = await cloud.listNotebooks();
+  const localBooks = await local.listNotebooks();
+  const used = new Set(notes.map((n) => n.notebook_id));
+  const bookMap = new Map<string, string>();
+  for (const b of localBooks.filter((b) => used.has(b.id))) {
+    const same = cloudBooks.find((c) => c.name.trim().toLowerCase() === b.name.trim().toLowerCase());
+    if (same) bookMap.set(b.id, same.id);
+    else {
+      await cloud.importNotebooks([b]);
+      bookMap.set(b.id, b.id);
+    }
+  }
+
   for (const n of notes) {
-    await cloud.importNotes([n]);
+    // Notes without a (known) notebook stay unassigned; the app files them into the default notebook.
+    await cloud.importNotes([{ ...n, notebook_id: (n.notebook_id && bookMap.get(n.notebook_id)) || null }]);
     await cloud.upsertStrokes(await local.loadStrokes(n.id));
   }
 
@@ -58,6 +75,8 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
   // Reopen the note they were working on.
   const last = lsGet<string | null>('lb-last-note-local', null);
   if (last && notes.some((n) => n.id === last)) lsSet(`lb-last-note-${uid}`, last);
+  const lastBook = lsGet<string | null>('lb-last-notebook-local', null);
+  if (lastBook && bookMap.has(lastBook)) lsSet(`lb-last-notebook-${uid}`, bookMap.get(lastBook));
 
   clearGuestData(local);
   return notes.length;

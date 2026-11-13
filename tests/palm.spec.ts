@@ -61,14 +61,14 @@ test('tapping the margin moves the unlocked strip', async ({ page }) => {
 
 test('multi-strip mode allows strokes across strips and locks all when turned off', async ({ page }) => {
   const { cdp, geo } = await setup(page);
-  await page.getByRole('switch').click();
+  await page.getByRole('switch', { name: 'Multi-strip' }).click();
   await tapMargin(cdp, geo, 4);
   await tapMargin(cdp, geo, 5);
   await expect(page.locator('.strip-btn.on')).toHaveCount(3); // strip 0 plus 4 and 5
   await drag(cdp, geo.areaX + 200, stripY(geo, 4) - 20, geo.areaX + 260, stripY(geo, 5) + 20);
   await expectStrokes(page, 1);
 
-  await page.getByRole('switch').click();
+  await page.getByRole('switch', { name: 'Multi-strip' }).click();
   await expect(page.locator('.strip-btn.on')).toHaveCount(0);
   await drag(cdp, geo.areaX + 100, stripY(geo, 4), geo.areaX + 300, stripY(geo, 4));
   await page.waitForTimeout(200);
