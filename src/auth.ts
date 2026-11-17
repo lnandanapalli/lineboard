@@ -1,9 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { h } from './util';
+import { publicFooter } from './public';
+import { logo } from './brand';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
 
 export interface AuthOptions {
+  initialMode?: 'signin' | 'signup';
   /** Offer "Try it without an account" (shown to new visitors). */
   onTryLocal?: () => void;
   /** The visitor came from guest mode: explain that their notes will be saved, and offer a way back. */
@@ -12,16 +15,19 @@ export interface AuthOptions {
 
 /** Renders the sign-in screen. The app reacts to Supabase auth state changes, not to this function. */
 export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOptions = {}) {
-  let mode: Mode = 'signin';
+  let mode: Mode = opts.initialMode ?? 'signin';
   const redirectTo = window.location.origin + window.location.pathname;
 
   const msg = h('p', { class: 'auth-msg', role: 'status' });
   const email = h('input', { type: 'email', placeholder: 'Email', autocomplete: 'email', required: true }) as HTMLInputElement;
   const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', minlength: '6' }) as HTMLInputElement;
   const submit = h('button', { class: 'btn primary wide', type: 'submit' });
-  const tabs = h('div', { class: 'auth-tabs' });
+  const tabs = h('div', { class: 'auth-switch' });
+  const heading = h('h1', { class: 'auth-heading' });
+  const description = h('p', { class: 'tagline' });
+  const agreement = h('p', { class: 'auth-agreement' }, 'By creating an account, you agree to the ', h('a', { href: '#terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' and acknowledge the ', h('a', { href: '#privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy'), '.');
   const extra = h('div', { class: 'auth-extra' });
-  const form = h('form', { class: 'auth-form' }, email, pass, submit);
+  const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', pass), agreement, submit);
 
   const setMsg = (t: string, kind: 'ok' | 'err' = 'ok') => {
     msg.textContent = t;
@@ -32,6 +38,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     const b = h('button', { type: 'button', class: 'tab' + (mode === m ? ' active' : '') }, label);
     b.addEventListener('click', () => {
       mode = m;
+      pass.value = '';
       setMsg('');
       render();
     });
@@ -39,12 +46,19 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   };
 
   function render() {
-    tabs.replaceChildren(tab('signin', 'Sign in'), tab('signup', 'Create account'), tab('magic', 'Email link'));
+    heading.textContent = { signin: 'Welcome back.', signup: 'Make room for your ideas.', magic: 'A link, and you’re in.', reset: 'Reset your password.' }[mode];
+    document.title = `${mode === 'signup' ? 'Create account' : 'Log in'} — Lineboard`;
+    description.textContent = mode === 'signup' ? 'Create your free account to keep your notebooks in sync.' : 'Your notes are right where you left them.';
+    tabs.replaceChildren(h('span', {}, mode === 'signup' ? 'Already have an account? ' : 'New to Lineboard? '), h('a', { href: mode === 'signup' ? '#login' : '#signup' }, mode === 'signup' ? 'Log in' : 'Create account'));
+    agreement.hidden = mode !== 'signup';
+    form.querySelector<HTMLElement>('.password-label')!.hidden = mode === 'magic' || mode === 'reset';
     pass.style.display = mode === 'magic' || mode === 'reset' ? 'none' : '';
     pass.required = mode === 'signin' || mode === 'signup';
     pass.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
     submit.textContent = { signin: 'Sign in', signup: 'Create account', magic: 'Send sign-in link', reset: 'Send reset link' }[mode];
     extra.replaceChildren();
+    if (mode === 'signin') extra.append(tab('magic', 'Email me a sign-in link'));
+    if (mode === 'magic') extra.append(tab('signin', 'Back to sign in'));
     if (mode === 'signin' || mode === 'reset') {
       const a = h('button', { type: 'button', class: 'link' }, mode === 'reset' ? 'Back to sign in' : 'Forgot password?');
       a.addEventListener('click', () => {
@@ -71,7 +85,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
         if (error) throw error;
         if (!data.session) setMsg('Check your email to confirm your account, then come back here.');
       } else if (mode === 'magic') {
-        const { error } = await sb.auth.signInWithOtp({ email: em, options: { emailRedirectTo: redirectTo } });
+        const { error } = await sb.auth.signInWithOtp({ email: em, options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
         if (error) throw error;
         setMsg('Sign-in link sent. Open it on this device.');
       } else {
@@ -125,13 +139,16 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
         'div',
         { class: 'auth-card' },
         h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')),
-        h('p', { class: 'tagline' }, 'Handwritten notes that ignore your palm.'),
-        tabs,
+        h('a', { class: 'auth-home', href: '#home' }, '← Back to home'),
+        heading,
+        description,
         form,
         extra,
         msg,
         guestBox,
+        tabs,
       ),
+      publicFooter(),
     ),
   );
 }
@@ -152,11 +169,4 @@ export function renderNewPassword(root: HTMLElement, sb: SupabaseClient, done: (
   root.replaceChildren(
     h('div', { class: 'auth-screen' }, h('div', { class: 'auth-card' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Set a new password')), form, msg)),
   );
-}
-
-export function logo(): HTMLElement {
-  const s = h('span', { class: 'logo' });
-  s.innerHTML =
-    '<svg viewBox="0 0 32 32" width="28" height="28"><rect width="32" height="32" rx="7" fill="#111827"/><rect x="5" y="7" width="22" height="5" rx="1.5" fill="#374151"/><rect x="5" y="14" width="22" height="5" rx="1.5" fill="#fff"/><rect x="5" y="21" width="22" height="5" rx="1.5" fill="#374151"/><path d="M8 17c2-2 3 1 5-1s3 1 5-1 3 1 5 0" stroke="#2563eb" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>';
-  return s;
 }

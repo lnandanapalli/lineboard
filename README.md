@@ -53,6 +53,18 @@ docker run -p 8080:80 ghcr.io/lnandanapalli/lineboard
 
 Without configuration, both run in local mode: notes are kept in the browser and there is no sign-in.
 
+## Public pages
+
+New visitors see the homepage. `#login` and `#signup` open separate account screens when
+Supabase is configured; `#app` opens the notebook. Returning local/guest users resume their
+notes. `#home`, `#terms`, and `#privacy` remain directly accessible, including without a backend.
+Hash routes work on static hosts without extra server rewrites.
+
+Terms and privacy pages describe the app's current behavior. Before a public launch, the site
+operator should review them and confirm hosting-specific retention/privacy information in
+`src/public.ts`. They currently identify `@lnandanapalli` and link to GitHub Issues for support;
+self-hosters should update those details for their own installation.
+
 ## Configuration
 
 To enable accounts and sync, point Lineboard at a Supabase project:

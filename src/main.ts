@@ -1,7 +1,9 @@
 import { createClient, type Session } from '@supabase/supabase-js';
 import './styles.css';
 import { App } from './app';
-import { logo, renderAuth, renderNewPassword } from './auth';
+import { renderHome, renderPolicy } from './public';
+import { renderAuth, renderNewPassword } from './auth';
+import { logo } from './brand';
 import { config, hasCloud } from './config';
 import { GUEST_MIGRATE, guestNotesWithInk, isGuestActive, keepSeparateKey, migrateGuestData, setGuestActive } from './guest';
 import { LocalStore } from './store/localStore';
@@ -18,17 +20,30 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 }
 
 if (!hasCloud) {
-  // No backend configured: run fully on this device.
-  new App(root, new LocalStore(), LOCAL_USER);
+  let localApp: App | null = null;
+  const route = () => {
+    localApp?.destroy();
+    localApp = null;
+    const page = location.hash.slice(1);
+    if (page === 'terms' || page === 'privacy') renderPolicy(root, page);
+    else if (page === 'app' || (!page && isGuestActive())) {
+      setGuestActive(true);
+      document.title = 'Lineboard';
+      localApp = new App(root, new LocalStore(), LOCAL_USER);
+    } else renderHome(root, false, () => { location.hash = 'app'; });
+  };
+  window.addEventListener('hashchange', route);
+  route();
 } else {
   const sb = createClient(config.supabaseUrl, config.supabaseAnonKey, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   });
 
   let app: App | null = null;
-  /** Who the screen currently belongs to: a user id, 'guest', null (sign-in screen) or undefined (nothing yet). */
+  /** Who the screen currently belongs to: a user id, 'guest', null (public screen) or undefined (nothing yet). */
   let current: string | null | undefined;
   let recovering = false;
+  let activeSession: Session | null = null;
 
   const clearApp = () => {
     app?.destroy();
@@ -40,7 +55,9 @@ if (!hasCloud) {
     clearApp();
     setGuestActive(true);
     current = 'guest';
-    app = new App(root, new LocalStore(), LOCAL_USER, { signIn: () => void showGuestSignIn() });
+    history.replaceState(null, '', '#app');
+    document.title = 'Lineboard';
+    app = new App(root, new LocalStore(), LOCAL_USER, { signIn: () => { lsSet(GUEST_MIGRATE, true); location.hash = 'login'; } });
   };
 
   /** A guest pressed "Sign in to save": show sign-in, then move their notes after they sign in. */
@@ -49,7 +66,9 @@ if (!hasCloud) {
     clearApp();
     current = null;
     const noteCount = (await guestNotesWithInk(new LocalStore())).length;
+    if (!['#login', '#signup'].includes(location.hash) || current !== null) return;
     renderAuth(root, sb, {
+      initialMode: location.hash === '#signup' ? 'signup' : 'signin',
       guest: {
         noteCount,
         onBack: () => {
@@ -63,7 +82,7 @@ if (!hasCloud) {
   const showSignIn = () => {
     clearApp();
     current = null;
-    renderAuth(root, sb, { onTryLocal: startGuest });
+    renderAuth(root, sb, { initialMode: location.hash === '#signup' ? 'signup' : 'signin', onTryLocal: startGuest });
   };
 
   /** Ask a user who signed in normally whether this device's guest notes should join their account. */
@@ -115,16 +134,33 @@ if (!hasCloud) {
   };
 
   const show = async (session: Session | null) => {
+    activeSession = session;
     if (recovering) return;
+    const page = location.hash.slice(1);
+    if (page === 'terms' || page === 'privacy' || page === 'home' || page === 'how-it-works') {
+      clearApp();
+      current = null;
+      if (page === 'terms' || page === 'privacy') renderPolicy(root, page);
+      else renderHome(root, true, () => { location.hash = 'app'; });
+      return;
+    }
     if (!session) {
       if (current === 'guest' || current === null) return; // already on a signed-out screen
-      if (isGuestActive()) startGuest();
-      else showSignIn();
+      if (page === 'login' || page === 'signup') {
+        if (lsGet<boolean>(GUEST_MIGRATE, false)) void showGuestSignIn();
+        else showSignIn();
+      } else if (page === 'app' || isGuestActive()) startGuest();
+      else {
+        current = null;
+        renderHome(root, true, () => { location.hash = 'app'; });
+      }
       return;
     }
     const uid = session.user.id;
     if (current === uid) return; // token refresh etc.
     clearApp();
+    history.replaceState(null, '', '#app');
+    document.title = 'Lineboard';
     current = uid; // set before awaiting, so repeated auth events don't run this twice
     setGuestActive(false);
     const store = new SupabaseStore(sb, uid);
@@ -132,10 +168,21 @@ if (!hasCloud) {
     if (current !== uid) return; // signed out meanwhile
     app = new App(root, store, { id: uid, email: session.user.email ?? null }, {
       signOut: async () => {
-        await sb.auth.signOut();
+        const { error } = await sb.auth.signOut();
+        if (error) { toast(error.message, 'error'); return; }
+        setGuestActive(false);
+        activeSession = null;
+        location.hash = 'home';
       },
     });
   };
+
+  window.addEventListener('hashchange', () => {
+    if (recovering) return;
+    clearApp();
+    current = undefined;
+    void show(activeSession);
+  });
 
   sb.auth.onAuthStateChange((event, session) => {
     // Defer: calling Supabase from inside this callback can deadlock the auth lock.
