@@ -43,7 +43,8 @@ if (!hasCloud) {
   /** Who the screen currently belongs to: a user id, 'guest', null (public screen) or undefined (nothing yet). */
   let current: string | null | undefined;
   let recovering = false;
-  let activeSession: Session | null = null;
+  // Undefined means auth has not finished restoring the saved session yet.
+  let activeSession: Session | null | undefined;
 
   const clearApp = () => {
     app?.destroy();
@@ -52,6 +53,13 @@ if (!hasCloud) {
 
   /** Trying Lineboard without an account: device-only notes, with "Sign in to save". */
   const startGuest = () => {
+    // A stale public-page action must never switch an authenticated user to local data.
+    if (activeSession === undefined) return;
+    if (activeSession) {
+      history.replaceState(null, '', '#app');
+      void show(activeSession);
+      return;
+    }
     clearApp();
     setGuestActive(true);
     current = 'guest';
@@ -141,7 +149,7 @@ if (!hasCloud) {
       clearApp();
       current = null;
       if (page === 'terms' || page === 'privacy') renderPolicy(root, page);
-      else renderHome(root, true, () => { location.hash = 'app'; });
+      else renderHome(root, true, () => { location.hash = 'app'; }, !!session);
       return;
     }
     if (!session) {
@@ -178,13 +186,14 @@ if (!hasCloud) {
   };
 
   window.addEventListener('hashchange', () => {
-    if (recovering) return;
+    if (recovering || activeSession === undefined) return;
     clearApp();
     current = undefined;
     void show(activeSession);
   });
 
   sb.auth.onAuthStateChange((event, session) => {
+    activeSession = session;
     // Defer: calling Supabase from inside this callback can deadlock the auth lock.
     setTimeout(() => {
       if (event === 'PASSWORD_RECOVERY') {
@@ -197,7 +206,7 @@ if (!hasCloud) {
         });
         return;
       }
-      void show(session);
+      if (activeSession !== undefined) void show(activeSession);
     }, 0);
   });
 }

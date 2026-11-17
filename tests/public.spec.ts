@@ -97,3 +97,65 @@ test('signed-in users resume notes, can read policies, and sign out to the homep
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toContainText('A clear page.');
 });
+
+test('a signed-in visitor can go home and return to the same cloud notebook without logging in again', async ({ page }) => {
+  await mockSupabase(page);
+  let logins = 0;
+  let logouts = 0;
+  page.on('request', req => {
+    if (req.url().includes('/auth/v1/token')) logins++;
+    if (req.url().includes('/auth/v1/logout')) logouts++;
+  });
+  await page.goto('/#login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.locator('.title-input')).not.toHaveValue('');
+  await page.locator('.title-input').fill('My cloud notebook');
+  await page.locator('.title-input').press('Enter');
+  for (const reload of [false, true]) {
+    await page.evaluate(() => { location.hash = 'home'; });
+    if (reload) await page.reload();
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('A clear page.');
+    await expect(page.getByRole('button', { name: 'Try it without an account' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Log in', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to my notes', exact: true }).click();
+    await expect(page.locator('.title-input')).toHaveValue('My cloud notebook');
+    await expect(page.locator('.signin-save')).toHaveCount(0);
+  }
+  await page.goto('/#login');
+  await expect(page.locator('.title-input')).toHaveValue('My cloud notebook');
+  expect(logins).toBe(1);
+  expect(logouts).toBe(0);
+});
+
+test('navigation during session restoration never opens a guest notebook', async ({ page }) => {
+  await mockSupabase(page);
+  await page.goto('/#login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.locator('.canvas-area canvas.live')).toBeVisible();
+  await page.evaluate(() => {
+    const key = Object.keys(localStorage).find(k => k.startsWith('sb-') && k.endsWith('-auth-token'))!;
+    const session = JSON.parse(localStorage.getItem(key)!);
+    session.expires_at = 1;
+    localStorage.setItem(key, JSON.stringify(session));
+  });
+  let release!: () => void;
+  const refreshGate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`${MOCK_URL}/auth/v1/token**`, async route => {
+    await refreshGate;
+    await route.fallback();
+  });
+  const refresh = page.waitForRequest(req => req.url().includes('grant_type=refresh_token'));
+  await page.goto('/#home');
+  await refresh;
+  await page.evaluate(() => { location.hash = 'app'; });
+  await expect(page.locator('.signin-save')).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('lb-guest-active'))).toBeNull();
+  release();
+  await expect(page.locator('.canvas-area canvas.live')).toBeVisible();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.locator('.set-account')).toContainText('friend@example.com');
+});

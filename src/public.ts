@@ -6,22 +6,22 @@ export function publicFooter() {
     h('nav', { 'aria-label': 'Legal' }, h('a', { href: '#terms' }, 'Terms of service'), h('a', { href: '#privacy' }, 'Privacy policy'), h('a', { href: 'https://github.com/lnandanapalli/lineboard/issues' }, 'Support on GitHub')));
 }
 
-export function renderHome(root: HTMLElement, cloud: boolean, start: () => void) {
+export function renderHome(root: HTMLElement, cloud: boolean, start: () => void, signedIn = false) {
   document.title = 'Lineboard — Space for your next idea';
-  const tryButton = h('button', { class: 'btn primary hero-cta', type: 'button' }, 'Try it without an account');
+  const tryButton = h('button', { class: 'btn primary hero-cta', type: 'button' }, signedIn ? 'Back to my notes' : 'Try it without an account');
   tryButton.addEventListener('click', start);
   const feature = (n: string, title: string, text: string) => h('article', {}, h('span', { class: 'feature-number' }, n), h('h3', {}, title), h('p', {}, text));
   root.replaceChildren(h('div', { class: 'public-page' },
     h('header', { class: 'site-header' }, h('a', { class: 'brand', href: '#home', 'aria-label': 'Lineboard home' }, logo(), 'Lineboard'),
-      h('nav', { 'aria-label': 'Main navigation' }, h('a', { href: '#how-it-works' }, 'How it works'), cloud ? h('a', { href: '#login' }, 'Log in') : null,
-        cloud ? h('a', { class: 'btn', href: '#signup' }, 'Create account') : h('a', { class: 'btn', href: '#app' }, 'Open notebook'))),
+      h('nav', { 'aria-label': 'Main navigation' }, h('a', { href: '#how-it-works' }, 'How it works'), cloud && !signedIn ? h('a', { href: '#login' }, 'Log in') : null,
+        cloud && !signedIn ? h('a', { class: 'btn', href: '#signup' }, 'Create account') : h('a', { class: 'btn', href: '#app' }, 'Open notebook'))),
     h('main', { id: 'home-main' },
       h('section', { class: 'hero' }, h('div', { class: 'hero-copy' },
         h('p', { class: 'eyebrow' }, 'YOUR IDEAS. YOUR HANDWRITING.'),
         h('h1', {}, 'A clear page.', h('br'), h('em', {}, 'A freer mind.')),
         h('p', { class: 'hero-description' }, 'A handwriting notebook made for your tablet. Rest your palm, pick a line, and let your thoughts take shape.'),
-        h('div', { class: 'hero-actions' }, tryButton, cloud ? h('a', { href: '#signup' }, 'Create a free account →') : null),
-        h('p', { class: 'hero-note' }, 'No active pen required. No account needed to begin.')),
+        h('div', { class: 'hero-actions' }, tryButton, cloud && !signedIn ? h('a', { href: '#signup' }, 'Create a free account →') : null),
+        h('p', { class: 'hero-note' }, signedIn ? 'You’re signed in. Pick up where you left off.' : 'No active pen required. No account needed to begin.')),
         h('div', { class: 'notebook-preview', role: 'img', 'aria-label': 'Notebook illustration with one unlocked writing strip and protected lines above and below' },
           h('div', { class: 'preview-top' }, h('span', {}, 'My everyday notebook'), h('span', {}, '● Saved on this device')),
           h('div', { class: 'preview-paper' }, h('span', { class: 'preview-date' }, 'A little space to think'),
