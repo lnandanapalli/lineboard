@@ -226,3 +226,79 @@ button { font: inherit; color: inherit; }
   .toggle span { display: none; }
   .signin-toolbar span { display: none; }
 }
+
+/* Public website: scroll independently from the touch-first writing surface. */
+.public-page { height: 100dvh; overflow-y: auto; background: #faf9f6; color: #252b28; }
+.public-page a, .auth-screen a { color: inherit; text-underline-offset: 4px; }
+.public-page a:hover, .auth-screen a:hover { color: #25614d; }
+.site-header, .site-footer { max-width: 1200px; margin: auto; padding: 28px 40px; display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.site-header .brand { text-decoration: none; letter-spacing: -.5px; font-size: 23px; }
+.site-header nav, .site-footer nav { display: flex; align-items: center; gap: 28px; }
+.site-header nav a { text-decoration: none; font-size: 14px; font-weight: 600; }
+.public-page .btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; border-radius: 7px; }
+.public-page .primary { background: #265a47; border-color: #265a47; color: white; }
+.public-page .primary:hover { background: #194533; }
+.hero { max-width: 1200px; margin: auto; padding: 82px 40px 100px; display: grid; grid-template-columns: 1.05fr 1fr; gap: 60px; align-items: center; }
+.eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #537163; margin: 0 0 22px; }
+.hero h1 { font: 500 clamp(48px, 5.5vw, 76px)/1.08 Georgia, serif; letter-spacing: -3px; margin: 0 0 26px; }
+.hero h1 em { font-weight: 400; color: #416653; }
+.hero-description { font-size: 18px; line-height: 1.7; color: #606660; max-width: 430px; }
+.hero-actions { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-top: 32px; font-size: 14px; }
+.hero-cta { min-height: 48px; padding: 12px 20px; font-weight: 600; }
+.hero-note { font-size: 12px; color: #727870; margin-top: 18px; }
+.notebook-preview { background: #fff; border: 1px solid #e2e1d9; border-radius: 14px; box-shadow: 0 20px 50px #313e2910; transform: rotate(-2deg); overflow: hidden; }
+.preview-top { padding: 20px; display: flex; justify-content: space-between; gap: 12px; font-size: 11px; border-bottom: 1px solid #eee; }
+.preview-top span:last-child { color: #537163; font-size: 9px; }
+.preview-paper { padding-top: 28px; min-height: 290px; background: repeating-linear-gradient(white 0px, white 47px, #e9ece7 48px); }
+.preview-date { margin-left: 42px; font: 11px system-ui; color: #858a80; }
+.handwriting { font: italic 28px/1.7 Georgia, serif; color: #343e66; margin: 20px 30px 18px 42px; }
+.active-line { display: flex; align-items: center; background: #edf4eb; border-block: 1px solid #cbdcc6; }
+.active-line > span:first-child { padding-left: 14px; color: #537163; }
+.active-line .handwriting { margin: 5px 12px; font-size: 25px; }
+.preview-sketch { padding: 24px 45px; color: #ad9663; font-size: 28px; }
+.preview-caption { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 18px; background: #fcfcfa; color: #6b7369; }
+.ink-dot { width: 8px; height: 8px; background: #537163; border-radius: 50%; }
+.how-section { padding: 64px 40px; max-width: 1200px; margin: auto; border-top: 1px solid #e3e5dc; }
+.public-page h2 { font: 400 34px/1.25 Georgia, serif; letter-spacing: -.7px; }
+.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 50px; margin-top: 44px; }
+.feature-number { font: italic 24px Georgia, serif; color: #769080; }
+.feature-grid h3 { font-size: 18px; font-weight: 600; margin: 18px 0 12px; }
+.feature-grid p, .home-detail p { font-size: 15px; line-height: 1.8; color: #626b61; }
+.home-detail { display: grid; grid-template-columns: 1.2fr 1fr; gap: 60px; background: #eef1e9; padding: 64px max(40px, calc((100vw - 1120px) / 2)); }
+.site-footer { font-size: 12px; color: #676e65; padding-block: 32px; }
+.policy-page { max-width: 760px; margin: auto; padding: 40px 24px 64px; line-height: 1.8; }
+.policy-page .eyebrow { margin-top: 40px; }
+.policy-page h1 { font: 48px Georgia, serif; letter-spacing: -1px; }
+.policy-page .policy-intro { font-size: 20px; color: #626b61; }
+.policy-page section { margin-top: 36px; }
+.policy-page h2 { font-size: 26px; }
+.auth-screen { background: #faf9f6; align-content: center; gap: 24px; }
+.auth-screen .site-footer { padding: 12px 0; flex-wrap: wrap; justify-content: center; }
+.auth-card { width: min(460px, 100%); border: 1px solid #e3e5dc; box-shadow: 0 12px 40px #313e2908; padding: 36px; }
+.auth-heading { font: 36px/1.15 Georgia, serif; letter-spacing: -1px; margin: 8px 0 0; }
+.auth-home { font-size: 12px; margin-top: 10px; }
+.auth-switch { text-align: center; font-size: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.auth-form label { font-size: 13px; font-weight: 600; display: grid; gap: 7px; }
+.auth-form [hidden] { display: none; }
+.auth-agreement { font-size: 12px; line-height: 1.6; color: #626b61; }
+.auth-extra { display: flex; justify-content: space-between; gap: 12px; }
+.auth-extra .tab { background: none; border: 0; padding: 0; cursor: pointer; color: var(--accent); font: inherit; }
+.public-page :focus-visible, .auth-screen :focus-visible { outline: 3px solid #729e82; outline-offset: 4px; }
+@media (max-height: 760px) { .auth-screen { align-content: start; } }
+@media (max-width: 760px) {
+  .site-header, .site-footer { padding: 22px; flex-wrap: wrap; gap: 18px; }
+  .site-header nav { gap: 16px; }
+  .site-header nav a:first-child:not(.btn) { display: none; }
+  .hero { grid-template-columns: 1fr; gap: 48px; padding: 44px 24px 60px; }
+  .hero h1 { letter-spacing: -2px; }
+  .notebook-preview { max-width: 480px; width: 100%; margin: auto; }
+  .how-section { padding: 44px 24px; }
+  .feature-grid { grid-template-columns: 1fr; gap: 24px; }
+  .home-detail { grid-template-columns: 1fr; padding: 40px 24px; gap: 10px; }
+  .site-footer nav { gap: 20px; }
+  .auth-card { padding: 24px; }
+  .auth-heading { font-size: 31px; }
+}
+.auth-screen .btn.primary { background: #265a47; border-color: #265a47; }
+.auth-screen .btn.primary:hover { background: #194533; }
+.site-footer nav { flex-wrap: wrap; }

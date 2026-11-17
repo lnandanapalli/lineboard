@@ -79,7 +79,7 @@ test('a normal sign-in asks before adding guest notes; "keep separate" leaves th
   await writeTwoStrokes(page);
   // Leave guest mode the way a returning visitor would: back on the plain sign-in screen.
   await page.evaluate(() => localStorage.removeItem('lb-guest-active'));
-  await page.reload();
+  await page.goto('/#login');
   await signIn(page);
 
   await page.getByRole('button', { name: 'Keep them separate on this device' }).click();
@@ -93,7 +93,7 @@ test('a normal sign-in can add guest notes when the user agrees', async ({ page 
   await tryWithoutAccount(page);
   await writeTwoStrokes(page);
   await page.evaluate(() => localStorage.removeItem('lb-guest-active'));
-  await page.reload();
+  await page.goto('/#login');
   await signIn(page);
 
   await page.getByRole('button', { name: 'Add it to my account' }).click();
