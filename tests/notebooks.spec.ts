@@ -121,7 +121,7 @@ test('with an account: older notes are filed into a default notebook that has th
   const db = await mockSupabase(page);
   const now = new Date().toISOString();
   db.notes.push({ id: 'aaaaaaaa-0000-4000-8000-000000000001', user_id: USER_ID, title: 'From before', notebook_id: null, created_at: now, updated_at: now });
-  await page.goto('/#login');
+  await page.goto('/login');
   await page.getByPlaceholder('Email').fill('friend@example.com');
   await page.getByPlaceholder('Password').fill('secret123');
   await page.locator('form.auth-form button[type=submit]').click();

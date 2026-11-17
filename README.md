@@ -55,10 +55,17 @@ Without configuration, both run in local mode: notes are kept in the browser and
 
 ## Public pages
 
-New visitors see the homepage. `#login` and `#signup` open separate account screens when
-Supabase is configured; `#app` opens the notebook. Returning local/guest users resume their
-notes. `#home`, `#terms`, and `#privacy` remain directly accessible, including without a backend.
-Hash routes work on static hosts without extra server rewrites.
+New visitors see the homepage at `/` or `/home`. `/login` and `/signup` open separate
+account screens when Supabase is configured; `/app` opens the notebook. Returning
+local/guest users resume their notes. `/terms` and `/privacy` remain directly accessible.
+Navigation uses browser history without reloading the app. The container's nginx
+`try_files` fallback serves the app shell for direct visits and refreshes of these paths;
+other static hosts need the equivalent SPA fallback. Existing `/#home`, `/#app`, and
+other old hash-route bookmarks redirect to the corresponding clean path.
+
+Authentication emails return to the site root (`https://your-site/`), preserving the
+existing Supabase redirect allowlist requirement. Auth callback tokens are handled by
+Supabase, separately from page routing.
 
 Terms and privacy pages describe the app's current behavior. Before a public launch, the site
 operator should review them and confirm hosting-specific retention/privacy information in

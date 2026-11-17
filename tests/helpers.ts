@@ -14,7 +14,7 @@ export interface Geo {
 }
 
 export async function setup(page: Page): Promise<{ cdp: CDPSession; geo: Geo }> {
-  await page.goto('/#app');
+  await page.goto('/app');
   return attachBoard(page);
 }
 

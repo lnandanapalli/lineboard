@@ -857,7 +857,7 @@ export class App {
         h('label', { class: 'set-check' }, penOnly, h('span', {}, 'If an active pen is detected, ignore finger touches completely')),
         h('h4', {}, 'Account'),
         account,
-        h('p', {}, h('a', { href: '#home', target: '_blank', rel: 'noopener' }, 'About Lineboard'), ' · ', h('a', { href: '#terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' · ', h('a', { href: '#privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy')),
+        h('p', {}, h('a', { href: '/home', target: '_blank', rel: 'noopener' }, 'About Lineboard'), ' · ', h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy')),
         h('div', { class: 'dlg-actions' }, close),
       ),
     );

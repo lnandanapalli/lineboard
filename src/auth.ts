@@ -16,7 +16,7 @@ export interface AuthOptions {
 /** Renders the sign-in screen. The app reacts to Supabase auth state changes, not to this function. */
 export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOptions = {}) {
   let mode: Mode = opts.initialMode ?? 'signin';
-  const redirectTo = window.location.origin + window.location.pathname;
+  const redirectTo = window.location.origin + '/';
 
   const msg = h('p', { class: 'auth-msg', role: 'status' });
   const email = h('input', { type: 'email', placeholder: 'Email', autocomplete: 'email', required: true }) as HTMLInputElement;
@@ -25,7 +25,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   const tabs = h('div', { class: 'auth-switch' });
   const heading = h('h1', { class: 'auth-heading' });
   const description = h('p', { class: 'tagline' });
-  const agreement = h('p', { class: 'auth-agreement' }, 'By creating an account, you agree to the ', h('a', { href: '#terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' and acknowledge the ', h('a', { href: '#privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy'), '.');
+  const agreement = h('p', { class: 'auth-agreement' }, 'By creating an account, you agree to the ', h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' and acknowledge the ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy'), '.');
   const extra = h('div', { class: 'auth-extra' });
   const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', pass), agreement, submit);
 
@@ -49,7 +49,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     heading.textContent = { signin: 'Welcome back.', signup: 'Make room for your ideas.', magic: 'A link, and you’re in.', reset: 'Reset your password.' }[mode];
     document.title = `${mode === 'signup' ? 'Create account' : 'Log in'} — Lineboard`;
     description.textContent = mode === 'signup' ? 'Create your free account to keep your notebooks in sync.' : 'Your notes are right where you left them.';
-    tabs.replaceChildren(h('span', {}, mode === 'signup' ? 'Already have an account? ' : 'New to Lineboard? '), h('a', { href: mode === 'signup' ? '#login' : '#signup' }, mode === 'signup' ? 'Log in' : 'Create account'));
+    tabs.replaceChildren(h('span', {}, mode === 'signup' ? 'Already have an account? ' : 'New to Lineboard? '), h('a', { href: mode === 'signup' ? '/login' : '/signup' }, mode === 'signup' ? 'Log in' : 'Create account'));
     agreement.hidden = mode !== 'signup';
     form.querySelector<HTMLElement>('.password-label')!.hidden = mode === 'magic' || mode === 'reset';
     pass.style.display = mode === 'magic' || mode === 'reset' ? 'none' : '';
@@ -139,7 +139,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
         'div',
         { class: 'auth-card' },
         h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')),
-        h('a', { class: 'auth-home', href: '#home' }, '← Back to home'),
+        h('a', { class: 'auth-home', href: '/home' }, '← Back to home'),
         heading,
         description,
         form,
