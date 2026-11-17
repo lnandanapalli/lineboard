@@ -1,6 +1,7 @@
 import { createClient, type Session } from '@supabase/supabase-js';
 import './styles.css';
 import { App } from './app';
+import { installRouter, navigate, navigationEvent, pageName, replaceRoute } from './router';
 import { renderHome, renderPolicy } from './public';
 import { renderAuth, renderNewPassword } from './auth';
 import { logo } from './brand';
@@ -11,6 +12,7 @@ import { SupabaseStore } from './store/supabaseStore';
 import { h, lsGet, lsSet, toast } from './util';
 
 const root = document.getElementById('app')!;
+installRouter();
 const LOCAL_USER = { id: 'local', email: null };
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
@@ -24,15 +26,16 @@ if (!hasCloud) {
   const route = () => {
     localApp?.destroy();
     localApp = null;
-    const page = location.hash.slice(1);
+    const page = pageName();
     if (page === 'terms' || page === 'privacy') renderPolicy(root, page);
     else if (page === 'app' || (!page && isGuestActive())) {
+      replaceRoute('/app');
       setGuestActive(true);
       document.title = 'Lineboard';
       localApp = new App(root, new LocalStore(), LOCAL_USER);
-    } else renderHome(root, false, () => { location.hash = 'app'; });
+    } else renderHome(root, false, () => { navigate('/app'); });
   };
-  window.addEventListener('hashchange', route);
+  window.addEventListener(navigationEvent, route);
   route();
 } else {
   const sb = createClient(config.supabaseUrl, config.supabaseAnonKey, {
@@ -56,16 +59,16 @@ if (!hasCloud) {
     // A stale public-page action must never switch an authenticated user to local data.
     if (activeSession === undefined) return;
     if (activeSession) {
-      history.replaceState(null, '', '#app');
+      replaceRoute('/app');
       void show(activeSession);
       return;
     }
     clearApp();
     setGuestActive(true);
     current = 'guest';
-    history.replaceState(null, '', '#app');
+    replaceRoute('/app');
     document.title = 'Lineboard';
-    app = new App(root, new LocalStore(), LOCAL_USER, { signIn: () => { lsSet(GUEST_MIGRATE, true); location.hash = 'login'; } });
+    app = new App(root, new LocalStore(), LOCAL_USER, { signIn: () => { lsSet(GUEST_MIGRATE, true); navigate('/login'); } });
   };
 
   /** A guest pressed "Sign in to save": show sign-in, then move their notes after they sign in. */
@@ -74,9 +77,9 @@ if (!hasCloud) {
     clearApp();
     current = null;
     const noteCount = (await guestNotesWithInk(new LocalStore())).length;
-    if (!['#login', '#signup'].includes(location.hash) || current !== null) return;
+    if (!['login', 'signup'].includes(pageName()) || current !== null) return;
     renderAuth(root, sb, {
-      initialMode: location.hash === '#signup' ? 'signup' : 'signin',
+      initialMode: pageName() === 'signup' ? 'signup' : 'signin',
       guest: {
         noteCount,
         onBack: () => {
@@ -90,7 +93,7 @@ if (!hasCloud) {
   const showSignIn = () => {
     clearApp();
     current = null;
-    renderAuth(root, sb, { initialMode: location.hash === '#signup' ? 'signup' : 'signin', onTryLocal: startGuest });
+    renderAuth(root, sb, { initialMode: pageName() === 'signup' ? 'signup' : 'signin', onTryLocal: startGuest });
   };
 
   /** Ask a user who signed in normally whether this device's guest notes should join their account. */
@@ -144,12 +147,12 @@ if (!hasCloud) {
   const show = async (session: Session | null) => {
     activeSession = session;
     if (recovering) return;
-    const page = location.hash.slice(1);
+    const page = pageName();
     if (page === 'terms' || page === 'privacy' || page === 'home' || page === 'how-it-works') {
       clearApp();
       current = null;
       if (page === 'terms' || page === 'privacy') renderPolicy(root, page);
-      else renderHome(root, true, () => { location.hash = 'app'; }, !!session);
+      else renderHome(root, true, () => { navigate('/app'); }, !!session);
       return;
     }
     if (!session) {
@@ -160,14 +163,14 @@ if (!hasCloud) {
       } else if (page === 'app' || isGuestActive()) startGuest();
       else {
         current = null;
-        renderHome(root, true, () => { location.hash = 'app'; });
+        renderHome(root, true, () => { navigate('/app'); });
       }
       return;
     }
     const uid = session.user.id;
     if (current === uid) return; // token refresh etc.
     clearApp();
-    history.replaceState(null, '', '#app');
+    replaceRoute('/app');
     document.title = 'Lineboard';
     current = uid; // set before awaiting, so repeated auth events don't run this twice
     setGuestActive(false);
@@ -180,12 +183,12 @@ if (!hasCloud) {
         if (error) { toast(error.message, 'error'); return; }
         setGuestActive(false);
         activeSession = null;
-        location.hash = 'home';
+        navigate('/home');
       },
     });
   };
 
-  window.addEventListener('hashchange', () => {
+  window.addEventListener(navigationEvent, () => {
     if (recovering || activeSession === undefined) return;
     clearApp();
     current = undefined;
