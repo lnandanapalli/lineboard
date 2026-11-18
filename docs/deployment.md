@@ -3,6 +3,8 @@
 The container serves the built site with nginx on port 80 and exposes `/healthz`.
 It reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` at start-up and writes them to `/config.js`;
 without them the app runs in local mode. Any host that runs Docker images works.
+Set `CANONICAL_HOST` (e.g. `example.com`) to send the other spelling of the address (`www.example.com`,
+or the reverse) to it with a permanent redirect; leave it unset to serve every hostname.
 
 ## Included GitHub Actions
 
@@ -21,7 +23,8 @@ The deploy job signs in with OpenID Connect (no stored secrets) and points the w
 Azure side:
 
 1. Create a Linux web app that runs the published image, and set its `SUPABASE_URL` and
-   `SUPABASE_ANON_KEY` app settings.
+   `SUPABASE_ANON_KEY` app settings. If both `example.com` and `www.example.com` are bound to it, also set
+   `CANONICAL_HOST` to the one you want to keep.
 2. Create a Microsoft Entra app registration with a federated credential for GitHub Actions, entity type
    **Environment**, environment `production`, for your repository.
 3. Grant that app registration the **Website Contributor** role on the web app only.

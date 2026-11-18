@@ -18,5 +18,8 @@ COPY docker/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 # Writes config.js from SUPABASE_URL / SUPABASE_ANON_KEY every time the container starts.
 COPY docker/40-lineboard-config.sh /docker-entrypoint.d/40-lineboard-config.sh
-RUN chmod +x /docker-entrypoint.d/40-lineboard-config.sh
+# Optional www <-> bare-domain redirect from CANONICAL_HOST, also written at every start.
+COPY docker/41-lineboard-canonical-host.sh /docker-entrypoint.d/41-lineboard-canonical-host.sh
+RUN chmod +x /docker-entrypoint.d/40-lineboard-config.sh /docker-entrypoint.d/41-lineboard-canonical-host.sh \
+ && touch /etc/nginx/snippets/canonical-host.conf
 EXPOSE 80
