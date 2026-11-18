@@ -143,6 +143,76 @@ create policy "own keys" on public.user_keys
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
 
+-- ------------- Signed-in devices and two-step verification -------------
+
+-- True when the request comes from a session that still exists (a device that was signed out
+-- elsewhere loses access at once, not when its access token expires) and that has passed two-step
+-- verification if the user turned it on.
+create or replace function public.access_ok() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select
+    exists (
+      select 1 from auth.sessions s
+       where s.id = nullif((select auth.jwt()) ->> 'session_id', '')::uuid
+         and s.user_id = (select auth.uid())
+    )
+    and (
+      coalesce((select auth.jwt()) ->> 'aal', 'aal1') = 'aal2'
+      or not exists (
+        select 1 from auth.mfa_factors f
+         where f.user_id = (select auth.uid()) and f.status = 'verified'
+      )
+    )
+$$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['notebooks', 'notes', 'strokes', 'user_settings', 'user_keys'] loop
+    execute format('drop policy if exists "active session with required MFA" on public.%I', t);
+    execute format(
+      'create policy "active session with required MFA" on public.%I as restrictive for all to authenticated '
+      'using ((select public.access_ok())) with check ((select public.access_ok()))', t);
+  end loop;
+end $$;
+
+-- The signed-in user's devices (sessions), newest activity first.
+create or replace function public.list_my_sessions()
+returns table (id uuid, created_at timestamptz, last_active timestamptz, user_agent text, ip text, aal text, is_current boolean)
+language plpgsql stable security definer set search_path = '' as $$
+#variable_conflict use_column
+begin
+  if not public.access_ok() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  return query
+    select s.id,
+           s.created_at,
+           greatest(s.created_at, s.updated_at, s.refreshed_at at time zone 'UTC'),
+           s.user_agent,
+           host(s.ip),
+           s.aal::text,
+           s.id = nullif((select auth.jwt()) ->> 'session_id', '')::uuid
+      from auth.sessions s
+     where s.user_id = (select auth.uid())
+       and (s.not_after is null or s.not_after > now())
+     order by 3 desc;
+end $$;
+
+-- Sign one of the user's devices out. Its refresh tokens go with the session.
+create or replace function public.revoke_my_session(target uuid) returns boolean
+language plpgsql volatile security definer set search_path = '' as $$
+begin
+  if not public.access_ok() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  delete from auth.sessions where id = target and user_id = (select auth.uid());
+  return found;
+end $$;
+
+revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) from anon, public;
+grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) to authenticated;
+
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
 grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys to authenticated;
 revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys from anon;

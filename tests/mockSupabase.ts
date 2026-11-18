@@ -17,6 +17,31 @@ export interface MockDb {
   strokes: Row[];
   settings: Row | null;
   keys: Row | null;
+  /** Auth server state: signed-in sessions, MFA factors, passkeys, password changes. */
+  sessions: Session[];
+  factors: Row[];
+  passkeys: Row[];
+  passwordChanges: number;
+}
+
+export interface Session {
+  id: string;
+  aal: 'aal1' | 'aal2';
+  user_agent: string;
+  ip: string;
+  created_at: string;
+}
+
+/** The TOTP code the mock accepts. */
+export const MOCK_TOTP = '123456';
+
+const b64url = (v: string | Uint8Array) => Buffer.from(v).toString('base64url');
+
+/** An unsigned JWT in the shape Supabase issues; the client only decodes it. */
+function jwt(session: Session) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { sub: USER_ID, role: 'authenticated', aud: 'authenticated', aal: session.aal, session_id: session.id, amr: [{ method: 'password', timestamp: now }], iat: now, exp: now + 3600 };
+  return `${b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${b64url(JSON.stringify(payload))}.sig`;
 }
 
 const cors = {
@@ -51,7 +76,7 @@ function paginate(url: URL, rows: Row[]) {
 
 /** Pass `shared` to give a second browser context (another device) the same database. */
 export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb> {
-  const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null };
+  const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], passwordChanges: 0 };
 
   await page.route('**/config.js', (r) =>
     r.fulfill({
@@ -64,7 +89,7 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
     route.fulfill({ status, headers: { ...cors, 'content-type': 'application/json', ...extra }, body: JSON.stringify(body) });
   const denied = (route: Route) => json(route, 403, { code: '42501', message: 'new row violates row-level security policy' });
 
-  const user = {
+  const user = () => ({
     id: USER_ID,
     aud: 'authenticated',
     role: 'authenticated',
@@ -72,7 +97,19 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
     app_metadata: {},
     user_metadata: {},
     created_at: '2026-01-01T00:00:00Z',
+    factors: db.factors,
+  });
+
+  const tokenResponse = (session: Session) => {
+    const now = Math.floor(Date.now() / 1000);
+    return { access_token: jwt(session), token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh-' + session.id, user: user() };
   };
+  const newSession = (ua: string): Session => {
+    const session: Session = { id: crypto.randomUUID(), aal: 'aal1', user_agent: ua, ip: '203.0.113.' + (db.sessions.length + 7), created_at: new Date().toISOString() };
+    db.sessions.push(session);
+    return session;
+  };
+  const authError = (route: Route, status: number, code: string, msg: string) => json(route, status, { code, error_code: code, msg, message: msg });
 
   const encryptionRequired = () => db.keys?.state === 'on';
   /** The schema's row-level security "with check" for encryption. */
@@ -85,20 +122,150 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
     const path = url.pathname;
     const method = req.method();
     if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
-
-    // ---- auth ----
-    if (path === '/auth/v1/token') {
-      const now = Math.floor(Date.now() / 1000);
-      return json(route, 200, { access_token: 'token', token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh', user });
-    }
-    if (path === '/auth/v1/user') return json(route, 200, user);
-    if (path.startsWith('/auth/v1/')) return route.fulfill({ status: 204, headers: cors });
-
-    const wantsObject = (req.headers()['accept'] ?? '').includes('vnd.pgrst.object');
     const body = () => {
       const d = req.postData();
       return d ? JSON.parse(d) : null;
     };
+    const ua = req.headers()['user-agent'] ?? '';
+
+    // The session the request's access token belongs to (null: none, or signed out elsewhere).
+    const bearer = (req.headers()['authorization'] ?? '').replace(/^Bearer /, '');
+    let claims: { session_id?: string; aal?: string } = {};
+    try {
+      claims = JSON.parse(Buffer.from(bearer.split('.')[1] ?? '', 'base64url').toString() || '{}');
+    } catch {
+      /* the anon key */
+    }
+    const session = db.sessions.find((x) => x.id === claims.session_id) ?? null;
+    /** The schema's access_ok(): a live session, at aal2 if two-step verification is on. */
+    const accessOk = () => !!session && (claims.aal === 'aal2' || !db.factors.some((f) => f.status === 'verified'));
+
+    // ---- auth ----
+    if (path === '/auth/v1/token') {
+      const grant = url.searchParams.get('grant_type');
+      if (grant === 'refresh_token') {
+        const id = String(body()?.refresh_token ?? '').replace(/^refresh-/, '');
+        const existing = db.sessions.find((x) => x.id === id);
+        if (!existing) return authError(route, 400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
+        return json(route, 200, tokenResponse(existing));
+      }
+      return json(route, 200, tokenResponse(newSession(ua)));
+    }
+    if (path === '/auth/v1/user') {
+      if (!session) return authError(route, 403, 'session_not_found', 'Session from session_id claim in JWT does not exist');
+      if (method === 'PUT') {
+        if (body()?.password) db.passwordChanges++;
+        return json(route, 200, user());
+      }
+      return json(route, 200, user());
+    }
+    if (path === '/auth/v1/logout') {
+      const scope = url.searchParams.get('scope') ?? 'global';
+      if (session) db.sessions = db.sessions.filter((x) => (scope === 'others' ? x.id === session.id : scope === 'local' ? x.id !== session.id : false));
+      return route.fulfill({ status: 204, headers: cors });
+    }
+
+    // two-step verification
+    if (path === '/auth/v1/factors' && method === 'POST') {
+      const b = body();
+      const f = { id: crypto.randomUUID(), factor_type: b.factor_type, friendly_name: b.friendly_name, status: 'unverified', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      db.factors.push(f);
+      const secret = 'JBSWY3DPEHPK3PXP';
+      return json(route, 200, {
+        id: f.id,
+        type: 'totp',
+        friendly_name: f.friendly_name,
+        totp: { qr_code: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>', secret, uri: `otpauth://totp/Lineboard:friend?secret=${secret}` },
+      });
+    }
+    let m = /^\/auth\/v1\/factors\/([^/]+)(\/challenge|\/verify)?$/.exec(path);
+    if (m) {
+      const f = db.factors.find((x) => x.id === m![1]);
+      if (!f) return authError(route, 404, 'mfa_factor_not_found', 'Factor not found');
+      if (method === 'DELETE') {
+        if (f.status === 'verified' && claims.aal !== 'aal2') return authError(route, 403, 'insufficient_aal', 'AAL2 required');
+        db.factors = db.factors.filter((x) => x !== f);
+        return json(route, 200, { id: f.id });
+      }
+      if (m[2] === '/challenge') return json(route, 200, { id: crypto.randomUUID(), type: 'totp', expires_at: Math.floor(Date.now() / 1000) + 300 });
+      if (m[2] === '/verify') {
+        if (body()?.code !== MOCK_TOTP) return authError(route, 422, 'mfa_verification_failed', 'Invalid TOTP code entered');
+        const wasNew = f.status !== 'verified';
+        f.status = 'verified';
+        session!.aal = 'aal2';
+        // Turning on a new factor signs out every other session.
+        if (wasNew) db.sessions = db.sessions.filter((x) => x.id === session!.id);
+        return json(route, 200, tokenResponse(session!));
+      }
+    }
+
+    // passkeys (WebAuthn ceremony against a Chromium virtual authenticator)
+    if (path === '/auth/v1/passkeys/registration/options') {
+      return json(route, 200, {
+        challenge_id: crypto.randomUUID(),
+        expires_at: Math.floor(Date.now() / 1000) + 300,
+        options: {
+          challenge: b64url(crypto.getRandomValues(new Uint8Array(32))),
+          rp: { id: 'localhost', name: 'Lineboard' },
+          user: { id: b64url(USER_ID), name: 'friend@example.com', displayName: 'friend@example.com' },
+          pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+          authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+          timeout: 60000,
+          attestation: 'none',
+        },
+      });
+    }
+    if (path === '/auth/v1/passkeys/registration/verify') {
+      const p = { id: crypto.randomUUID(), credential_id: body().credential.id, friendly_name: 'Passkey', created_at: new Date().toISOString() };
+      db.passkeys.push(p);
+      return json(route, 200, p);
+    }
+    if (path === '/auth/v1/passkeys/authentication/options') {
+      return json(route, 200, {
+        challenge_id: crypto.randomUUID(),
+        expires_at: Math.floor(Date.now() / 1000) + 300,
+        options: { challenge: b64url(crypto.getRandomValues(new Uint8Array(32))), rpId: 'localhost', allowCredentials: [], userVerification: 'preferred', timeout: 60000 },
+      });
+    }
+    if (path === '/auth/v1/passkeys/authentication/verify') {
+      const p = db.passkeys.find((x) => x.credential_id === body().credential.id);
+      if (!p) return authError(route, 400, 'invalid_credentials', 'Unknown passkey');
+      p.last_used_at = new Date().toISOString();
+      return json(route, 200, tokenResponse(newSession(ua)));
+    }
+    if (path === '/auth/v1/passkeys' || path === '/auth/v1/passkeys/') return json(route, 200, db.passkeys);
+    m = /^\/auth\/v1\/passkeys\/([^/]+)$/.exec(path);
+    if (m) {
+      const p = db.passkeys.find((x) => x.id === m![1]);
+      if (method === 'DELETE') db.passkeys = db.passkeys.filter((x) => x !== p);
+      if (method === 'PATCH' && p) p.friendly_name = body().friendly_name;
+      return json(route, 200, p ?? null);
+    }
+    if (path.startsWith('/auth/v1/')) return route.fulfill({ status: 204, headers: cors });
+
+    // ---- signed-in devices (rpc) ----
+    if (path === '/rest/v1/rpc/list_my_sessions' || path === '/rest/v1/rpc/revoke_my_session') {
+      if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
+      if (path.endsWith('revoke_my_session')) {
+        const target = body()?.target;
+        const before = db.sessions.length;
+        db.sessions = db.sessions.filter((x) => x.id !== target);
+        return json(route, 200, db.sessions.length < before);
+      }
+      return json(
+        route,
+        200,
+        [...db.sessions].reverse().map((x) => ({ id: x.id, created_at: x.created_at, last_active: x.created_at, user_agent: x.user_agent, ip: x.ip, aal: x.aal, is_current: x.id === session?.id })),
+      );
+    }
+
+    // Restrictive policy: no live session (or missing second step) means no rows and no writes.
+    if (path.startsWith('/rest/v1/') && !accessOk()) {
+      if (method === 'GET') return json(route, 200, []);
+      return json(route, 403, { code: '42501', message: 'new row violates row-level security policy' });
+    }
+
+    const wantsObject = (req.headers()['accept'] ?? '').includes('vnd.pgrst.object');
     const prefer = req.headers()['prefer'] ?? '';
     const match = matches(url);
     const now = () => new Date().toISOString();
@@ -193,4 +360,11 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
   });
 
   return db;
+}
+
+/** The URL fragment a password-reset email link lands with (signs in a new recovery session). */
+export function recoveryHash(db: MockDb, ua = 'Mozilla/5.0 (Linux; Android 14) Chrome/140.0 Mobile Safari/537.36') {
+  const session: Session = { id: crypto.randomUUID(), aal: 'aal1', user_agent: ua, ip: '198.51.100.4', created_at: new Date().toISOString() };
+  db.sessions.push(session);
+  return `#access_token=${jwt(session)}&expires_in=3600&expires_at=${Math.floor(Date.now() / 1000) + 3600}&refresh_token=refresh-${session.id}&token_type=bearer&type=recovery`;
 }

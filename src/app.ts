@@ -1,5 +1,6 @@
 import { Board, PAGE_W } from './board';
 import { SettingsPanel } from './settings';
+import type { AccountSecurity } from './account';
 import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
@@ -19,6 +20,8 @@ export interface AppOptions {
   signOut?: () => Promise<void>;
   /** Trying without an account: go to sign-in; notes on this device are moved into the account afterwards. */
   signIn?: () => void;
+  /** Account security (password, two-step verification, passkeys, devices). */
+  account?: AccountSecurity;
 }
 
 export class App {
@@ -740,6 +743,7 @@ export class App {
       pendingSaves: () => this.queue.pending,
       noteCount: () => this.notes.length,
       signOut: this.opts.signOut,
+      account: this.opts.account,
       signInButton: this.opts.signIn ? () => this.signInButton('settings') : undefined,
     });
   }

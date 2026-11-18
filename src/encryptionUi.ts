@@ -1,3 +1,4 @@
+import { AccountError } from './account';
 import { logo } from './brand';
 import { MIN_PASSPHRASE, WrongSecretError, type KeyVault } from './crypto/vault';
 import type { SupabaseStore } from './store/supabaseStore';
@@ -10,21 +11,21 @@ import { h, toast } from './util';
 
 // ----------------------------- small building blocks -----------------------------
 
-function field(label: string, input: HTMLInputElement, help?: string) {
+export function field(label: string, input: HTMLInputElement, help?: string) {
   return h('label', { class: 'enc-field' }, h('span', {}, label), input, help ? h('small', {}, help) : null);
 }
 
-function passInput(autocomplete: 'current-password' | 'new-password', placeholder = '') {
+export function passInput(autocomplete: 'current-password' | 'new-password', placeholder = '') {
   return h('input', { type: 'password', class: 'dlg-input', autocomplete, placeholder, spellcheck: 'false' }) as HTMLInputElement;
 }
 
-function check(text: string, checked = false) {
+export function check(text: string, checked = false) {
   const input = h('input', { type: 'checkbox' }) as HTMLInputElement;
   input.checked = checked;
   return { input, el: h('label', { class: 'set-check' }, input, h('span', {}, text)) };
 }
 
-function errorLine() {
+export function errorLine() {
   const el = h('p', { class: 'enc-error', role: 'alert' });
   return {
     el,
@@ -42,7 +43,7 @@ function passProblem(a: string, b: string): string | null {
 }
 
 /** A modal whose content is replaced step by step. Escape and backdrop clicks close it only when allowed. */
-class StepDialog {
+export class StepDialog {
   readonly dlg: HTMLDialogElement;
   private body: HTMLElement;
   closable = true;
@@ -73,11 +74,11 @@ class StepDialog {
   }
 }
 
-function actions(...btns: HTMLElement[]) {
+export function actions(...btns: HTMLElement[]) {
   return h('div', { class: 'dlg-actions' }, ...btns);
 }
 
-function button(text: string, cls: string, onClick: () => void, type: 'button' | 'submit' = 'button') {
+export function button(text: string, cls: string, onClick: () => void, type: 'button' | 'submit' = 'button') {
   const b = h('button', { class: 'btn ' + cls, type }, text) as HTMLButtonElement;
   b.addEventListener('click', (e) => {
     if (type === 'submit') e.preventDefault();
@@ -87,7 +88,7 @@ function button(text: string, cls: string, onClick: () => void, type: 'button' |
 }
 
 /** Run `fn` with a button showing progress; shows the error (wrong passphrase etc.) instead of throwing. */
-async function busy(btn: HTMLButtonElement, label: string, err: ReturnType<typeof errorLine>, fn: () => Promise<void>) {
+export async function busy(btn: HTMLButtonElement, label: string, err: ReturnType<typeof errorLine>, fn: () => Promise<void>) {
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = label;
@@ -95,7 +96,7 @@ async function busy(btn: HTMLButtonElement, label: string, err: ReturnType<typeo
   try {
     await fn();
   } catch (e) {
-    err.set(e instanceof WrongSecretError ? e.message : 'Something went wrong: ' + (e as Error).message);
+    err.set(e instanceof WrongSecretError || e instanceof AccountError ? e.message : 'Something went wrong: ' + (e as Error).message);
     console.error(e);
   } finally {
     btn.disabled = false;

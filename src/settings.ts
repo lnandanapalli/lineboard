@@ -2,17 +2,20 @@ import { PAGE_W } from './board';
 import { changePassphrase, disableEncryption, enableEncryption, replaceRecoveryKey } from './encryptionUi';
 import { icons } from './icons';
 import { SupabaseStore } from './store/supabaseStore';
+import type { AccountSecurity } from './account';
+import { SecurityPane } from './securityUi';
 import type { Store } from './store/store';
 import type { AppUser, Settings } from './types';
 import { dialog, h, toast } from './util';
 
-type Section = 'account' | 'writing' | 'stylus' | 'security' | 'about';
+type Section = 'account' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
 const SECTIONS: { id: Section; label: string; icon: string }[] = [
   { id: 'account', label: 'Account', icon: icons.user },
+  { id: 'signin', label: 'Sign-in & devices', icon: icons.lockAll },
+  { id: 'security', label: 'Encryption', icon: icons.shield },
   { id: 'writing', label: 'Page & writing', icon: icons.free },
   { id: 'stylus', label: 'Stylus & palm', icon: icons.hand },
-  { id: 'security', label: 'Privacy & security', icon: icons.shield },
   { id: 'about', label: 'About', icon: icons.info },
 ];
 
@@ -26,6 +29,8 @@ export interface SettingsHost {
   pendingSaves: () => number;
   noteCount: () => number;
   signOut?: () => Promise<void>;
+  /** Signed in with an account: password, two-step verification, passkeys, devices. */
+  account?: AccountSecurity;
   /** Guest mode: a "Sign in to save" button. */
   signInButton?: () => HTMLElement;
 }
@@ -39,6 +44,7 @@ export class SettingsPanel {
   private contactReadout!: HTMLElement;
   private securityBody = h('div', { class: 'pane-stack' });
   private syncForm: () => void = () => {};
+  private securityPane: SecurityPane | null = null;
 
   constructor(private host: SettingsHost) {
     const navList = h('nav', { class: 'settings-nav', 'aria-label': 'Settings sections' });
@@ -57,6 +63,7 @@ export class SettingsPanel {
       writing: () => this.writingPane(),
       stylus: () => this.stylusPane(),
       security: () => [this.securityBody],
+      signin: () => [this.signinPane()],
       about: () => this.aboutPane(),
     };
     for (const s of SECTIONS) {
@@ -118,6 +125,7 @@ export class SettingsPanel {
     // On narrow screens the section list and the section are separate views.
     if (focusPane) this.shell.classList.add('pane-open');
     if (s === 'security') this.renderSecurity();
+    if (s === 'signin') this.securityPane?.refresh();
   }
 
   showContact(size: number, type: string, accepted: boolean) {
@@ -163,6 +171,21 @@ export class SettingsPanel {
       ? 'Your notebooks sync to your account, so they are on every device you sign in to.'
       : 'Notes stay in this browser on this device.';
     return [this.card(null, account), this.card('Storage', h('p', { class: 'muted' }, where), h('p', { class: 'muted' }, store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : ''))];
+  }
+
+  // ----------------------------- sign-in & devices -----------------------------
+
+  private signinPane(): HTMLElement {
+    const { account, user, signInButton } = this.host;
+    if (account) {
+      this.securityPane = new SecurityPane(account, user.email);
+      return this.securityPane.el;
+    }
+    return this.card(
+      null,
+      h('p', { class: 'muted' }, signInButton ? 'Sign in to manage your password, two-step verification, passkeys and signed-in devices.' : 'Local mode has no accounts, so there is nothing to sign in to.'),
+      signInButton ? signInButton() : null,
+    );
   }
 
   // ----------------------------- page & writing -----------------------------

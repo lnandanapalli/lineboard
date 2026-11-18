@@ -390,3 +390,27 @@ kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px sol
 .auth-screen .btn.primary:hover { background: #194533; }
 .site-footer nav { flex-wrap: wrap; }
 .auth-screen .link { color: #25614d; }
+
+/* ----- Sign-in & devices ----- */
+.btn[hidden], .enc-form [hidden], .auth-form [hidden] { display: none !important; }
+.item-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; }
+.item-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.item-row + .item-row { border-top: 1px solid var(--line); }
+.item-row.current { background: #f9fafb; }
+.item-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.item-main b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-main small { overflow-wrap: anywhere; }
+.item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.item-row .btn, .item-actions .btn { height: 34px; padding: 0 10px; font-size: 14px; }
+.pill { flex: none; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--bg); color: var(--muted); }
+.pill.on { background: #dcfce7; color: #166534; }
+.btn:disabled { cursor: default; }
+.mfa-qr { display: grid; place-items: center; padding: 8px; }
+.mfa-qr img { width: 180px; height: 180px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px; image-rendering: pixelated; }
+.mfa-secret-row { display: flex; align-items: center; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.mfa-secret { font: 14px ui-monospace, monospace; background: #f9fafb; border: 1px dashed #9ca3af; border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+.code-input, .auth-form input.code-input { font: 22px ui-monospace, monospace; letter-spacing: 0.3em; text-align: center; }
+.passkey-btn { gap: 8px; }
+@media (max-width: 640px) {
+  .item-row { flex-wrap: wrap; }
+}

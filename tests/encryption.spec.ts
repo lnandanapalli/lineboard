@@ -23,7 +23,7 @@ async function otherDevice(browser: Browser, db: MockDb) {
 
 async function openSecurity(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.locator('.settings-tab', { hasText: 'Privacy & security' }).click();
+  await page.locator('.settings-tab', { hasText: 'Encryption' }).click();
 }
 
 /** Turn encryption on through the wizard and return the recovery key it showed. */
@@ -146,11 +146,11 @@ test('settings are split into sections', async ({ page }) => {
   await page.goto('/app');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const tabs = page.locator('.settings-tab');
-  await expect(tabs).toHaveText(['Account', 'Page & writing', 'Stylus & palm', 'Privacy & security', 'About']);
+  await expect(tabs).toHaveText(['Account', 'Sign-in & devices', 'Encryption', 'Page & writing', 'Stylus & palm', 'About']);
   await tabs.filter({ hasText: 'Stylus & palm' }).click();
   await expect(page.locator('.cal-pad')).toBeVisible();
   await expect(page.locator('.settings-pane[data-section="account"]')).toBeHidden();
-  await tabs.filter({ hasText: 'Privacy & security' }).click();
+  await tabs.filter({ hasText: 'Encryption' }).click();
   await expect(page.getByRole('switch', { name: 'End-to-end encryption' })).toBeDisabled();
 });
 
