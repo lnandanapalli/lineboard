@@ -1,5 +1,7 @@
 import type { Settings, Stroke, Tool } from './types';
 import { uuid } from './util';
+import { appRect, clientToApp, deltaToApp } from './orientation';
+import { shapePoints } from './shapes';
 
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
@@ -17,9 +19,13 @@ const MAX_ZOOM = 4;
 export interface BoardCallbacks {
   onStrokesAdded(strokes: Stroke[]): void;
   onStrokesRemoved(strokes: Stroke[]): void;
+  /** A text box was edited: `before` is replaced by `after`. */
+  onStrokesReplaced(before: Stroke[], after: Stroke[]): void;
   /** Reports every contact that touches the drawing area (used for calibration readout). */
   onContact(size: number, pointerType: string, accepted: boolean): void;
   onUnlockChange(unlocked: number[]): void;
+  /** Split mode: the divider was moved (fraction of the board's height). */
+  onSplitRatio?(ratio: number): void;
 }
 
 interface Cached {
@@ -35,10 +41,41 @@ interface Cached {
 interface ActiveInput {
   pointerId: number;
   pointerType: string;
-  kind: 'draw' | 'erase';
+  kind: 'draw' | 'erase' | 'shape' | 'lasso' | 'move';
   start: number;
   points: number[];
   erased: Cached[];
+  /** The latest raw (unsmoothed) input point, so the stroke can end exactly where the pen lifted. */
+  raw: [number, number, number] | null;
+  /** Shape tool: where the drag started, where it is now, and whether Shift is held. */
+  shape?: { x0: number; y0: number; x1: number; y1: number; constrain: boolean };
+  /** Select tool: the loop being drawn, or how far the selection has been dragged. */
+  lasso?: number[];
+  move?: { x0: number; y0: number; dx: number; dy: number };
+}
+
+/** Is (x, y) inside the polygon [x0, y0, x1, y1, ...]? (ray casting) */
+function inPolygon(poly: number[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const xi = poly[i], yi = poly[i + 1], xj = poly[j], yj = poly[j + 1];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** A copy of a stroke moved by (dx, dy); `id` defaults to the same one. */
+function moved(s: Stroke, dx: number, dy: number, id = s.id): Stroke {
+  const p = s.points.slice();
+  if (s.tool === 'text') {
+    p[0] = Math.round((p[0] + dx) * 10) / 10;
+    p[1] = Math.round((p[1] + dy) * 10) / 10;
+  } else
+    for (let i = 0; i < p.length; i += 3) {
+      p[i] = Math.round((p[i] + dx) * 10) / 10;
+      p[i + 1] = Math.round((p[i + 1] + dy) * 10) / 10;
+    }
+  return { ...s, id, points: p };
 }
 
 interface MarginDrag {
@@ -46,12 +83,37 @@ interface MarginDrag {
   y0: number;
   scroll0: number;
   moved: boolean;
+  /** Split mode: this drag moves the divider (it was activated first) instead of scrolling. */
+  divider?: boolean;
 }
+
+/** Split mode: the divider's grip in the margin is this tall (px), and it stays within these bounds. */
+const SPLIT_GRIP = 30;
+const SPLIT_MIN = 0.15;
+const SPLIT_MAX = 0.85;
 
 const LOCK_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
 const UNLOCK_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 15v2" stroke="currentColor" stroke-width="2"/></svg>';
+
+export const TEXT_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+export const TEXT_LINE = 1.25;
+/** Longest text box the database accepts (strokes.text check in supabase/schema.sql). */
+export const MAX_TEXT = 10000;
+let measureCtx: CanvasRenderingContext2D | null = null;
+/** Width and height (page units) of a text box. */
+function textBox(text: string, size: number) {
+  measureCtx ??= document.createElement('canvas').getContext('2d')!;
+  measureCtx.font = `${size}px ${TEXT_FONT}`;
+  const lines = text.split('\n');
+  let w = 0;
+  for (const l of lines) w = Math.max(w, measureCtx.measureText(l).width);
+  return { w: Math.max(w, size * 0.3), h: lines.length * size * TEXT_LINE };
+}
+
+const GRIP_SVG =
+  '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 9h14M5 15h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 function contactSize(e: PointerEvent): number {
   return Math.max(e.width || 0, e.height || 0);
@@ -88,7 +150,9 @@ export class Board {
   private viewH = 0;
 
   private unlocked = new Set<number>();
-  private multi = false;
+  /** Split mode: which panes take ink, and whether the divider is armed for moving. */
+  private panes = { top: true, bottom: false };
+  private dividerArmed = false;
   tool: Tool = 'pen';
   private penSeen = false;
 
@@ -99,6 +163,11 @@ export class Board {
   /** Two-finger gesture: the page point under the fingers stays under them while they move and pinch. */
   private pan: { startDist: number; startZoom: number; anchorX: number; anchorY: number } | null = null;
   private eraserCursor: { x: number; y: number } | null = null;
+  /** Select tool: the selected strokes, and the Delete / Duplicate bar shown above them. */
+  private selection = new Set<Cached>();
+  private selectBar: HTMLElement | null = null;
+  /** Text box being typed (new, or editing an existing one). */
+  private editor: { el: HTMLTextAreaElement; x: number; y: number; size: number; color: string; original: Cached | null } | null = null;
 
   private dirty = { bg: false, ink: false, live: false, margin: false };
   private rafId = 0;
@@ -137,11 +206,23 @@ export class Board {
   // ----------------------------- public API -----------------------------
 
   setStrokes(noteId: string, strokes: Stroke[]) {
+    // The same note reloading (its saved strokes arriving after it opened) keeps a text box being
+    // typed; a different note finishes it first.
+    const sameNote = noteId === this.noteId && !!this.editor;
+    if (!sameNote) this.commitText();
+    this.clearSelection();
     this.cancelActive();
     this.noteId = noteId;
     this.strokes = [];
     this.byId.clear();
     for (const s of strokes) this.cache(s);
+    if (sameNote) {
+      // Keep the place on the page, and point an edit at the freshly loaded copy of its text box.
+      const ed = this.editor!;
+      if (ed.original) ed.original = this.byId.get(ed.original.s.id) ?? null;
+      this.invalidate('bg', 'ink', 'live', 'margin');
+      return;
+    }
     this.scrollY = 0;
     // Unlock the first empty strip after existing content, so you can continue where you left off.
     const H = this.settings.stripHeight;
@@ -160,6 +241,9 @@ export class Board {
 
   removeStrokes(ids: string[]) {
     const set = new Set(ids);
+    for (const c of this.selection) if (set.has(c.s.id)) this.selection.delete(c);
+    this.invalidate('live');
+    if (this.editor?.original && set.has(this.editor.original.s.id)) this.closeEditor();
     this.strokes = this.strokes.filter((c) => !set.has(c.s.id));
     for (const id of ids) this.byId.delete(id);
     this.invalidate('ink');
@@ -167,8 +251,15 @@ export class Board {
 
   updateSettings(s: Settings) {
     const oldH = this.settings.stripHeight;
+    const oldMode = this.settings.mode;
     this.settings = { ...s }; // own copy, so changes can be compared with the previous settings
-    if (!s.freeMode) {
+    if (s.mode !== 'split') this.dividerArmed = false;
+    if (oldMode === 'multi' && s.mode === 'strips') {
+      // Leaving multi-strip locks everything; unlock one strip again by tapping its lock.
+      this.unlocked.clear();
+      this.cb.onUnlockChange([]);
+    }
+    if (s.mode !== 'free') {
       this.fingers.clear();
       this.pan = null;
       if (this.zoom !== 1 || this.scrollX) {
@@ -187,20 +278,11 @@ export class Board {
   }
 
   setTool(t: Tool) {
+    if (t !== 'text') this.commitText();
+    if (t !== 'select') this.clearSelection();
     this.tool = t;
     this.eraserCursor = null;
     this.invalidate('live');
-  }
-
-  setMulti(on: boolean) {
-    this.multi = on;
-    if (!on) this.unlocked.clear(); // turning multi off locks everything; unlock one manually again
-    this.cb.onUnlockChange(this.unlockedList());
-    this.invalidate('bg', 'margin');
-  }
-
-  isMulti() {
-    return this.multi;
   }
 
   /** Move the single unlocked strip up/down (dir = +/-1) and scroll it into a comfortable spot. */
@@ -222,8 +304,9 @@ export class Board {
 
   lockAll() {
     this.unlocked.clear();
+    this.panes = { top: false, bottom: false };
     this.cb.onUnlockChange([]);
-    this.invalidate('bg', 'margin');
+    this.invalidate('bg', 'live', 'margin');
   }
 
   scrollBy(dyLogical: number) {
@@ -254,6 +337,13 @@ export class Board {
   // ----------------------------- geometry -----------------------------
 
   private cache(s: Stroke): Cached {
+    if (s.tool === 'text') {
+      const b = textBox(s.text ?? '', s.width);
+      const c: Cached = { s, minX: s.points[0], minY: s.points[1], maxX: s.points[0] + b.w, maxY: s.points[1] + b.h, variable: false, path: null };
+      this.strokes.push(c);
+      this.byId.set(s.id, c);
+      return c;
+    }
     const p = s.points;
     let minX = Infinity,
       minY = Infinity,
@@ -337,17 +427,42 @@ export class Board {
   }
 
   private get free(): boolean {
-    return this.settings.freeMode;
+    return this.settings.mode === 'free';
+  }
+
+  private get multi(): boolean {
+    return this.settings.mode === 'multi';
+  }
+
+  private get split(): boolean {
+    return this.settings.mode === 'split';
+  }
+
+  /** Split mode: the divider's position in board pixels from the top. */
+  private get dividerY(): number {
+    return this.viewH * Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, this.settings.splitRatio));
   }
 
   private isUnlockedAt(y: number): boolean {
     if (this.free) return y >= 0; // free whiteboard: the whole page takes ink
+    if (this.split) {
+      // Panes are fixed on screen; the page scrolls under them.
+      const screenY = (y - this.scrollY) * this.scale;
+      return y >= 0 && (screenY < this.dividerY ? this.panes.top : this.panes.bottom);
+    }
     return y >= 0 && this.unlocked.has(Math.floor(y / this.settings.stripHeight));
   }
 
+  /** Screen coordinates to page units (taking a manually rotated app into account). */
   private toLogical(clientX: number, clientY: number) {
-    const r = this.live.getBoundingClientRect();
-    return { x: (clientX - r.left) / this.scale + this.scrollX, y: (clientY - r.top) / this.scale + this.scrollY };
+    const p = clientToApp(clientX, clientY);
+    return this.appToLogical(p.x, p.y);
+  }
+
+  /** App coordinates (see orientation.ts) to page units. */
+  private appToLogical(x: number, y: number) {
+    const r = appRect(this.live);
+    return { x: (x - r.left) / this.scale + this.scrollX, y: (y - r.top) / this.scale + this.scrollY };
   }
 
   private toggleStrip(i: number) {
@@ -389,6 +504,8 @@ export class Board {
     // from treating a sideways stroke as a gesture, such as swipe-to-go-back navigation.
     // (Pointer events, which do the drawing, still arrive.)
     const block = (e: TouchEvent) => {
+      // Let the text box (caret, selection) and the selection's buttons take taps.
+      if ((e.target as Element | null)?.closest?.('textarea, .select-bar')) return;
       if (e.cancelable) e.preventDefault();
     };
     this.el.addEventListener('touchstart', block, { passive: false });
@@ -403,11 +520,13 @@ export class Board {
           // Trackpad pinch / Ctrl+wheel: zoom around the pointer.
           const at = this.toLogical(e.clientX, e.clientY);
           this.setZoom(this.zoom * Math.exp(-e.deltaY * mult * 0.002));
-          const r = this.live.getBoundingClientRect();
-          this.setScroll(at.y - (e.clientY - r.top) / this.scale, at.x - (e.clientX - r.left) / this.scale);
+          const r = appRect(this.live);
+          const p = clientToApp(e.clientX, e.clientY);
+          this.setScroll(at.y - (p.y - r.top) / this.scale, at.x - (p.x - r.left) / this.scale);
           return;
         }
-        this.setScroll(this.scrollY + (e.deltaY * mult) / this.scale, this.scrollX + (e.deltaX * mult) / this.scale);
+        const d = deltaToApp(e.deltaX * mult, e.deltaY * mult);
+        this.setScroll(this.scrollY + d.dy / this.scale, this.scrollX + d.dx / this.scale);
       },
       { passive: false },
     );
@@ -417,24 +536,44 @@ export class Board {
       if (this.marginDrag) return;
       e.preventDefault();
       M.setPointerCapture(e.pointerId);
-      this.marginDrag = { pointerId: e.pointerId, y0: e.clientY, scroll0: this.scrollY, moved: false };
+      // Split mode: once the divider was armed by tapping its grip, the next drag moves it.
+      this.marginDrag = { pointerId: e.pointerId, y0: clientToApp(e.clientX, e.clientY).y, scroll0: this.scrollY, moved: false, divider: this.split && this.dividerArmed };
     });
     M.addEventListener('pointermove', (e) => {
       const d = this.marginDrag;
       if (!d || d.pointerId !== e.pointerId) return;
-      const dy = e.clientY - d.y0;
+      const y = clientToApp(e.clientX, e.clientY).y;
+      const dy = y - d.y0;
       if (!d.moved && Math.abs(dy) > 10) d.moved = true;
-      if (d.moved) this.setScroll(d.scroll0 - dy / this.scale);
+      if (!d.moved) return;
+      if (d.divider) {
+        const r = appRect(M);
+        this.settings.splitRatio = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, (y - r.top) / this.viewH));
+        this.invalidate('bg', 'live', 'margin');
+      } else this.setScroll(d.scroll0 - dy / this.scale);
     });
     const endMargin = (e: PointerEvent, cancelled: boolean) => {
       const d = this.marginDrag;
       if (!d || d.pointerId !== e.pointerId) return;
       this.marginDrag = null;
-      if (!d.moved && !cancelled) {
-        const r = M.getBoundingClientRect();
-        const y = (e.clientY - r.top) / this.scale + this.scrollY;
-        this.toggleStrip(Math.floor(y / this.settings.stripHeight));
+      const r = appRect(M);
+      const py = clientToApp(e.clientX, e.clientY).y - r.top;
+      if (d.divider && d.moved) {
+        // One move per activation, so a later scroll can never shift the divider by accident.
+        this.dividerArmed = false;
+        this.cb.onSplitRatio?.(this.settings.splitRatio);
+        this.invalidate('live', 'margin');
+        return;
       }
+      if (d.moved || cancelled) return;
+      if (this.split) {
+        if (Math.abs(py - this.dividerY) <= SPLIT_GRIP / 2 + 4) this.dividerArmed = !this.dividerArmed;
+        else if (py < this.dividerY) this.panes.top = !this.panes.top;
+        else this.panes.bottom = !this.panes.bottom;
+        this.invalidate('bg', 'live', 'margin');
+        return;
+      }
+      this.toggleStrip(Math.floor((py / this.scale + this.scrollY) / this.settings.stripHeight));
     };
     M.addEventListener('pointerup', (e) => endMargin(e, false));
     M.addEventListener('pointercancel', (e) => endMargin(e, true));
@@ -458,30 +597,64 @@ export class Board {
     this.cb.onContact(size, e.pointerType, accept);
     if (!accept) return;
 
+    if (this.tool === 'text') {
+      e.preventDefault();
+      this.commitText();
+      const hit = [...this.strokes].reverse().find((c) => c.s.tool === 'text' && this.strokeHit(c, pt.x, pt.y, 2));
+      if (hit) this.openEditor(hit.s.points[0], hit.s.points[1], hit.s.width, hit.s.color, hit);
+      // The tap marks where the first line is, so the caret sits under the pen.
+      else this.openEditor(pt.x, pt.y - this.settings.textSize * 0.6, this.settings.textSize, this.settings.penColor, null);
+      return;
+    }
+
     e.preventDefault();
     try {
       this.live.setPointerCapture(e.pointerId);
     } catch {
       /* ignore */
     }
+    if (this.tool === 'select') {
+      // Inside the current selection: drag it. Elsewhere: start a new lasso.
+      const b = this.selectionBox();
+      const inside = b && pt.x >= b.minX && pt.x <= b.maxX && pt.y >= b.minY && pt.y <= b.maxY;
+      if (!inside) this.clearSelection();
+      this.active = {
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        kind: inside ? 'move' : 'lasso',
+        start: performance.now(),
+        points: [],
+        erased: [],
+        raw: null,
+        ...(inside ? { move: { x0: pt.x, y0: pt.y, dx: 0, dy: 0 } } : { lasso: [pt.x, pt.y] }),
+      };
+      this.invalidate('ink', 'live');
+      return;
+    }
     this.active = {
       pointerId: e.pointerId,
       pointerType: e.pointerType,
-      kind: this.tool === 'eraser' ? 'erase' : 'draw',
+      kind: this.tool === 'eraser' ? 'erase' : this.tool === 'shape' ? 'shape' : 'draw',
       start: performance.now(),
       points: [],
       erased: [],
+      raw: null,
     };
+    if (this.active.kind === 'shape') {
+      this.active.shape = { x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y, constrain: e.shiftKey };
+      this.invalidate('live');
+      return;
+    }
     this.addPoint(pt.x, pt.y, this.pressureOf(e));
   }
 
   private onMove(e: PointerEvent) {
     if (this.fingers.has(e.pointerId)) {
-      this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: this.fingers.get(e.pointerId)!.t });
+      this.fingers.set(e.pointerId, { ...clientToApp(e.clientX, e.clientY), t: this.fingers.get(e.pointerId)!.t });
       if (this.pan) {
         const g = this.fingerGeometry();
         if (this.pan.startDist > 0) this.setZoom((this.pan.startZoom * g.dist) / this.pan.startDist);
-        const r = this.live.getBoundingClientRect();
+        const r = appRect(this.live);
         this.setScroll(this.pan.anchorY - (g.cy - r.top) / this.scale, this.pan.anchorX - (g.cx - r.left) / this.scale);
         return;
       }
@@ -504,7 +677,24 @@ export class Board {
         return;
       }
       const pt = this.toLogical(ev.clientX, ev.clientY);
-      this.addPoint(pt.x, pt.y, this.pressureOf(ev));
+      if (a.move) {
+        a.move.dx = pt.x - a.move.x0;
+        a.move.dy = pt.y - a.move.y0;
+        this.invalidate('live');
+        continue;
+      }
+      if (a.lasso) {
+        const n = a.lasso.length;
+        if (Math.hypot(pt.x - a.lasso[n - 2], pt.y - a.lasso[n - 1]) >= 2) a.lasso.push(pt.x, pt.y);
+        this.invalidate('live');
+        continue;
+      }
+      if (a.shape) {
+        a.shape.x1 = pt.x;
+        a.shape.y1 = pt.y;
+        a.shape.constrain = ev.shiftKey;
+        this.invalidate('live');
+      } else this.addPoint(pt.x, pt.y, this.pressureOf(ev));
     }
   }
 
@@ -531,7 +721,7 @@ export class Board {
   private tryStartPan(e: PointerEvent): boolean {
     const now = performance.now();
     for (const [id, f] of this.fingers) if (now - f.t > 5000) this.fingers.delete(id); // stale entries
-    this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    this.fingers.set(e.pointerId, { ...clientToApp(e.clientX, e.clientY), t: now });
     if (this.pan || this.fingers.size !== 2) return !!this.pan;
     const [a, b] = [...this.fingers.values()];
     if (Math.abs(a.t - b.t) > PAN_PAIR_MS) return false;
@@ -546,12 +736,12 @@ export class Board {
       /* ignore */
     }
     const g = this.fingerGeometry();
-    const anchor = this.toLogical(g.cx, g.cy);
+    const anchor = this.appToLogical(g.cx, g.cy);
     this.pan = { startDist: g.dist, startZoom: this.zoom, anchorX: anchor.x, anchorY: anchor.y };
     return true;
   }
 
-  /** Centre of the (first two) fingers and the distance between them. */
+  /** Centre of the (first two) fingers and the distance between them, in app coordinates. */
   private fingerGeometry() {
     const [a, b] = [...this.fingers.values()];
     if (!b) return { cx: a.x, cy: a.y, dist: 0 };
@@ -576,6 +766,17 @@ export class Board {
     const a = this.active!;
     const pts = a.points;
     const n = pts.length;
+    if (a.kind === 'draw') {
+      a.raw = [x, y, p];
+      // Stabilizer: each point moves only part of the way from the previous one towards the pen,
+      // which evens out tremor. 0 = off; at 1 the line trails the pen by ~85% per sample.
+      const k = Math.min(0.85, Math.max(0, this.settings.smoothing) * 0.85);
+      if (n >= 3 && k > 0) {
+        x = pts[n - 3] + (x - pts[n - 3]) * (1 - k);
+        y = pts[n - 2] + (y - pts[n - 2]) * (1 - k);
+        p = pts[n - 1] + (p - pts[n - 1]) * (1 - k);
+      }
+    }
     if (n >= 3) {
       const dx = x - pts[n - 3],
         dy = y - pts[n - 2];
@@ -599,12 +800,16 @@ export class Board {
     if (!hit.length) return;
     const ids = new Set(hit.map((h) => h.s.id));
     this.strokes = this.strokes.filter((c) => !ids.has(c.s.id));
-    for (const h of hit) this.byId.delete(h.s.id);
+    for (const h of hit) {
+      this.byId.delete(h.s.id);
+      this.selection.delete(h);
+    }
     a.erased.push(...hit);
     this.invalidate('ink');
   }
 
   private strokeHit(c: Cached, x: number, y: number, r: number): boolean {
+    if (c.s.tool === 'text') return x >= c.minX - r && x <= c.maxX + r && y >= c.minY - r && y <= c.maxY + r;
     const p = c.s.points;
     const tol = r + c.s.width / 2;
     const tol2 = tol * tol;
@@ -630,6 +835,233 @@ export class Board {
     return false;
   }
 
+  // ----------------------------- text boxes -----------------------------
+
+  private openEditor(x: number, y: number, size: number, color: string, original: Cached | null) {
+    const el = document.createElement('textarea');
+    el.className = 'text-editor';
+    el.setAttribute('aria-label', 'Text');
+    el.spellcheck = true;
+    el.wrap = 'off';
+    el.maxLength = MAX_TEXT;
+    el.value = original?.s.text ?? '';
+    this.area.append(el);
+    this.editor = { el, x, y, size, color, original };
+    if (original) this.invalidate('ink'); // hide the original while it is being edited
+    el.addEventListener('input', () => this.positionEditor());
+    el.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // typing must not trigger tool shortcuts
+      if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
+        e.preventDefault();
+        this.commitText();
+      }
+    });
+    el.addEventListener('blur', () => {
+      // Tapping elsewhere (toolbar, another tool) finishes the text box.
+      if (this.editor?.el === el) this.commitText();
+    });
+    this.positionEditor();
+    // Focus inside the tap itself: iPadOS only opens the keyboard for focus during a user gesture.
+    el.focus({ preventScroll: true });
+    setTimeout(() => {
+      if (this.editor?.el === el && document.activeElement !== el) el.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  private positionEditor() {
+    const ed = this.editor;
+    if (!ed) return;
+    const s = this.scale;
+    const b = textBox(ed.el.value || ' ', ed.size);
+    Object.assign(ed.el.style, {
+      left: `${(ed.x - this.scrollX) * s}px`,
+      top: `${(ed.y - this.scrollY) * s}px`,
+      fontSize: `${ed.size * s}px`,
+      lineHeight: String(TEXT_LINE),
+      fontFamily: TEXT_FONT,
+      color: ed.color,
+      width: `${(b.w + ed.size) * s}px`,
+      height: `${b.h * s}px`,
+    });
+  }
+
+  /** Save a text box that is still being typed (e.g. the page is about to close). */
+  finishText() {
+    this.commitText();
+  }
+
+  /** Remove the editor without saving. */
+  private closeEditor() {
+    const ed = this.editor;
+    if (!ed) return;
+    this.editor = null;
+    ed.el.remove();
+    this.invalidate('ink');
+  }
+
+  /** Save what was typed: a new text box, an edit (replace), or a removal when emptied. */
+  private commitText() {
+    const ed = this.editor;
+    if (!ed) return;
+    // The database keeps up to MAX_TEXT characters per box; never send more (it would be refused,
+    // and an edit would already have queued the old box's removal).
+    const text = ed.el.value.replace(/\s+$/, '').slice(0, MAX_TEXT);
+    this.closeEditor();
+    const old = ed.original;
+    if (old && text === old.s.text) return;
+    if (old) {
+      this.strokes = this.strokes.filter((c) => c !== old);
+      this.byId.delete(old.s.id);
+    }
+    if (!text) {
+      if (old) this.cb.onStrokesRemoved([old.s]);
+      return;
+    }
+    const stroke: Stroke = {
+      id: uuid(),
+      note_id: this.noteId,
+      tool: 'text',
+      color: ed.color,
+      width: ed.size,
+      points: [Math.round(ed.x * 10) / 10, Math.round(ed.y * 10) / 10, 0],
+      text,
+      created_at: old?.s.created_at ?? new Date().toISOString(),
+    };
+    this.cache(stroke);
+    this.invalidate('ink', 'bg', 'margin');
+    if (old) this.cb.onStrokesReplaced([old.s], [stroke]);
+    else this.cb.onStrokesAdded([stroke]);
+  }
+
+  // ----------------------------- selection -----------------------------
+
+  hasSelection() {
+    return this.selection.size > 0;
+  }
+
+  clearSelection() {
+    if (!this.selection.size) return;
+    this.selection.clear();
+    this.invalidate('ink', 'live');
+  }
+
+  private selectionBox() {
+    if (!this.selection.size) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of this.selection) {
+      minX = Math.min(minX, c.minX);
+      minY = Math.min(minY, c.minY);
+      maxX = Math.max(maxX, c.maxX);
+      maxY = Math.max(maxY, c.maxY);
+    }
+    const pad = 6;
+    return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  }
+
+  /** A loop selects strokes that are mostly inside it; a tap selects the stroke under it. */
+  private finishLasso(poly: number[]) {
+    this.invalidate('live');
+    let w = 0, h = 0;
+    for (let i = 2; i < poly.length; i += 2) {
+      w = Math.max(w, Math.abs(poly[i] - poly[0]));
+      h = Math.max(h, Math.abs(poly[i + 1] - poly[1]));
+    }
+    if (poly.length < 8 || (w < 8 && h < 8)) {
+      const hit = [...this.strokes].reverse().find((c) => this.strokeHit(c, poly[0], poly[1], 6));
+      if (hit) this.selection = new Set([hit]);
+      this.invalidate('ink', 'live');
+      return;
+    }
+    for (const c of this.strokes) {
+      if (c.s.tool === 'text') {
+        if (inPolygon(poly, (c.minX + c.maxX) / 2, (c.minY + c.maxY) / 2)) this.selection.add(c);
+        continue;
+      }
+      const p = c.s.points;
+      const n = p.length / 3;
+      const step = Math.max(1, Math.floor(n / 40));
+      let inside = 0, total = 0;
+      for (let i = 0; i < n; i += step) {
+        total++;
+        if (inPolygon(poly, p[i * 3], p[i * 3 + 1])) inside++;
+      }
+      if (inside / total >= 0.6) this.selection.add(c);
+    }
+    this.invalidate('ink', 'live');
+  }
+
+  private finishMove(dx: number, dy: number) {
+    this.invalidate('ink', 'live');
+    if (Math.hypot(dx, dy) < 1) return;
+    const before = [...this.selection].map((c) => c.s);
+    const after = before.map((s) => moved(s, dx, dy));
+    this.replaceCached(before, after);
+    this.cb.onStrokesReplaced(before, after);
+  }
+
+  /** Swap cached strokes for new versions and keep them selected. */
+  private replaceCached(before: Stroke[], after: Stroke[]) {
+    const ids = new Set(before.map((s) => s.id));
+    this.strokes = this.strokes.filter((c) => !ids.has(c.s.id));
+    for (const id of ids) this.byId.delete(id);
+    this.selection = new Set(after.map((s) => this.cache(s)));
+    this.invalidate('ink', 'bg', 'live', 'margin');
+  }
+
+  deleteSelection() {
+    if (!this.selection.size) return;
+    const gone = [...this.selection];
+    const ids = new Set(gone.map((c) => c.s.id));
+    this.strokes = this.strokes.filter((c) => !ids.has(c.s.id));
+    for (const id of ids) this.byId.delete(id);
+    this.selection.clear();
+    this.invalidate('ink', 'live');
+    this.cb.onStrokesRemoved(gone.map((c) => c.s));
+  }
+
+  duplicateSelection() {
+    if (!this.selection.size) return;
+    const copies = [...this.selection].map((c) => moved(c.s, 24, 24, uuid()));
+    for (const s of copies) s.created_at = new Date().toISOString();
+    this.selection = new Set(copies.map((s) => this.cache(s)));
+    this.invalidate('ink', 'bg', 'live', 'margin');
+    this.cb.onStrokesAdded(copies);
+  }
+
+  /** The Delete / Duplicate bar floats above the selection. */
+  private positionSelectBar(box: { minX: number; minY: number; maxX: number } | null) {
+    if (!box || this.active?.kind === 'move') {
+      this.selectBar?.remove();
+      this.selectBar = null;
+      return;
+    }
+    if (!this.selectBar) {
+      const bar = document.createElement('div');
+      bar.className = 'select-bar';
+      const btn = (label: string, fn: () => void) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.addEventListener('pointerdown', (e) => e.stopPropagation());
+        b.addEventListener('click', fn);
+        return b;
+      };
+      bar.append(btn('Duplicate', () => this.duplicateSelection()), btn('Delete', () => this.deleteSelection()));
+      this.area.append(bar);
+      this.selectBar = bar;
+    }
+    const s = this.scale;
+    const left = ((box.minX + box.maxX) / 2 - this.scrollX) * s;
+    const top = (box.minY - this.scrollY) * s;
+    this.selectBar.style.left = `${Math.max(8, Math.min(left, this.viewW - 8))}px`;
+    this.selectBar.style.top = `${Math.max(8, top - 46)}px`;
+  }
+
+  private shapeOf(a: ActiveInput): number[] {
+    const sh = a.shape!;
+    return shapePoints(this.settings.shape, sh.x0, sh.y0, sh.x1, sh.y1, sh.constrain);
+  }
+
   private cancelActive() {
     const a = this.active;
     if (!a) return;
@@ -648,14 +1080,29 @@ export class Board {
   private finish() {
     const a = this.active!;
     this.active = null;
+    if (a.lasso) return this.finishLasso(a.lasso);
+    if (a.move) return this.finishMove(a.move.dx, a.move.dy);
     if (a.kind === 'erase') {
       if (this.tool === 'eraser' && a.pointerType !== 'mouse') this.eraserCursor = null;
       if (a.erased.length) this.cb.onStrokesRemoved(a.erased.map((c) => c.s));
       this.invalidate('live');
       return;
     }
+    if (a.shape) {
+      const { x0, y0, x1, y1 } = a.shape;
+      this.invalidate('live');
+      if (Math.hypot(x1 - x0, y1 - y0) < 3) return; // a tap, not a shape
+      a.points = this.shapeOf(a);
+    }
     if (!a.points.length) return;
+    // Finish where the pen actually lifted (the stabilizer trails slightly behind it).
+    if (a.raw && this.settings.smoothing > 0 && a.points.length >= 3) {
+      const [x, y, p] = a.raw;
+      const n = a.points.length;
+      if (Math.hypot(x - a.points[n - 3], y - a.points[n - 2]) >= MIN_POINT_DIST) a.points.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
+    }
     const isHL = this.tool === 'highlighter';
+    // Shapes are pen strokes (see shapes.ts).
     const stroke: Stroke = {
       id: uuid(),
       note_id: this.noteId,
@@ -719,9 +1166,27 @@ export class Board {
     const H = this.settings.stripHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (this.free) {
-      // Plain whiteboard: white page, no strips, lines or locks.
+      // Whiteboard: white page, no strips or locks, with the chosen paper.
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, this.viewW, this.viewH);
+      this.drawPaper(ctx);
+      return;
+    }
+    if (this.split) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
+      if (this.settings.showLines) {
+        const [first, last] = this.visibleStrips();
+        ctx.strokeStyle = '#dde3ea';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = first; i <= last; i++) {
+          const y = Math.round(((i + 1) * H - this.scrollY) * s) + 0.5;
+          ctx.moveTo(0, y);
+          ctx.lineTo(this.viewW, y);
+        }
+        ctx.stroke();
+      }
       return;
     }
     ctx.fillStyle = '#eef0f3';
@@ -754,6 +1219,39 @@ export class Board {
     }
   }
 
+  /** Free whiteboard paper: ruled lines, a grid or dots that scroll and zoom with the page. */
+  private drawPaper(ctx: CanvasRenderingContext2D) {
+    const paper = this.settings.paper;
+    if (paper === 'plain') return;
+    const s = this.scale;
+    const gap = paper === 'lines' ? this.settings.stripHeight / 2 : 40; // page units
+    const x0 = Math.floor(this.scrollX / gap) * gap;
+    const y0 = Math.floor(this.scrollY / gap) * gap;
+    const x1 = this.scrollX + this.viewW / s;
+    const y1 = this.scrollY + this.viewH / s;
+    const sx = (x: number) => Math.round((x - this.scrollX) * s) + 0.5;
+    const sy = (y: number) => Math.round((y - this.scrollY) * s) + 0.5;
+    if (paper === 'dots') {
+      ctx.fillStyle = '#c3cbd6';
+      const r = Math.max(1, 1.2 * Math.min(2, s));
+      for (let y = y0; y <= y1; y += gap) for (let x = x0; x <= x1; x += gap) ctx.fillRect(sx(x) - r / 2, sy(y) - r / 2, r, r);
+      return;
+    }
+    ctx.strokeStyle = '#e1e6ed';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let y = y0; y <= y1; y += gap) {
+      ctx.moveTo(0, sy(y));
+      ctx.lineTo(this.viewW, sy(y));
+    }
+    if (paper === 'grid')
+      for (let x = x0; x <= x1; x += gap) {
+        ctx.moveTo(sx(x), 0);
+        ctx.lineTo(sx(x), this.viewH);
+      }
+    ctx.stroke();
+  }
+
   private setPageTransform(ctx: CanvasRenderingContext2D) {
     const k = this.scale * this.dpr;
     ctx.setTransform(k, 0, 0, k, -this.scrollX * k, -this.scrollY * k);
@@ -766,14 +1264,28 @@ export class Board {
     this.setPageTransform(ctx);
     const y0 = this.scrollY;
     const y1 = this.scrollY + this.viewH / this.scale;
+    const hidden = this.editor?.original;
+    const dragging = this.active?.kind === 'move';
     for (const c of this.strokes) {
-      if (c.maxY < y0 || c.minY > y1) continue;
+      if (c.maxY < y0 || c.minY > y1 || c === hidden || (dragging && this.selection.has(c))) continue;
       this.drawStroke(ctx, c);
     }
   }
 
   private drawStroke(ctx: CanvasRenderingContext2D, c: Cached) {
     const s = c.s;
+    if (s.tool === 'text') {
+      ctx.save();
+      ctx.fillStyle = s.color;
+      ctx.font = `${s.width}px ${TEXT_FONT}`;
+      ctx.textBaseline = 'top';
+      const lines = (s.text ?? '').split('\n');
+      // Centre each line in its line box, matching the textarea's layout.
+      const pad = (s.width * (TEXT_LINE - 1)) / 2;
+      lines.forEach((l, i) => ctx.fillText(l, s.points[0], s.points[1] + pad + i * s.width * TEXT_LINE));
+      ctx.restore();
+      return;
+    }
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -800,12 +1312,15 @@ export class Board {
   }
 
   private drawLive() {
+    this.positionEditor();
     const ctx = this.liveCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.live.width, this.live.height);
+    if (this.split) this.drawSplitOverlay(ctx);
     this.setPageTransform(ctx);
     const a = this.active;
-    if (a && a.kind === 'draw' && a.points.length) {
+    const shapePts = a?.shape ? this.shapeOf(a) : null;
+    if (a && ((a.kind === 'draw' && a.points.length) || shapePts)) {
       const isHL = this.tool === 'highlighter';
       const tmp: Stroke = {
         id: '',
@@ -813,16 +1328,44 @@ export class Board {
         tool: isHL ? 'highlighter' : 'pen',
         color: isHL ? this.settings.highlighterColor : this.settings.penColor,
         width: isHL ? this.settings.highlighterWidth : this.settings.penWidth,
-        points: a.points,
+        points: shapePts ?? a.points,
       };
       let pmin = 1,
         pmax = 0;
-      for (let i = 2; i < a.points.length; i += 3) {
-        pmin = Math.min(pmin, a.points[i]);
-        pmax = Math.max(pmax, a.points[i]);
+      for (let i = 2; i < tmp.points.length; i += 3) {
+        pmin = Math.min(pmin, tmp.points[i]);
+        pmax = Math.max(pmax, tmp.points[i]);
       }
       this.drawStroke(ctx, { s: tmp, minX: 0, minY: 0, maxX: 0, maxY: 0, variable: !isHL && pmax - pmin > 0.05, path: null });
     }
+    if (a?.lasso && a.lasso.length >= 4) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(a.lasso[0], a.lasso[1]);
+      for (let i = 2; i < a.lasso.length; i += 2) ctx.lineTo(a.lasso[i], a.lasso[i + 1]);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(37, 99, 235, 0.06)';
+      ctx.fill();
+      ctx.setLineDash([6 / this.scale, 5 / this.scale]);
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.strokeStyle = '#2563eb';
+      ctx.stroke();
+      ctx.restore();
+    }
+    const box = this.selectionBox();
+    if (box) {
+      const dx = a?.move?.dx ?? 0;
+      const dy = a?.move?.dy ?? 0;
+      ctx.save();
+      ctx.translate(dx, dy);
+      if (a?.move) for (const c of this.selection) this.drawStroke(ctx, c);
+      ctx.setLineDash([6 / this.scale, 4 / this.scale]);
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.strokeStyle = '#2563eb';
+      ctx.strokeRect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+      ctx.restore();
+    }
+    this.positionSelectBar(box);
     if (this.tool === 'eraser' && this.eraserCursor) {
       ctx.beginPath();
       ctx.arc(this.eraserCursor.x, this.eraserCursor.y, ERASER_RADIUS, 0, Math.PI * 2);
@@ -832,9 +1375,41 @@ export class Board {
     }
   }
 
+  /** Split mode: a tinted mask over each locked pane (the page still shows through) and the divider. */
+  private drawSplitOverlay(ctx: CanvasRenderingContext2D) {
+    const d = this.dividerY;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.fillStyle = 'rgba(203, 213, 225, 0.55)';
+    if (!this.panes.top) ctx.fillRect(0, 0, this.viewW, d);
+    if (!this.panes.bottom) ctx.fillRect(0, d, this.viewW, this.viewH - d);
+    ctx.fillStyle = this.dividerArmed ? '#2563eb' : '#94a3b8';
+    ctx.fillRect(0, Math.round(d) - (this.dividerArmed ? 1.5 : 1), this.viewW, this.dividerArmed ? 3 : 2);
+  }
+
   private drawMargin() {
     if (this.free) {
       this.margin.replaceChildren(); // hidden in free mode
+      return;
+    }
+    if (this.split) {
+      const d = this.dividerY;
+      const pane = (which: 'top' | 'bottom', top: number, height: number) => {
+        const on = this.panes[which];
+        const el = document.createElement('div');
+        el.className = 'strip-btn split-pane' + (on ? ' on' : '');
+        el.style.top = top + 'px';
+        el.style.height = height + 'px';
+        el.innerHTML = on ? UNLOCK_SVG : LOCK_SVG;
+        el.setAttribute('aria-label', `${on ? 'Lock' : 'Unlock'} ${which} pane`);
+        return el;
+      };
+      const grip = document.createElement('div');
+      grip.className = 'split-grip' + (this.dividerArmed ? ' armed' : '');
+      grip.style.top = d - SPLIT_GRIP / 2 + 'px';
+      grip.style.height = SPLIT_GRIP + 'px';
+      grip.innerHTML = GRIP_SVG;
+      grip.setAttribute('aria-label', this.dividerArmed ? 'Divider ready: drag in the margin to move it' : 'Divider: tap, then drag to move');
+      this.margin.replaceChildren(pane('top', 0, d), pane('bottom', d, this.viewH - d), grip);
       return;
     }
     const H = this.settings.stripHeight;

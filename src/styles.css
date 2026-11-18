@@ -415,3 +415,91 @@ kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px sol
   .item-row { flex-wrap: wrap; }
 }
 .link-btn { border: 0; background: none; padding: 0; height: auto; color: var(--accent); text-decoration: underline; font-weight: 400; font-size: 14px; justify-content: flex-start; text-align: left; cursor: pointer; }
+
+/* ----- Toolbar dropdowns (mode, shapes...) ----- */
+.dropdown-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 10px; flex: none;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--panel); cursor: pointer; font-size: 14px; white-space: nowrap;
+}
+.dropdown-btn svg { width: 18px; height: 18px; flex: none; }
+.dropdown-btn svg:last-child { width: 16px; height: 16px; color: var(--muted); transition: transform 0.15s; }
+.dropdown-btn[aria-expanded=true] { border-color: var(--accent); color: var(--accent); }
+.dropdown-btn[aria-expanded=true] svg:last-child { transform: rotate(180deg); }
+.dropdown-menu {
+  position: fixed; z-index: 60; min-width: 240px; max-width: min(340px, calc(100vw - 16px)); padding: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.16);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.dropdown-item {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px;
+  background: transparent; cursor: pointer; text-align: left;
+}
+.dropdown-item svg { width: 20px; height: 20px; flex: none; margin-top: 1px; color: var(--muted); }
+.dropdown-item:hover, .dropdown-item:focus-visible { background: var(--bg); outline: none; }
+.dropdown-item[aria-checked=true] { background: var(--accent-soft); }
+.dropdown-item[aria-checked=true] svg, .dropdown-item[aria-checked=true] b { color: var(--accent); }
+.dropdown-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dropdown-text b { font-weight: 600; font-size: 14px; }
+.dropdown-text small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.dropdown-text small:empty { display: none; }
+.dropdown-item kbd { margin-top: 1px; }
+@media (max-width: 1100px) { .mode-btn .dropdown-label { display: none; } .dropdown-btn { padding: 0 6px 0 8px; } }
+
+/* ----- Size button and picker ----- */
+.size-btn { width: 40px; height: 40px; flex: none; border: 0; border-radius: 9px; background: transparent; display: grid; place-items: center; cursor: pointer; }
+.size-btn:hover, .size-btn[aria-expanded=true] { background: var(--accent-soft); }
+.size-dot { display: block; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.08); }
+.popover {
+  position: fixed; z-index: 60; padding: 14px; width: min(260px, calc(100vw - 16px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.16);
+}
+.size-picker { display: flex; flex-direction: column; gap: 10px; }
+.size-preview { width: 100%; height: 45px; background: #fafafa; border-radius: 8px; }
+.size-picker .range output { min-width: 34px; text-align: right; }
+.size-presets { display: flex; gap: 6px; }
+.size-presets .btn { flex: 1; height: 34px; padding: 0 6px; font-size: 13px; }
+.size-presets .btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ----- Manual orientation (see orientation.ts) ----- */
+.app.rotated { position: fixed; top: 0; left: 0; transform-origin: 0 0; }
+.rotate-btn[hidden] { display: none; }
+/* Dialogs are drawn in the top layer, outside the app element: turn them about their centre. */
+html[data-rotation="90"] dialog[open] { rotate: 90deg; }
+html[data-rotation="180"] dialog[open] { rotate: 180deg; }
+html[data-rotation="270"] dialog[open] { rotate: 270deg; }
+html[data-rotation="90"] .modal, html[data-rotation="270"] .modal { width: min(600px, 94vh); max-height: 90vw; }
+html[data-rotation="90"] .modal.small, html[data-rotation="270"] .modal.small { width: min(400px, 92vh); }
+html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-modal { width: min(880px, 96vh); height: min(640px, 92vw); max-height: 92vw; }
+.dropdown-btn.shape-btn { border-color: transparent; border-radius: 9px; padding: 0 4px 0 8px; }
+.dropdown-btn.shape-btn .dropdown-label { display: none; }
+.dropdown-btn.shape-btn.active { background: var(--accent-soft); color: var(--accent); }
+
+/* ----- Text boxes being typed (see Board.openEditor) ----- */
+.text-editor {
+  position: absolute; z-index: 3; margin: 0; padding: 0; border: 0; outline: 1.5px dashed var(--accent); outline-offset: 3px;
+  background: rgba(255,255,255,0.6); resize: none; overflow: hidden; white-space: pre; touch-action: auto;
+  min-width: 1em;
+}
+
+/* ----- Split mode margin: pane locks and the divider grip ----- */
+.split-pane { border-bottom: 0; }
+.split-grip {
+  position: absolute; left: 4px; right: 4px; display: grid; place-items: center; border-radius: 8px;
+  background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1; pointer-events: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.split-grip.armed { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ----- Selection action bar (see Board.positionSelectBar) ----- */
+.select-bar {
+  position: absolute; z-index: 4; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
+  background: var(--ink); border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.2); touch-action: manipulation;
+}
+.select-bar button { border: 0; background: transparent; color: #fff; font-size: 13px; font-weight: 500; padding: 7px 11px; border-radius: 7px; cursor: pointer; }
+.select-bar button:hover { background: rgba(255,255,255,0.14); }
+.swatch-more {
+  position: relative; width: 28px; height: 28px; margin: 0 1px; border-radius: 50%; flex: none; display: grid; place-items: center; cursor: pointer;
+  border: 1.5px dashed #9ca3af; color: var(--muted);
+}
+.swatch-more svg { width: 16px; height: 16px; }
+.swatch-more:hover { border-color: var(--ink); color: var(--ink); }
+.color-input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; border: 0; padding: 0; }

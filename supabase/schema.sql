@@ -32,7 +32,7 @@ create table if not exists public.strokes (
   id          uuid primary key,                       -- generated on the device so offline saves are idempotent
   note_id     uuid not null references public.notes (id) on delete cascade,
   user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  tool        text not null check (tool in ('pen', 'highlighter')),
+  tool        text not null check (tool in ('pen', 'highlighter', 'text')),
   color       text not null check (char_length(color) <= 32),
   width       real not null check (width > 0 and width <= 100),
   points      jsonb not null check (jsonb_typeof(points) = 'array'),  -- [x, y, pressure, x, y, pressure, ...]
@@ -55,6 +55,13 @@ alter table public.strokes drop constraint if exists strokes_payload_present;
 alter table public.strokes add constraint strokes_payload_present check (
   enc is not null or (tool is not null and color is not null and width is not null and points is not null)
 );
+
+-- Text boxes: a stroke with tool 'text' keeps its text here (or inside the ciphertext when encrypted);
+-- its points are the top-left corner and its width is the font size.
+alter table public.strokes add column if not exists text text check (char_length(text) <= 10000);
+alter table public.strokes drop constraint if exists strokes_tool_check;
+alter table public.strokes drop constraint if exists strokes_tool_valid;
+alter table public.strokes add constraint strokes_tool_valid check (tool in ('pen', 'highlighter', 'text'));
 
 -- Wrapped copies of the user's data key. The key itself never reaches the server: one copy is
 -- encrypted with a key derived from the user's passphrase, the other with their recovery key.

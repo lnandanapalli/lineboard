@@ -1,14 +1,29 @@
-export type Tool = 'pen' | 'highlighter' | 'eraser';
+import { SHAPES, type ShapeKind } from './shapes';
+
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text' | 'select';
+
+/**
+ * How the page takes ink.
+ * strips  one unlocked strip at a time (palm rests anywhere else)
+ * multi   any number of strips unlocked at once
+ * free    whole page takes ink, two fingers scroll and zoom
+ * split   the screen is two panes (top/bottom), each locked or unlocked; the page scrolls under them
+ */
+export type BoardMode = 'strips' | 'multi' | 'split' | 'free';
+export const BOARD_MODES: BoardMode[] = ['strips', 'multi', 'split', 'free'];
 
 /** A single ink stroke. Coordinates are in page units: the page is always 1000 units wide. */
 export interface Stroke {
   id: string;
   note_id: string;
-  tool: 'pen' | 'highlighter';
+  /** 'text': a text box. Its points are [x, y, 0] (top-left), width is the font size. */
+  tool: 'pen' | 'highlighter' | 'text';
   color: string;
   width: number;
   /** Flat list: x0, y0, p0, x1, y1, p1, ... (p = pressure 0..1) */
   points: number[];
+  /** Text boxes only. */
+  text?: string;
   created_at?: string;
 }
 
@@ -38,27 +53,58 @@ export interface Settings {
   /** If an active pen (pointerType "pen") is ever seen, ignore finger touches entirely. */
   penOnlyWhenPenSeen: boolean;
   showLines: boolean;
-  /** Free whiteboard: no strips or locks; the whole page takes ink and two fingers scroll. */
-  freeMode: boolean;
+  mode: BoardMode;
   marginSide: 'left' | 'right';
   penColor: string;
   penWidth: number;
   highlighterColor: string;
   highlighterWidth: number;
+  /** Stroke smoothing, 0 (off) to 1 (strong). Steadies shaky lines as they are drawn. */
+  smoothing: number;
+  /** The shape the shape tool draws. */
+  shape: ShapeKind;
+  /** Font size for new text boxes (page units). */
+  textSize: number;
+  /** Split mode: where the divider sits, as a fraction of the board's height. */
+  splitRatio: number;
+  /** The free whiteboard's paper. */
+  paper: Paper;
 }
+
+export type Paper = 'plain' | 'lines' | 'grid' | 'dots';
+export const PAPERS: Paper[] = ['plain', 'lines', 'grid', 'dots'];
 
 export const DEFAULT_SETTINGS: Settings = {
   stripHeight: 90,
   touchThreshold: 45,
   penOnlyWhenPenSeen: true,
   showLines: true,
-  freeMode: false,
+  mode: 'strips',
   marginSide: 'left',
   penColor: '#111827',
   penWidth: 3.5,
   highlighterColor: '#fde047',
   highlighterWidth: 22,
+  smoothing: 0.25,
+  shape: 'rectangle',
+  textSize: 28,
+  splitRatio: 0.5,
+  paper: 'plain',
 };
+
+/**
+ * Merge stored settings over the defaults. Settings saved before the mode menu had a
+ * `freeMode` flag instead of `mode`; carry it over.
+ */
+export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } | null | undefined): Settings {
+  const { freeMode, ...rest } = stored ?? {};
+  const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
+  if (!rest.mode && freeMode) out.mode = 'free';
+  if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
+  if (!SHAPES.includes(out.shape)) out.shape = 'rectangle';
+  if (!PAPERS.includes(out.paper)) out.paper = 'plain';
+  return out;
+}
 
 export interface AppUser {
   id: string;

@@ -26,7 +26,9 @@ function check(error: PgErr | null) {
 /** Shown when a title or name cannot be decrypted on this device. */
 export const LOCKED_TITLE = 'Encrypted';
 
-type StrokeRow = Omit<Stroke, 'tool' | 'color' | 'width' | 'points'> & Partial<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>> & { enc?: string | null };
+type StrokeRow = Omit<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text'> &
+  Partial<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>> & { enc?: string | null; text?: string | null };
+type StrokePayload = Pick<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text'>;
 type NoteRow = NoteMeta & { title_enc?: string | null };
 type BookRow = Notebook & { name_enc?: string | null };
 
@@ -60,7 +62,24 @@ export class SupabaseStore implements Store {
     return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '');
   }
   private strokeCols() {
-    return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '');
+    return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '') + (this.textCol ? ',text' : '');
+  }
+
+  /** Whether the database has the strokes.text column (text boxes); older schemas don't. */
+  private textCol = false;
+  private textProbe: Promise<boolean> | null = null;
+  supportsText(): Promise<boolean> {
+    this.textProbe ??= (async () => {
+      const { error } = await this.sb.from('strokes').select('text').limit(1);
+      this.textCol = !error;
+      if (error && error.code !== '42703' && !/text/.test(error.message ?? '')) {
+        // Something other than a missing column (offline...): try again next time.
+        this.textProbe = null;
+        this.textCol = true;
+      }
+      return this.textCol;
+    })();
+    return this.textProbe;
   }
 
   /** The key to encrypt new writes with, or null for plaintext. Throws (retryably) while locked. */
@@ -118,12 +137,12 @@ export class SupabaseStore implements Store {
   }
   /** Null when the stroke is encrypted and cannot be read here. */
   private async decodeStroke(r: StrokeRow): Promise<Stroke | null> {
-    if (!r.enc) return { id: r.id, note_id: r.note_id, tool: r.tool!, color: r.color!, width: r.width!, points: r.points!, created_at: r.created_at };
+    if (!r.enc) return { id: r.id, note_id: r.note_id, tool: r.tool!, color: r.color!, width: r.width!, points: r.points!, ...(r.text != null ? { text: r.text } : {}), created_at: r.created_at };
     const key = this.vault?.key;
     if (!key) return null;
     try {
-      const p = await open<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>>(key, ctx.stroke(r.id), r.enc);
-      return { id: r.id, note_id: r.note_id, tool: p.tool, color: p.color, width: p.width, points: p.points, created_at: r.created_at };
+      const p = await open<StrokePayload>(key, ctx.stroke(r.id), r.enc);
+      return { id: r.id, note_id: r.note_id, tool: p.tool, color: p.color, width: p.width, points: p.points, ...(p.text != null ? { text: p.text } : {}), created_at: r.created_at };
     } catch (e) {
       console.warn(e);
       return null;
@@ -138,9 +157,11 @@ export class SupabaseStore implements Store {
   }
   private async encodeStroke(key: CryptoKey | null, s: Stroke) {
     const base = { id: s.id, note_id: s.note_id, user_id: this.userId, created_at: s.created_at };
-    if (!key) return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}) };
-    const enc = await seal(key, ctx.stroke(s.id), { tool: s.tool, color: s.color, width: s.width, points: s.points });
-    return { ...base, tool: null, color: null, width: null, points: null, enc };
+    const text = s.tool === 'text' ? (s.text ?? '') : null;
+    if (!key) return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}), ...(this.textCol ? { text } : {}) };
+    const payload: StrokePayload = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(text != null ? { text } : {}) };
+    const enc = await seal(key, ctx.stroke(s.id), payload);
+    return { ...base, tool: null, color: null, width: null, points: null, enc, ...(this.textCol ? { text: null } : {}) };
   }
 
   // ----------------------------- notebooks -----------------------------
@@ -276,6 +297,7 @@ export class SupabaseStore implements Store {
   // ----------------------------- strokes -----------------------------
 
   async loadStrokes(noteId: string): Promise<Stroke[]> {
+    await this.supportsText();
     const rows: StrokeRow[] = [];
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await this.sb
@@ -297,6 +319,7 @@ export class SupabaseStore implements Store {
   }
 
   async upsertStrokes(strokes: Stroke[]) {
+    await this.supportsText();
     for (let i = 0; i < strokes.length; i += CHUNK) {
       const chunk = strokes.slice(i, i + CHUNK);
       await this.write(async (key) => {
@@ -414,6 +437,7 @@ export class SupabaseStore implements Store {
 
   /** Convert one note's strokes (or every remaining one, with noteId null). Returns how many changed. */
   private async convertStrokes(target: CryptoKey | null, encrypting: boolean, noteId: string | null) {
+    await this.supportsText();
     let changed = 0;
     let skip = 0; // rows that cannot be decrypted stay as they are
     for (;;) {

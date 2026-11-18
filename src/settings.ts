@@ -5,8 +5,10 @@ import { SupabaseStore } from './store/supabaseStore';
 import type { AccountSecurity } from './account';
 import { confirmItsYou, SecurityPane } from './securityUi';
 import type { Store } from './store/store';
-import type { AppUser, Settings } from './types';
+import type { AppUser, Paper, Settings } from './types';
 import { dialog, h, toast } from './util';
+import { isApple, shortcut } from './keys';
+import { orientation } from './orientation';
 
 type Section = 'account' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
@@ -25,7 +27,6 @@ export interface SettingsHost {
   settings: () => Settings;
   /** A setting changed: save it and apply it to the board. */
   changed: () => void;
-  setFree: (on: boolean) => void;
   pendingSaves: () => number;
   noteCount: () => number;
   signOut?: () => Promise<void>;
@@ -139,6 +140,24 @@ export class SettingsPanel {
     return h('label', { class: 'set-row' }, h('span', { class: 'set-label' }, label), control, help ? h('small', {}, help) : null);
   }
 
+  /** A labelled on/off switch row (the settings-screen standard, instead of a bare checkbox). */
+  private toggle(label: string, help: string, get: () => boolean, set: (on: boolean) => void): HTMLElement {
+    const sw = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-label': label }) as HTMLButtonElement;
+    sw.append(h('i', { class: 'knob' }));
+    const paint = () => {
+      const on = get();
+      sw.classList.toggle('on', on);
+      sw.setAttribute('aria-checked', String(on));
+    };
+    sw.addEventListener('click', () => {
+      set(!get());
+      paint();
+      this.host.changed();
+    });
+    this.addSync(paint);
+    return h('div', { class: 'set-switch' }, h('div', {}, h('div', { class: 'set-label' }, label), h('small', { class: 'muted' }, help)), sw);
+  }
+
   private card(title: string | null, ...children: (Node | null)[]) {
     return h('div', { class: 'set-card' }, title ? h('h4', {}, title) : null, ...children);
   }
@@ -203,13 +222,31 @@ export class SettingsPanel {
       updStrip();
       this.host.changed();
     });
-    const free = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    free.addEventListener('change', () => this.host.setFree(free.checked));
-    const lines = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    lines.addEventListener('change', () => {
-      s().showLines = lines.checked;
+    const paper = h(
+      'select',
+      { 'aria-label': 'Free whiteboard paper' },
+      ...(
+        [
+          ['plain', 'Plain'],
+          ['lines', 'Lined'],
+          ['grid', 'Grid'],
+          ['dots', 'Dots'],
+        ] as const
+      ).map(([v, l]) => h('option', { value: v }, l)),
+    ) as HTMLSelectElement;
+    paper.addEventListener('change', () => {
+      s().paper = paper.value as Paper;
       this.host.changed();
     });
+    const smooth = h('input', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Smoothing' }) as HTMLInputElement;
+    const smoothVal = h('output');
+    const smoothText = (v: number) => (v === 0 ? 'Off' : v < 0.2 ? 'Light' : v < 0.5 ? 'Medium' : v < 0.8 ? 'Strong' : 'Very strong');
+    smooth.addEventListener('input', () => {
+      s().smoothing = Number(smooth.value);
+      smoothVal.textContent = smoothText(s().smoothing);
+      this.host.changed();
+    });
+    const lines = this.toggle('Ruled lines', 'Show a line between strips.', () => s().showLines, (on) => (s().showLines = on));
     const side = h('select', {}, h('option', { value: 'left' }, 'Left (right-handed)'), h('option', { value: 'right' }, 'Right (left-handed)')) as HTMLSelectElement;
     side.addEventListener('change', () => {
       s().marginSide = side.value as 'left' | 'right';
@@ -219,19 +256,34 @@ export class SettingsPanel {
     this.addSync(() => {
       strip.value = String(s().stripHeight);
       updStrip();
-      lines.checked = s().showLines;
-      free.checked = s().freeMode;
       side.value = s().marginSide;
+      paper.value = s().paper;
+      smooth.value = String(s().smoothing);
+      smoothVal.textContent = smoothText(s().smoothing);
     });
 
     return [
-      this.card('Mode', h('label', { class: 'set-check' }, free, h('span', {}, 'Free whiteboard: no strips or locks, write anywhere (two fingers scroll and zoom)'))),
       this.card(
         'Strips',
         this.row('Strip height', h('div', { class: 'range' }, strip, stripVal), 'Taller strips leave more room for big handwriting.'),
         this.row('Lock icons on the', side),
-        h('label', { class: 'set-check' }, lines, h('span', {}, 'Show ruled lines between strips')),
+        lines,
       ),
+      this.card('Free whiteboard', this.row('Paper', paper, 'The background of the free whiteboard (Mode menu → Free whiteboard).')),
+      this.card(
+        'Ink',
+        this.row('Smoothing', h('div', { class: 'range' }, smooth, smoothVal), 'Steadies shaky lines as you write. Turn it down if strokes feel like they lag behind the pen.'),
+      ),
+      this.card(
+        'Display',
+        this.toggle(
+          'Manual orientation',
+          'Keep the layout fixed to this device even when it rotates, and turn it yourself with the rotate button in the toolbar. Saved on this device only.',
+          () => orientation.manual,
+          (on) => orientation.setManual(on),
+        ),
+      ),
+      this.card(null, h('p', { class: 'muted' }, 'Choose Strips, Multi-strip or Free whiteboard from the Mode menu in the toolbar.')),
     ];
   }
 
@@ -279,17 +331,17 @@ export class SettingsPanel {
       calOut.textContent = 'No samples yet.';
     });
 
-    const penOnly = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    penOnly.addEventListener('change', () => {
-      s().penOnlyWhenPenSeen = penOnly.checked;
-      this.host.changed();
-    });
+    const penOnly = this.toggle(
+      'Ignore fingers when a pen is used',
+      'If an active pen is detected, finger touches never draw.',
+      () => s().penOnlyWhenPenSeen,
+      (on) => (s().penOnlyWhenPenSeen = on),
+    );
     this.contactReadout = h('p', { class: 'readout' }, 'Last contact on page: none yet');
 
     this.addSync(() => {
       thr.value = String(s().touchThreshold);
       thrVal.textContent = s().touchThreshold + ' px';
-      penOnly.checked = s().penOnlyWhenPenSeen;
     });
 
     return [
@@ -299,7 +351,7 @@ export class SettingsPanel {
         h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
         this.contactReadout,
       ),
-      this.card('Active pens', h('label', { class: 'set-check' }, penOnly, h('span', {}, 'If an active pen is detected, ignore finger touches completely'))),
+      this.card('Active pens', penOnly),
     ];
   }
 
@@ -420,13 +472,26 @@ export class SettingsPanel {
         h(
           'dl',
           { class: 'shortcuts' },
-          ...[
-            ['P / H / E', 'Pen, highlighter, eraser'],
-            ['Ctrl+Z / Ctrl+Shift+Z', 'Undo, redo'],
-            ['Up / Down', 'Previous / next strip'],
-            ['M', 'Multi-strip'],
-            ['F', 'Free whiteboard'],
-          ].flatMap(([k, v]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, v)]),
+          ...(
+            [
+              [['P'], 'Pen'],
+              [['H'], 'Highlighter'],
+              [['E'], 'Eraser'],
+              [['S'], 'Shapes (hold Shift for square, circle, 45°)'],
+              [['T'], 'Text (tap to type; Escape finishes)'],
+              [['V'], 'Select: draw a loop, drag to move'],
+              [['Delete'], 'Delete the selection'],
+              [['Mod+Z'], 'Undo'],
+              [isApple ? ['Mod+Shift+Z'] : ['Mod+Y', 'Mod+Shift+Z'], 'Redo'],
+              [['Up', 'Down'], 'Previous / next strip'],
+              [['PageUp', 'PageDown'], 'Scroll the page'],
+              [['M'], 'Strips ↔ Multi-strip'],
+              [['F'], 'Free whiteboard on / off'],
+            ] as [string[], string][]
+          ).flatMap(([combos, what]) => [
+            h('dt', {}, ...combos.flatMap((c, i) => [i ? ' ' : null, h('kbd', {}, shortcut(c))])),
+            h('dd', {}, what),
+          ]),
         ),
       ),
     ];

@@ -1,19 +1,27 @@
-import { Board, PAGE_W } from './board';
+import { Board, PAGE_W, TEXT_FONT } from './board';
 import { SettingsPanel } from './settings';
 import type { AccountSecurity } from './account';
 import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import { DEFAULT_SETTINGS, type AppUser, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
+import type { ShapeKind } from './shapes';
+import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
+import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
+import { isApple, withShortcut } from './keys';
+import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast } from './util';
 
 const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
 const HL_COLORS = ['#fde047', '#86efac', '#f9a8d4', '#93c5fd'];
-const PEN_WIDTHS = [2, 3.5, 6];
-const HL_WIDTHS = [14, 22, 32];
+/** Size ranges (page units; the page is 1000 wide) and quick presets for each tool. */
+const SIZES = {
+  pen: { min: 1, max: 24, step: 0.5, presets: [2, 3.5, 6] },
+  highlighter: { min: 6, max: 60, step: 1, presets: [14, 22, 32] },
+  text: { min: 10, max: 100, step: 1, presets: [20, 28, 44] },
+};
 
-type Action = { type: 'add' | 'remove'; strokes: Stroke[] };
+type Action = { type: 'add' | 'remove'; strokes: Stroke[] } | { type: 'replace'; from: Stroke[]; to: Stroke[] };
 
 export interface AppOptions {
   /** Signed in: sign out of the account. */
@@ -47,13 +55,17 @@ export class App {
   private titleInput!: HTMLInputElement;
   private toolBtns = new Map<Tool, HTMLButtonElement>();
   private swatches!: HTMLElement;
-  private widths!: HTMLElement;
+  private sizeBtn!: HTMLButtonElement;
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
-  private multiBtn!: HTMLButtonElement;
-  private freeBtn!: HTMLButtonElement;
+  private modeMenu!: Dropdown<BoardMode>;
+  private shapeMenu!: Dropdown<ShapeKind>;
+  /** The last strip mode, so F (free on/off) returns to it. */
+  private lastStripMode: BoardMode = 'strips';
   private stripControls!: HTMLElement;
   private status!: HTMLElement;
+  private rotateBtn!: HTMLButtonElement;
+  private appEl!: HTMLElement;
   private settingsPanel!: SettingsPanel;
   private hint!: HTMLElement;
 
@@ -68,7 +80,7 @@ export class App {
     private opts: AppOptions = {},
   ) {
     this.root = root;
-    this.settings = { ...DEFAULT_SETTINGS, ...lsGet<Partial<Settings>>(this.lsKey('settings'), {}) };
+    this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
     this.queue.onState = (s) => this.renderStatus(s);
     this.build();
@@ -76,10 +88,22 @@ export class App {
     window.addEventListener(
       'beforeunload',
       (e) => {
+        this.board.finishText();
         if (this.queue.pending) {
           e.preventDefault();
           e.returnValue = '';
         }
+      },
+      { signal: this.abort.signal },
+    );
+    // Settings are saved to the store shortly after the last change; don't lose that when the tab closes.
+    // Before the tab goes away: save settings now, and finish a text box still being typed (its text
+    // goes into the persistent save queue, so it is not lost on reload).
+    window.addEventListener(
+      'pagehide',
+      () => {
+        this.board.finishText();
+        this.saveSettingsDebounced.flush();
       },
       { signal: this.abort.signal },
     );
@@ -101,6 +125,7 @@ export class App {
   destroy() {
     this.abort.abort();
     this.queue.stop();
+    detachOrientation(this.appEl);
     this.settingsPanel.destroy();
   }
 
@@ -112,11 +137,11 @@ export class App {
     try {
       const remote = await this.store.loadSettings();
       if (remote) {
-        this.settings = { ...DEFAULT_SETTINGS, ...remote };
+        this.settings = withDefaults(remote);
         lsSet(this.lsKey('settings'), this.settings);
         this.board.updateSettings(this.settings);
         this.renderToolOptions();
-        this.renderFree();
+        this.renderMode();
       }
     } catch (e) {
       console.warn('Could not load settings', e);
@@ -168,44 +193,59 @@ export class App {
     });
 
     const tools = h('div', { class: 'group' });
-    for (const [t, icon, label] of [
-      ['pen', icons.pen, 'Pen'],
-      ['highlighter', icons.highlighter, 'Highlighter'],
-      ['eraser', icons.eraser, 'Eraser'],
+    for (const [t, icon, label, key] of [
+      ['pen', icons.pen, 'Pen', 'P'],
+      ['highlighter', icons.highlighter, 'Highlighter', 'H'],
+      ['eraser', icons.eraser, 'Eraser', 'E'],
+      ['text', icons.text, 'Text', 'T'],
+      ['select', icons.lasso, 'Select', 'V'],
     ] as const) {
       const b = this.iconBtn(icon, label, () => this.setTool(t), 'tool');
+      b.title = withShortcut(label, key);
       this.toolBtns.set(t, b);
       tools.append(b);
     }
+    this.shapeMenu = dropdown<ShapeKind>({
+      name: 'Shape',
+      className: 'shape-btn',
+      value: this.settings.shape,
+      reselect: true,
+      onSelect: (k) => {
+        this.settings.shape = k;
+        this.settingsChanged();
+        this.setTool('shape');
+      },
+      options: [
+        { value: 'line', label: 'Line', icon: icons.shapeLine, description: 'Hold Shift to snap to 45°.' },
+        { value: 'arrow', label: 'Arrow', icon: icons.shapeArrow, description: 'Hold Shift to snap to 45°.' },
+        { value: 'rectangle', label: 'Rectangle', icon: icons.shapeRectangle, description: 'Hold Shift for a square.' },
+        { value: 'ellipse', label: 'Ellipse', icon: icons.shapeEllipse, description: 'Hold Shift for a circle.' },
+        { value: 'triangle', label: 'Triangle', icon: icons.shapeTriangle },
+      ],
+    });
+    tools.append(this.shapeMenu.el);
     this.swatches = h('div', { class: 'group swatches' });
-    this.widths = h('div', { class: 'group widths' });
+    this.sizeBtn = h('button', { class: 'size-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+    this.sizeBtn.addEventListener('click', () => this.openSizePicker());
 
-    this.undoBtn = this.iconBtn(icons.undo, 'Undo (Ctrl+Z)', () => this.undo());
-    this.redoBtn = this.iconBtn(icons.redo, 'Redo (Ctrl+Shift+Z)', () => this.redo());
+    this.undoBtn = this.iconBtn(icons.undo, withShortcut('Undo', 'Mod+Z'), () => this.undo());
+    this.redoBtn = this.iconBtn(icons.redo, withShortcut('Redo', isApple ? 'Mod+Shift+Z' : 'Mod+Y'), () => this.redo());
 
-    this.multiBtn = h('button', {
-      class: 'toggle',
-      type: 'button',
-      role: 'switch',
-      'aria-checked': 'false',
-      'aria-label': 'Multi-strip',
-      title: 'Multi-strip: unlock several strips at once (M)',
-    }) as HTMLButtonElement;
-    this.multiBtn.innerHTML = `${icons.multi}<span>Multi-strip</span><i class="knob"></i>`;
-    this.multiBtn.addEventListener('click', () => this.setMulti(!this.board.isMulti()));
-
-    this.freeBtn = h('button', {
-      class: 'toggle free-toggle',
-      type: 'button',
-      role: 'switch',
-      'aria-checked': 'false',
-      'aria-label': 'Free whiteboard',
-      title: 'Free whiteboard: no strips or locks (F). Two fingers scroll and zoom.',
-    }) as HTMLButtonElement;
-    this.freeBtn.innerHTML = `${icons.free}<span>Free</span><i class="knob"></i>`;
-    this.freeBtn.addEventListener('click', () => this.setFree(!this.settings.freeMode));
+    this.modeMenu = dropdown<BoardMode>({
+      name: 'Mode',
+      className: 'mode-btn',
+      value: this.settings.mode,
+      onSelect: (m) => this.setMode(m),
+      options: [
+        { value: 'strips', label: 'Strips', icon: icons.strip, hint: 'M', description: 'Unlock one strip to write; rest your palm anywhere else.' },
+        { value: 'multi', label: 'Multi-strip', icon: icons.multi, hint: 'M', description: 'Unlock several strips at once for bigger drawings.' },
+        { value: 'split', label: 'Split', icon: icons.split, description: 'Two panes, each locked or unlocked; the page scrolls under them. Tap the divider grip, then drag, to resize.' },
+        { value: 'free', label: 'Free whiteboard', icon: icons.free, hint: 'F', description: 'The whole page takes ink. Two fingers scroll and zoom.' },
+      ],
+    });
 
     this.status = h('div', { class: 'status', title: '' });
+    this.rotateBtn = this.iconBtn(icons.rotate, 'Rotate right', () => orientation.rotateRight(), 'rotate-btn');
 
     const toolbar = h(
       'header',
@@ -215,22 +255,22 @@ export class App {
       h('div', { class: 'sep' }),
       tools,
       this.swatches,
-      this.widths,
+      this.sizeBtn,
       h('div', { class: 'sep' }),
       h('div', { class: 'group' }, this.undoBtn, this.redoBtn),
       h('div', { class: 'sep' }),
-      this.freeBtn,
+      this.modeMenu.el,
       (this.stripControls = h(
         'div',
         { class: 'group strip-controls' },
-        this.multiBtn,
-        this.iconBtn(icons.up, 'Previous strip (Up arrow)', () => this.board.stepLine(-1)),
-        this.iconBtn(icons.down, 'Next strip (Down arrow)', () => this.board.stepLine(1)),
+        this.iconBtn(icons.up, withShortcut('Previous strip', 'Up'), () => this.board.stepLine(-1), 'step-btn'),
+        this.iconBtn(icons.down, withShortcut('Next strip', 'Down'), () => this.board.stepLine(1), 'step-btn'),
         this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
       )),
       h('div', { class: 'spacer' }),
       this.opts.signIn ? this.signInButton('toolbar') : null,
       this.status,
+      this.rotateBtn,
       this.iconBtn(icons.download, 'Export as PNG', () => void this.exportPNG()),
       this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
     );
@@ -279,24 +319,36 @@ export class App {
     const main = h('div', { class: 'main' }, this.sidebar, scrim, boardHost);
     if (!lsGet('lb-hint-dismissed', false)) boardHost.append(this.hint);
 
-    this.root.replaceChildren(h('div', { class: 'app' }, toolbar, main));
+    this.appEl = h('div', { class: 'app' }, toolbar, main);
+    this.root.replaceChildren(this.appEl);
+    attachOrientation(this.appEl);
+    const showRotate = () => (this.rotateBtn.hidden = !orientation.manual);
+    showRotate();
+    const off = orientation.onChange(showRotate);
+    this.abort.signal.addEventListener('abort', () => off());
 
     this.board = new Board(boardHost, this.settings, {
       onStrokesAdded: (s) => this.record({ type: 'add', strokes: s }),
       onStrokesRemoved: (s) => this.record({ type: 'remove', strokes: s }),
+      onStrokesReplaced: (from, to) => this.record({ type: 'replace', from, to }),
       onContact: (size, type, accepted) => this.settingsPanel?.showContact(size, type, accepted),
       onUnlockChange: () => {},
+      onSplitRatio: (r) => {
+        this.settings.splitRatio = r;
+        this.settingsChanged();
+      },
     });
 
     this.buildSettings();
     this.renderToolOptions();
-    this.renderFree();
+    this.renderMode();
     this.renderUndo();
     this.bindKeys();
   }
 
   private bindKeys() {
     window.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented) return; // already handled (an open menu, a text box...)
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const mod = e.ctrlKey || e.metaKey;
@@ -320,8 +372,16 @@ export class App {
         if (e.key === 'p') this.setTool('pen');
         if (e.key === 'h') this.setTool('highlighter');
         if (e.key === 'e') this.setTool('eraser');
-        if (e.key === 'm' && !this.settings.freeMode) this.setMulti(!this.board.isMulti());
-        if (e.key === 'f') this.setFree(!this.settings.freeMode);
+        if (e.key === 's') this.setTool('shape');
+        if (e.key === 't') this.setTool('text');
+        if (e.key === 'v') this.setTool('select');
+        if ((e.key === 'Delete' || e.key === 'Backspace') && this.board.hasSelection()) {
+          e.preventDefault();
+          this.board.deleteSelection();
+        }
+        if (e.key === 'Escape') this.board.clearSelection();
+        if (e.key === 'm' && this.settings.mode !== 'free') this.setMode(this.settings.mode === 'multi' ? 'strips' : 'multi');
+        if (e.key === 'f') this.setMode(this.settings.mode === 'free' ? this.lastStripMode : 'free');
       }
     }, { signal: this.abort.signal });
   }
@@ -344,73 +404,177 @@ export class App {
   // ----------------------------- tools -----------------------------
 
   private setTool(t: Tool) {
+    if (t === 'text' && this.store.supportsText) {
+      // Older cloud databases can't store text boxes yet; ask once, then switch.
+      void this.store.supportsText().then((ok) => {
+        if (ok) this.useTool('text');
+        else toast('Text boxes need a database update: the site operator re-runs supabase/schema.sql.', 'error');
+      });
+      return;
+    }
+    this.useTool(t);
+  }
+
+  private useTool(t: Tool) {
     this.tool = t;
     this.board.setTool(t);
     this.renderToolOptions();
   }
 
-  /** Free whiteboard on/off. Strokes are unaffected; only how input is taken changes. */
-  private setFree(on: boolean) {
-    this.settings.freeMode = on;
+  /** Switch how the page takes ink. Strokes are unaffected; only how input is taken changes. */
+  private setMode(m: BoardMode) {
+    const was = this.settings.mode;
+    if (m === was) return;
+    if (was !== 'free') this.lastStripMode = was;
+    this.settings.mode = m;
     this.settingsChanged();
-    this.renderFree();
-    toast(on ? 'Free whiteboard: write anywhere. Two fingers scroll and pinch to zoom.' : 'Strips are back: tap a lock in the margin to write.');
+    this.renderMode();
+    toast(
+      {
+        strips: was === 'multi' ? 'Strips: all locked. Tap a lock in the margin to write.' : 'Strips: tap a lock in the margin to write.',
+        multi: 'Multi-strip: tap several locks to unlock them together.',
+        split: 'Split: tap a pane’s lock to lock or unlock it. Tap the divider grip in the margin, then drag, to move it.',
+        free: 'Free whiteboard: write anywhere. Two fingers scroll and pinch to zoom.',
+      }[m],
+    );
   }
 
-  private renderFree() {
-    const on = this.settings.freeMode;
-    this.freeBtn.classList.toggle('on', on);
-    this.freeBtn.setAttribute('aria-checked', String(on));
-    this.stripControls.hidden = on;
-  }
-
-  private setMulti(on: boolean) {
-    this.board.setMulti(on);
-    this.multiBtn.classList.toggle('on', on);
-    this.multiBtn.setAttribute('aria-checked', String(on));
-    if (!on) toast('All strips locked. Tap a lock in the margin to write.');
+  private renderMode() {
+    this.modeMenu.set(this.settings.mode);
+    this.stripControls.hidden = this.settings.mode === 'free';
+    // Previous / next strip mean nothing when the screen is split into two fixed panes.
+    for (const b of this.stripControls.querySelectorAll<HTMLElement>('.step-btn')) b.hidden = this.settings.mode === 'split';
+    if (this.settings.mode !== 'free') this.lastStripMode = this.settings.mode;
   }
 
   private renderToolOptions() {
     for (const [t, b] of this.toolBtns) b.classList.toggle('active', t === this.tool);
+    this.shapeMenu.el.classList.toggle('active', this.tool === 'shape');
+    this.shapeMenu.set(this.settings.shape);
     const isHL = this.tool === 'highlighter';
     const colors = isHL ? HL_COLORS : PEN_COLORS;
     const cur = isHL ? this.settings.highlighterColor : this.settings.penColor;
-    this.swatches.replaceChildren(
-      ...colors.map((c) => {
-        const b = h('button', { class: 'swatch' + (c === cur ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, title: c });
-        b.style.setProperty('--c', c);
-        b.addEventListener('click', () => {
-          if (isHL) this.settings.highlighterColor = c;
-          else this.settings.penColor = c;
-          if (this.tool === 'eraser') this.setTool('pen');
-          this.settingsChanged();
-          this.renderToolOptions();
-        });
-        return b;
-      }),
-    );
-    const ws = isHL ? HL_WIDTHS : PEN_WIDTHS;
-    const curW = isHL ? this.settings.highlighterWidth : this.settings.penWidth;
-    this.widths.replaceChildren(
-      ...ws.map((w, i) => {
-        const b = h('button', { class: 'width-btn' + (w === curW ? ' active' : ''), type: 'button', 'aria-label': ['Thin', 'Medium', 'Thick'][i], title: ['Thin', 'Medium', 'Thick'][i] });
-        const dot = h('i');
-        const px = 4 + i * 4;
-        dot.style.width = dot.style.height = px + 'px';
-        b.append(dot);
-        b.addEventListener('click', () => {
-          if (isHL) this.settings.highlighterWidth = w;
-          else this.settings.penWidth = w;
-          this.settingsChanged();
-          this.renderToolOptions();
-        });
-        return b;
-      }),
-    );
-    const hide = this.tool === 'eraser';
+    const pick = (c: string) => {
+      if (isHL) this.settings.highlighterColor = c;
+      else this.settings.penColor = c;
+      if (this.tool === 'eraser' || this.tool === 'select') this.setTool('pen');
+      this.settingsChanged();
+      this.renderToolOptions();
+    };
+    const swatch = (c: string) => {
+      const b = h('button', { class: 'swatch' + (c.toLowerCase() === cur.toLowerCase() ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, title: c });
+      b.style.setProperty('--c', c);
+      b.addEventListener('click', () => pick(c));
+      return b;
+    };
+    // A colour chosen with the picker shows as its own swatch after the palette.
+    const custom = colors.some((c) => c.toLowerCase() === cur.toLowerCase()) ? null : swatch(cur);
+    const picker = h('input', { type: 'color', class: 'color-input', 'aria-label': 'Custom colour', tabindex: '-1' }) as HTMLInputElement;
+    picker.value = /^#[0-9a-f]{6}$/i.test(cur) ? cur : '#000000';
+    picker.addEventListener('input', () => pick(picker.value));
+    const more = h('label', { class: 'swatch-more', title: 'Custom colour' }, picker);
+    more.insertAdjacentHTML('beforeend', icons.plus);
+    this.swatches.replaceChildren(...colors.map(swatch), ...(custom ? [custom] : []), more);
+    this.renderSizeButton();
+    const hide = this.tool === 'eraser' || this.tool === 'select';
     this.swatches.style.display = hide ? 'none' : '';
-    this.widths.style.display = hide ? 'none' : '';
+    this.sizeBtn.style.display = hide ? 'none' : '';
+  }
+
+  /** The size of the pen or highlighter (whichever is in use). */
+  private get sizeTool(): 'pen' | 'highlighter' | 'text' {
+    return this.tool === 'highlighter' || this.tool === 'text' ? this.tool : 'pen';
+  }
+  private get size() {
+    return { pen: this.settings.penWidth, highlighter: this.settings.highlighterWidth, text: this.settings.textSize }[this.sizeTool];
+  }
+  private set size(w: number) {
+    if (this.sizeTool === 'highlighter') this.settings.highlighterWidth = w;
+    else if (this.sizeTool === 'text') this.settings.textSize = w;
+    else this.settings.penWidth = w;
+  }
+  private get sizeName() {
+    return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text' }[this.sizeTool];
+  }
+
+  /** Toolbar button: a dot drawn at the current size (capped so it fits). */
+  private renderSizeButton() {
+    const { min, max } = SIZES[this.sizeTool];
+    const w = this.size;
+    const px = 4 + ((w - min) / (max - min)) * 16;
+    this.sizeBtn.innerHTML = '';
+    const dot = h('i', { class: 'size-dot' });
+    dot.style.width = dot.style.height = `${px}px`;
+    if (this.sizeTool === 'highlighter') dot.style.background = this.settings.highlighterColor;
+    else dot.style.background = this.settings.penColor;
+    this.sizeBtn.append(dot);
+    const label = `${this.sizeName} size: ${w}`;
+    this.sizeBtn.setAttribute('aria-label', label);
+    this.sizeBtn.title = label;
+  }
+
+  private openSizePicker() {
+    if (this.sizeBtn.getAttribute('aria-expanded') === 'true') {
+      closeOpenMenu();
+      return;
+    }
+    const tool = this.sizeTool;
+    const cfg = SIZES[tool];
+    const isHL = tool === 'highlighter';
+    const color = isHL ? this.settings.highlighterColor : this.settings.penColor;
+    const slider = h('input', { type: 'range', min: String(cfg.min), max: String(cfg.max), step: String(cfg.step), 'aria-label': `${this.sizeName} size` }) as HTMLInputElement;
+    slider.value = String(this.size);
+    const value = h('output', { class: 'size-value' });
+    const preview = h('canvas', { class: 'size-preview', width: '440', height: '90', 'aria-hidden': 'true' }) as HTMLCanvasElement;
+    const draw = () => {
+      const ctx = preview.getContext('2d')!;
+      const w = Number(slider.value);
+      value.textContent = String(w);
+      ctx.clearRect(0, 0, preview.width, preview.height);
+      // Same scale as the board, so the preview matches what you will get on this screen.
+      const k = (document.querySelector('.canvas-area')?.clientWidth ?? PAGE_W) / PAGE_W;
+      ctx.save();
+      ctx.scale(2, 2); // canvas is drawn at 2x for sharpness
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = color;
+      if (tool === 'text') {
+        ctx.fillStyle = color;
+        ctx.font = `${Math.min(40, w * k)}px ${TEXT_FONT}`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Aa', 18, 23);
+        ctx.restore();
+        return;
+      }
+      ctx.lineWidth = Math.max(0.5, w * k);
+      if (isHL) ctx.globalAlpha = 0.38;
+      ctx.beginPath();
+      ctx.moveTo(18, 30);
+      ctx.bezierCurveTo(70, 5, 110, 45, 160, 22);
+      ctx.bezierCurveTo(185, 12, 200, 20, 205, 24);
+      ctx.stroke();
+      ctx.restore();
+    };
+    const set = (w: number) => {
+      slider.value = String(w);
+      this.size = w;
+      this.settingsChanged();
+      this.renderSizeButton();
+      for (const b of presets.children) b.classList.toggle('active', Number((b as HTMLElement).dataset.w) === w);
+      draw();
+    };
+    slider.addEventListener('input', () => set(Number(slider.value)));
+    const presets = h(
+      'div',
+      { class: 'size-presets' },
+      ...cfg.presets.map((w, i) => {
+        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, ['Thin', 'Medium', 'Thick'][i]);
+        b.addEventListener('click', () => set(w));
+        return b;
+      }),
+    );
+    draw();
+    popover(this.sizeBtn, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${this.sizeName} size` });
   }
 
   private settingsChanged() {
@@ -431,7 +595,14 @@ export class App {
 
   /** Persist an action. `toBoard` also updates the canvas (for undo/redo; live input already did). */
   private apply(a: Action, toBoard: boolean) {
-    if (a.type === 'add') {
+    if (a.type === 'replace') {
+      if (toBoard) {
+        this.board.removeStrokes(a.from.map((s) => s.id));
+        this.board.addStrokes(a.to);
+      }
+      this.queue.remove(a.from.map((s) => s.id));
+      this.queue.upsert(a.to);
+    } else if (a.type === 'add') {
       if (toBoard) this.board.addStrokes(a.strokes);
       this.queue.upsert(a.strokes);
     } else {
@@ -442,6 +613,7 @@ export class App {
   }
 
   private invert(a: Action): Action {
+    if (a.type === 'replace') return { type: 'replace', from: a.to, to: a.from };
     return { type: a.type === 'add' ? 'remove' : 'add', strokes: a.strokes };
   }
 
@@ -739,7 +911,6 @@ export class App {
       store: this.store,
       settings: () => this.settings,
       changed: () => this.settingsChanged(),
-      setFree: (on) => this.setFree(on),
       pendingSaves: () => this.queue.pending,
       noteCount: () => this.notes.length,
       signOut: this.opts.signOut,

@@ -40,8 +40,10 @@ export function toast(msg: string, kind: 'info' | 'error' = 'info') {
   let el = document.getElementById('toast');
   if (!el) {
     el = h('div', { id: 'toast', role: 'status' });
-    document.body.append(el);
   }
+  // Inside the app element when there is one, so it turns with a manually rotated app.
+  const host = document.querySelector('.app') ?? document.body;
+  if (el.parentElement !== host) host.append(el);
   el.textContent = msg;
   el.className = 'show ' + kind;
   clearTimeout(toastTimer);
