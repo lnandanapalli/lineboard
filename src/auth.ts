@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { h } from './util';
 import { publicFooter } from './public';
 import { logo } from './brand';
-import { passkeysSupported } from './account';
+import { passkeyError, passkeysSupported } from './account';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
 
@@ -79,11 +79,10 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     setMsg('Follow your browser’s prompt...');
     try {
       const { error } = await sb.auth.signInWithPasskey();
-      if (error) throw error;
+      if (error) throw passkeyError(error, 'sign-in');
       setMsg('');
     } catch (err) {
-      const m = (err as Error).message || '';
-      setMsg(/not allowed|abort|cancel|timed out/i.test(m) ? 'Passkey sign-in was cancelled.' : m || 'Passkey sign-in failed', 'err');
+      setMsg((err as Error).message || 'Passkey sign-in failed', 'err');
     } finally {
       passkeyBtn.disabled = false;
     }

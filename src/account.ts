@@ -210,13 +210,26 @@ export class AccountSecurity {
   async passkeys(): Promise<Passkey[]> {
     const { data, error } = await this.sb.auth.passkey.list();
     if (error) fail(error, 'Passkeys are not available on this server');
-    return data ?? [];
+    // The documented shape is an array; accept a wrapped list too, so a server change can't hide passkeys.
+    const raw = data as unknown;
+    if (Array.isArray(raw)) return raw as Passkey[];
+    const wrapped = raw as { passkeys?: unknown; data?: unknown } | null;
+    if (Array.isArray(wrapped?.passkeys)) return wrapped.passkeys as Passkey[];
+    if (Array.isArray(wrapped?.data)) return wrapped.data as Passkey[];
+    return [];
   }
 
+  /**
+   * Register a passkey for this account. Throws AccountError with code "cancelled" when the person
+   * dismissed the browser prompt; any other failure (including the server refusing it) is reported.
+   */
   async addPasskey(name: string) {
     const { data, error } = await this.sb.auth.registerPasskey();
-    if (error) fail(error, 'Could not add the passkey');
-    if (name && data?.id) await this.sb.auth.passkey.update({ passkeyId: data.id, friendlyName: name.slice(0, 120) });
+    if (error) throw passkeyError(error, 'add');
+    if (name && data?.id) {
+      const { error: re } = await this.sb.auth.passkey.update({ passkeyId: data.id, friendlyName: name.slice(0, 120) });
+      if (re) console.warn('Passkey added but not renamed', re);
+    }
   }
 
   async renamePasskey(id: string, name: string) {
@@ -262,4 +275,39 @@ export function describeDevice(ua: string | null): string {
                 ? 'Linux'
                 : '';
   return os ? `${browser} on ${os}` : browser;
+}
+
+/**
+ * Turn a passkey failure into something a person can act on. Only a dismissed or timed-out browser
+ * prompt counts as "cancelled"; a refusal from the server is always shown.
+ */
+export function passkeyError(error: unknown, action: 'add' | 'sign-in'): AccountError {
+  const e = error as { name?: string; code?: string; message?: string; cause?: { name?: string; message?: string }; status?: number };
+  const browserName = e.cause?.name ?? e.name;
+  if (e.code === 'ERROR_CEREMONY_ABORTED' || (e.code === 'ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY' && browserName === 'NotAllowedError')) {
+    return new AccountError(action === 'add' ? 'Passkey setup was cancelled or timed out.' : 'Passkey sign-in was cancelled or timed out.', 'cancelled');
+  }
+  if (e.code === 'ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED' || browserName === 'InvalidStateError') {
+    return new AccountError('This device or password manager already has a passkey for your account.', 'exists');
+  }
+  if (e.code === 'ERROR_INVALID_DOMAIN' || e.code === 'ERROR_INVALID_RP_ID' || browserName === 'SecurityError') {
+    return new AccountError(
+      'The server’s passkey settings don’t match this site’s address. The operator needs to set the relying party ID to this domain (and allow this origin) in Supabase → Authentication → Passkeys.',
+      'rp_mismatch',
+    );
+  }
+  const site = location.origin;
+  if (e.code === 'webauthn_verification_failed') {
+    return new AccountError(
+      action === 'add'
+        ? `Supabase refused the passkey ("${e.message}"). This usually means ${site} is not listed exactly under Allowed origins in Supabase → Authentication → Passkeys, or the Relying Party ID isn't ${location.hostname}. Remove the passkey your browser just created, fix the setting, and try again.`
+        : `Supabase refused the passkey ("${e.message}"). Check that ${site} is an allowed origin in Supabase → Authentication → Passkeys.`,
+      e.code,
+    );
+  }
+  if (e.code === 'webauthn_credential_exists') return new AccountError('That passkey is already on your account.', e.code);
+  if (e.code === 'too_many_passkeys') return new AccountError('You have the maximum number of passkeys. Remove one first.', e.code);
+  if (e.code === 'passkey_disabled') return new AccountError('Passkeys are turned off on this server (Supabase → Authentication → Passkeys).', e.code);
+  const msg = e.message || (action === 'add' ? 'Could not add the passkey' : 'Passkey sign-in failed');
+  return new AccountError(`${action === 'add' ? 'The passkey was not saved to your account' : 'Passkey sign-in failed'}: ${msg}`, e.code);
 }

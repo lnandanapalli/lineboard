@@ -24,6 +24,8 @@ export interface MockDb {
   passwordChanges: number;
   /** The account password (tests sign in with it). */
   password: string;
+  /** When set, the server refuses new passkeys with this message (e.g. a misconfigured origin). */
+  rejectPasskeys?: string;
 }
 
 export interface Session {
@@ -224,6 +226,7 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
       });
     }
     if (path === '/auth/v1/passkeys/registration/verify') {
+      if (db.rejectPasskeys) return authError(route, 400, 'webauthn_verification_failed', db.rejectPasskeys);
       const p = { id: crypto.randomUUID(), credential_id: body().credential.id, friendly_name: 'Passkey', created_at: new Date().toISOString() };
       db.passkeys.push(p);
       return json(route, 200, p);

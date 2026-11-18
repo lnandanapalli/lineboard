@@ -235,3 +235,36 @@ test('with two-step verification on, an authenticator code also confirms it is y
   await expect(confirm).toHaveCount(0);
   await expect(page.locator('dialog.modal.small[open]')).toContainText('Add a passkey'); // on to the next step
 });
+
+async function addPasskeyFromSettings(page: Page) {
+  const card = page.locator('.set-card', { hasText: 'Passkeys' });
+  await card.getByRole('button', { name: 'Add a passkey' }).click();
+  const confirm = page.locator('dialog.confirm-dialog');
+  const naming = page.locator('dialog.modal.small[open]', { hasText: 'Add a passkey' });
+  await expect(confirm.or(naming).first()).toBeVisible(); // the password is asked for unless given recently
+  if (await confirm.count()) {
+    await confirm.locator('input[type=password]').fill('secret123');
+    await confirm.getByRole('button', { name: 'Confirm' }).click();
+    await expect(confirm).toHaveCount(0);
+  }
+  await naming.getByRole('button', { name: 'Continue' }).click();
+  return card;
+}
+
+test('a passkey the server refuses is reported in the card, not silently dropped', async ({ page }) => {
+  const db = await mockSupabase(page);
+  db.rejectPasskeys = 'Credential verification failed';
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+  });
+  await signIn(page);
+  await expect(board(page)).toBeVisible();
+  await openSignin(page);
+  const card = await addPasskeyFromSettings(page);
+  await expect(card.locator('.card-notice')).toContainText('Supabase refused the passkey');
+  await expect(card.locator('.card-notice')).toContainText('Allowed origins');
+  expect(db.passkeys).toHaveLength(0);
+});
+

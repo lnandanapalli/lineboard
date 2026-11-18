@@ -161,7 +161,17 @@ export class SecurityPane {
 
   // ----- passkeys -----
 
-  private async renderPasskeys() {
+  private passkeyCount = 0;
+
+  /** A message that stays in the passkey card (toasts are easy to miss). */
+  private passkeyNotice(text: string) {
+    const old = this.passkeyCard.querySelector('.card-notice');
+    old?.remove();
+    const note = h('p', { class: 'enc-error card-notice', role: 'alert' }, text);
+    this.passkeyCard.insertBefore(note, this.passkeyCard.querySelector('.set-buttons'));
+  }
+
+  private async renderPasskeys(problem: string | null = null) {
     const card = this.passkeyCard;
     const intro = h('p', { class: 'muted' }, 'Sign in with your fingerprint, face or device PIN instead of typing a password. Passkeys cannot be phished or reused.');
     if (!passkeysSupported()) {
@@ -171,6 +181,7 @@ export class SecurityPane {
     this.loading(card, 'Passkeys');
     try {
       const list = await this.account.passkeys();
+      this.passkeyCount = list.length;
       const rows = list.map((p) => {
         const name = p.friendly_name || 'Passkey';
         const rename = this.btn('Rename', async () => {
@@ -211,16 +222,23 @@ export class SecurityPane {
         const guess = navigator.userAgent ? describeDevice(navigator.userAgent) : 'Passkey';
         const name = await dialog({ title: 'Add a passkey', message: 'Give it a name you will recognise, then follow your browser’s prompt.', input: guess, ok: 'Continue' });
         if (name === null) return;
+        let problem: string | null = null;
+        let before = 0;
         try {
+          before = (await this.account.passkeys().catch(() => [])).length;
           await this.account.addPasskey(name.trim());
-          toast('Passkey added. You can now sign in with it.');
         } catch (e) {
-          const msg = (e as Error).message;
-          if (!/abort|cancel|not allowed/i.test(msg)) toast(msg, 'error');
+          problem = (e as Error).message;
         }
-        void this.renderPasskeys();
+        await this.renderPasskeys(problem);
+        if (!problem) {
+          const now = this.passkeyCount;
+          if (now > before) toast('Passkey added. You can now sign in with it.');
+          else this.passkeyNotice('Your browser created the passkey, but it does not appear on your account. Remove it from your device or password manager, then try again; if this keeps happening, the server’s passkey settings may need checking.');
+        }
       });
       put(card, h('h4', {}, 'Passkeys'), intro, list.length ? h('ul', { class: 'item-list' }, ...rows) : null, h('div', { class: 'set-buttons' }, add));
+      if (problem) this.passkeyNotice(problem);
     } catch (e) {
       card.replaceChildren(
         h('h4', {}, 'Passkeys'),
