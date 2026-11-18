@@ -186,8 +186,10 @@ test('passkeys: add one in settings, then sign in with it', async ({ page }) => 
   await card.getByRole('button', { name: 'Add a passkey' }).click();
   await page.locator('dialog.confirm-dialog input[type=password]').fill('secret123');
   await page.locator('dialog.confirm-dialog').getByRole('button', { name: 'Confirm' }).click();
-  await page.locator('dialog.modal.small[open]').locator('input.dlg-input').fill('My tablet');
-  await page.locator('dialog.modal.small[open]').getByRole('button', { name: 'Continue' }).click();
+  await expect(page.locator('dialog.confirm-dialog')).toHaveCount(0); // checking the password takes a moment
+  const naming = page.locator('dialog.modal.small[open]', { hasText: 'Add a passkey' });
+  await naming.locator('input.dlg-input').fill('My tablet');
+  await naming.getByRole('button', { name: 'Continue' }).click();
   await expect(card.locator('.item-row')).toHaveCount(1);
   await expect(card.locator('.item-row b')).toHaveText('My tablet');
   expect(db.passkeys).toHaveLength(1);
