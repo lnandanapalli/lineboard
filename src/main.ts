@@ -9,6 +9,10 @@ import { config, hasCloud } from './config';
 import { GUEST_MIGRATE, guestNotesWithInk, isGuestActive, keepSeparateKey, migrateGuestData, setGuestActive } from './guest';
 import { LocalStore } from './store/localStore';
 import { SupabaseStore } from './store/supabaseStore';
+import { KeyVault } from './crypto/vault';
+import { renderUnlock } from './encryptionUi';
+import { AccountSecurity } from './account';
+import { renderSecondStep } from './securityUi';
 import { h, lsGet, lsSet, toast } from './util';
 
 const root = document.getElementById('app')!;
@@ -40,6 +44,22 @@ if (!hasCloud) {
 } else {
   const sb = createClient(config.supabaseUrl, config.supabaseAnonKey, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+  });
+  const account = new AccountSecurity(sb);
+
+  /** This device was signed out elsewhere (another device, a password reset, turning on two-step verification). */
+  const signedOutRemotely = async () => {
+    await sb.auth.signOut({ scope: 'local' });
+    toast('You were signed out on this device from another device or by a password change.', 'error');
+  };
+  // Notice a remote sign-out while the app is open, not only when the access token next expires.
+  const checkStillSignedIn = async () => {
+    if (!activeSession || typeof current !== 'string' || current === 'guest') return;
+    if ((await account.sessionAlive()) === false) await signedOutRemotely();
+  };
+  setInterval(() => void checkStillSignedIn(), 5 * 60_000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void checkStillSignedIn();
   });
 
   let app: App | null = null;
@@ -144,6 +164,43 @@ if (!hasCloud) {
     }
   };
 
+  /**
+   * Get end-to-end encryption ready before any notes are read or written: unlock with the key
+   * remembered on this device or ask for the passphrase, then finish an interrupted switch.
+   * Returns false if the user left (signed out) meanwhile.
+   */
+  const prepareEncryption = async (vault: KeyVault, store: SupabaseStore, uid: string, email: string | null, signOut: () => void) => {
+    try {
+      await vault.refresh();
+    } catch (e) {
+      console.warn('Could not check encryption state', e); // offline: the server still refuses plaintext if encryption is on
+    }
+    if (vault.needsKey && !(await vault.restore())) {
+      await renderUnlock(root, { vault, store, email, signOut });
+      if (current !== uid) return false;
+    }
+    if (vault.state === 'encrypting' || vault.state === 'decrypting') {
+      const finishing = vault.state;
+      showBusy(finishing === 'encrypting' ? 'Finishing encrypting your notes...' : 'Finishing decrypting your notes...');
+      try {
+        await store.convertAll((done, total) => {
+          if (total) showBusy(`${finishing === 'encrypting' ? 'Encrypting' : 'Decrypting'} your notes: ${done} of ${total}...`);
+        });
+        await vault.setState(finishing === 'encrypting' ? 'on' : 'off');
+      } catch (e) {
+        console.error('Could not finish converting notes', e);
+        toast('Some notes are not converted yet; Lineboard will try again next time.', 'error');
+      }
+    } else if (vault.state === 'off' && vault.hasKeys) {
+      // Encryption was turned off; tidy up anything another device still wrote encrypted.
+      if (await vault.restore()) void store.sweep().catch((e) => console.warn('Sweep failed', e));
+    } else if (vault.state === 'on' && vault.unlocked) {
+      // Encrypt anything an older client or another device saved in plaintext meanwhile.
+      void store.sweep().catch((e) => console.warn('Sweep failed', e));
+    }
+    return current === uid;
+  };
+
   const show = async (session: Session | null) => {
     activeSession = session;
     if (recovering) return;
@@ -157,6 +214,16 @@ if (!hasCloud) {
     }
     if (!session) {
       if (current === 'guest' || current === null) return; // already on a signed-out screen
+      if (current !== undefined && page === 'app') {
+        // This device was signed out (from another device, by a password change, or the session ended):
+        // back to sign-in, not into guest mode.
+        clearApp();
+        current = null;
+        setGuestActive(false);
+        replaceRoute('/login');
+        showSignIn();
+        return;
+      }
       if (page === 'login' || page === 'signup') {
         if (lsGet<boolean>(GUEST_MIGRATE, false)) void showGuestSignIn();
         else showSignIn();
@@ -174,18 +241,43 @@ if (!hasCloud) {
     document.title = 'Lineboard';
     current = uid; // set before awaiting, so repeated auth events don't run this twice
     setGuestActive(false);
-    const store = new SupabaseStore(sb, uid);
+    const vault = new KeyVault(sb, uid);
+    const store = new SupabaseStore(sb, uid, vault);
+    const email = session.user.email ?? null;
+    // A saved session may have been signed out from another device meanwhile.
+    if ((await account.sessionAlive()) === false) {
+      await signedOutRemotely();
+      return;
+    }
+    if (current !== uid) return;
+    const signOut = async () => {
+      const was = current;
+      current = null; // a deliberate sign-out goes to the homepage, not the sign-in page
+      const { error } = await sb.auth.signOut();
+      if (error) { current = was; toast(error.message, 'error'); return; }
+      await vault.lock(); // forget the encryption key on this device
+      setGuestActive(false);
+      activeSession = null;
+      navigate('/home');
+    };
+    let relocking = false;
+    vault.onLocked = () => {
+      // Encryption was turned on from another device: ask for the passphrase, then carry on saving.
+      if (relocking || current !== uid) return;
+      relocking = true;
+      clearApp();
+      current = undefined;
+      void show(activeSession ?? null);
+    };
+    // Two-step verification: ask for the authenticator code before anything else.
+    if (await account.needsSecondStep()) {
+      await renderSecondStep(root, account, () => void signOut());
+      if (current !== uid) return;
+    }
+    if (!(await prepareEncryption(vault, store, uid, email, () => void signOut()))) return;
     await maybeMoveGuestNotes(store, uid);
     if (current !== uid) return; // signed out meanwhile
-    app = new App(root, store, { id: uid, email: session.user.email ?? null }, {
-      signOut: async () => {
-        const { error } = await sb.auth.signOut();
-        if (error) { toast(error.message, 'error'); return; }
-        setGuestActive(false);
-        activeSession = null;
-        navigate('/home');
-      },
-    });
+    app = new App(root, store, { id: uid, email }, { signOut, account });
   };
 
   window.addEventListener(navigationEvent, () => {
@@ -203,10 +295,14 @@ if (!hasCloud) {
         recovering = true;
         clearApp();
         current = undefined;
-        renderNewPassword(root, sb, () => {
-          recovering = false;
-          void show(session);
-        });
+        void (async () => {
+          // With two-step verification on, the code is needed before the password can change.
+          if (await account.needsSecondStep()) await renderSecondStep(root, account, () => void sb.auth.signOut());
+          renderNewPassword(root, sb, () => {
+            recovering = false;
+            void show(activeSession ?? session);
+          });
+        })();
         return;
       }
       if (activeSession !== undefined) void show(activeSession);

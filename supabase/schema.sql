@@ -41,6 +41,40 @@ create table if not exists public.strokes (
 create index if not exists strokes_note_created_idx on public.strokes (note_id, created_at, id);
 create index if not exists strokes_user_idx on public.strokes (user_id);
 
+-- ------------- End-to-end encryption (optional, per user) -------------
+-- When a user turns encryption on, the app encrypts titles, names and ink on the device. Encrypted
+-- rows keep the ciphertext in *_enc columns and leave the plaintext columns empty (or null).
+alter table public.notebooks add column if not exists name_enc text check (char_length(name_enc) <= 4000);
+alter table public.notes     add column if not exists title_enc text check (char_length(title_enc) <= 4000);
+alter table public.strokes   add column if not exists enc text;
+alter table public.strokes alter column tool   drop not null;
+alter table public.strokes alter column color  drop not null;
+alter table public.strokes alter column width  drop not null;
+alter table public.strokes alter column points drop not null;
+alter table public.strokes drop constraint if exists strokes_payload_present;
+alter table public.strokes add constraint strokes_payload_present check (
+  enc is not null or (tool is not null and color is not null and width is not null and points is not null)
+);
+
+-- Wrapped copies of the user's data key. The key itself never reaches the server: one copy is
+-- encrypted with a key derived from the user's passphrase, the other with their recovery key.
+create table if not exists public.user_keys (
+  user_id           uuid primary key default auth.uid() references auth.users (id) on delete cascade,
+  state             text not null check (state in ('off', 'encrypting', 'on', 'decrypting')),
+  key_id            uuid not null,
+  kdf               jsonb not null,
+  pass_wrapped      text not null check (char_length(pass_wrapped) <= 1000),
+  recovery_wrapped  text not null check (char_length(recovery_wrapped) <= 1000),
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+-- True once the signed-in user's notes must be stored encrypted.
+create or replace function public.encryption_required() returns boolean
+language sql stable security invoker set search_path = '' as $$
+  select exists (select 1 from public.user_keys k where k.user_id = (select auth.uid()) and k.state = 'on')
+$$;
+
 create table if not exists public.user_settings (
   user_id     uuid primary key default auth.uid() references auth.users (id) on delete cascade,
   settings    jsonb not null default '{}'::jsonb,
@@ -68,12 +102,13 @@ alter table public.notebooks     enable row level security;
 alter table public.notes         enable row level security;
 alter table public.strokes       enable row level security;
 alter table public.user_settings enable row level security;
+alter table public.user_keys     enable row level security;
 
 drop policy if exists "own notebooks" on public.notebooks;
 create policy "own notebooks" on public.notebooks
   for all to authenticated
   using (user_id = (select auth.uid()))
-  with check (user_id = (select auth.uid()));
+  with check (user_id = (select auth.uid()) and (name_enc is not null or not (select public.encryption_required())));
 
 drop policy if exists "own notes" on public.notes;
 create policy "own notes" on public.notes
@@ -81,6 +116,7 @@ create policy "own notes" on public.notes
   using (user_id = (select auth.uid()))
   with check (
     user_id = (select auth.uid())
+    and (title_enc is not null or not (select public.encryption_required()))
     and (notebook_id is null
          or exists (select 1 from public.notebooks b where b.id = notebook_id and b.user_id = (select auth.uid())))
   );
@@ -91,6 +127,7 @@ create policy "own strokes" on public.strokes
   using (user_id = (select auth.uid()))
   with check (
     user_id = (select auth.uid())
+    and (enc is not null or not (select public.encryption_required()))
     and exists (select 1 from public.notes n where n.id = note_id and n.user_id = (select auth.uid()))
   );
 
@@ -100,6 +137,84 @@ create policy "own settings" on public.user_settings
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
 
+drop policy if exists "own keys" on public.user_keys;
+create policy "own keys" on public.user_keys
+  for all to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
+
+-- ------------- Signed-in devices and two-step verification -------------
+
+-- True when the request comes from a session that still exists (a device that was signed out
+-- elsewhere loses access at once, not when its access token expires) and that has passed two-step
+-- verification if the user turned it on.
+create or replace function public.access_ok() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select
+    exists (
+      select 1 from auth.sessions s
+       where s.id = nullif((select auth.jwt()) ->> 'session_id', '')::uuid
+         and s.user_id = (select auth.uid())
+    )
+    and (
+      coalesce((select auth.jwt()) ->> 'aal', 'aal1') = 'aal2'
+      or not exists (
+        select 1 from auth.mfa_factors f
+         where f.user_id = (select auth.uid()) and f.status = 'verified'
+      )
+    )
+$$;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['notebooks', 'notes', 'strokes', 'user_settings', 'user_keys'] loop
+    execute format('drop policy if exists "active session with required MFA" on public.%I', t);
+    execute format(
+      'create policy "active session with required MFA" on public.%I as restrictive for all to authenticated '
+      'using ((select public.access_ok())) with check ((select public.access_ok()))', t);
+  end loop;
+end $$;
+
+-- The signed-in user's devices (sessions), newest activity first.
+create or replace function public.list_my_sessions()
+returns table (id uuid, created_at timestamptz, last_active timestamptz, user_agent text, ip text, aal text, is_current boolean)
+language plpgsql stable security definer set search_path = '' as $$
+#variable_conflict use_column
+begin
+  if not public.access_ok() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  return query
+    select s.id,
+           s.created_at,
+           greatest(s.created_at, s.updated_at, s.refreshed_at at time zone 'UTC'),
+           s.user_agent,
+           host(s.ip),
+           s.aal::text,
+           s.id = nullif((select auth.jwt()) ->> 'session_id', '')::uuid
+      from auth.sessions s
+     where s.user_id = (select auth.uid())
+       and (s.not_after is null or s.not_after > now())
+     order by 3 desc;
+end $$;
+
+-- Sign one of the user's devices out. Its refresh tokens go with the session.
+create or replace function public.revoke_my_session(target uuid) returns boolean
+language plpgsql volatile security definer set search_path = '' as $$
+begin
+  if not public.access_ok() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  delete from auth.sessions where id = target and user_id = (select auth.uid());
+  return found;
+end $$;
+
+revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) from anon, public;
+grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) to authenticated;
+
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
-grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings to authenticated;
-revoke all on public.notebooks, public.notes, public.strokes, public.user_settings from anon;
+grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys to authenticated;
+revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys from anon;
+grant execute on function public.encryption_required() to authenticated;
+revoke execute on function public.encryption_required() from anon, public;

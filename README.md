@@ -20,6 +20,11 @@ you unlock accepts ink. Your palm can rest anywhere else.
   when an active pen is detected.
 - Pen (pressure-aware with active pens), highlighter, stroke eraser, undo / redo, multiple notes, PNG export.
 - **Accounts and sync** with Supabase, with background saving that survives reloads and offline periods.
+- **Account security.** See and sign out signed-in devices, change the password (which signs out other
+  devices, as does a password reset), two-step verification with an authenticator app, and passkey sign-in.
+  See [Account security](#account-security).
+- **Optional end-to-end encryption.** Turn it on in Settings → Privacy & security: ink, note titles and
+  notebook names are encrypted on the device before upload. See [End-to-end encryption](#end-to-end-encryption).
 - **Try without an account.** Notes stay in the browser and move into the account on sign-in.
 - **Local mode.** With no backend configured, the whole app runs in the browser with no sign-in.
 - Installable as a PWA; works in portrait and landscape.
@@ -35,6 +40,55 @@ rows. The container holds no secrets.
 
 Strokes are stored as point lists in page units (the page is 1000 units wide), so notes render the same at
 any screen size or orientation.
+
+### Account security
+
+Settings → Sign-in & devices, built on Supabase Auth:
+
+- **Signed-in devices.** Supabase has no client API for listing sessions, so `list_my_sessions()` and
+  `revoke_my_session()` in [`supabase/schema.sql`](supabase/schema.sql) expose the user's own rows of
+  `auth.sessions` (device from the user agent, IP, last activity). "Sign out all other devices" uses
+  `signOut({ scope: 'others' })`.
+- **Immediate sign-out.** A restrictive row-level-security policy (`access_ok()`) requires the request's
+  session to still exist, so a signed-out device loses access to notes at once instead of when its access
+  token expires (up to an hour). The app also re-checks its session when the tab regains focus and every
+  five minutes, and returns to the sign-in page.
+- **Passwords.** Changing the password signs out other devices by default; so does a password reset from
+  the email link. If the project enables *Secure password change*, the app asks for the emailed code.
+- **Two-step verification** with any TOTP authenticator app (`auth.mfa`). Several authenticators can be
+  added as backups. The same `access_ok()` policy requires `aal2` for users who turned it on, so notes can't
+  be read with the password alone even by calling the API directly. Turning it on signs out other devices.
+- **Passkeys** (`signInWithPasskey` / `registerPasskey`, supabase-js 2.105+). Enable them in the Supabase
+  dashboard under Authentication → Passkeys with your site's domain as the relying party ID; until then the
+  passkey card explains they're unavailable and the sign-in button reports the server's error.
+
+In the Supabase dashboard, turn on TOTP under Authentication → Multi-Factor (it is on by default for new
+projects) and passkeys under Authentication → Passkeys.
+
+### End-to-end encryption
+
+Encryption is off by default and each user turns it on for their own account in Settings. It uses the
+envelope scheme common to password managers, built only on the browser's Web Crypto API
+([`src/crypto/`](src/crypto)):
+
+- A random AES-256-GCM **data key** encrypts each stroke, note title and notebook name. The row id is bound
+  in as associated data, so ciphertext can't be moved between rows.
+- The data key is stored on the server only **wrapped** twice: once by a key derived from the user's
+  **encryption passphrase** (PBKDF2-SHA256, 600,000 rounds, random salt) and once by a 160-bit **recovery
+  key** shown to the user once. The passphrase is separate from the login password, so a password reset by
+  email cannot unlock notes.
+- Each device unlocks once; the data key can be kept in IndexedDB as a non-extractable `CryptoKey`
+  ("Keep this device unlocked"). Signing out forgets it.
+- Turning encryption on (or off) converts existing notes in place. The work is resumable: if the tab is
+  closed midway, it finishes the next time the user opens Lineboard.
+- Once it is on, row-level security refuses plaintext notes for that user, so an outdated client or another
+  device can't silently save unencrypted ink; the app then asks for the passphrase and retries.
+- Forgetting the passphrase: unlock with the recovery key and choose a new one. Losing both: the notes cannot
+  be recovered by anyone; the user can delete them and start over.
+
+The server still sees metadata: ids, timestamps, which note each stroke belongs to, and ciphertext sizes.
+Settings (strip height, pen colours) are not encrypted. Unsaved strokes waiting in the offline queue are kept
+in the browser's local storage on the device.
 
 ## Quick start
 
@@ -86,7 +140,9 @@ For development, copy `.env.example` to `.env.local`. Never use the `service_rol
 ### Database
 
 Run [`supabase/schema.sql`](supabase/schema.sql) once in your project (SQL editor or `psql`). It creates the
-`notes`, `strokes` and `user_settings` tables with row-level security, and is safe to re-run.
+`notebooks`, `notes`, `strokes`, `user_settings` and `user_keys` tables with row-level security, and is safe to
+re-run. **When upgrading, run it again**: until you do, the app keeps working but the encryption switch in
+Settings stays unavailable.
 
 In Supabase Auth, add your site's URL to the allowed redirect URLs so that confirmation, sign-in-link and
 password-reset emails work.

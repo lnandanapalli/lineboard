@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { h } from './util';
 import { publicFooter } from './public';
 import { logo } from './brand';
+import { passkeysSupported } from './account';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
 
@@ -57,6 +58,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     pass.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
     submit.textContent = { signin: 'Sign in', signup: 'Create account', magic: 'Send sign-in link', reset: 'Send reset link' }[mode];
     extra.replaceChildren();
+    passkeyBtn.hidden = mode !== 'signin' || !passkeysSupported();
     if (mode === 'signin') extra.append(tab('magic', 'Email me a sign-in link'));
     if (mode === 'magic') extra.append(tab('signin', 'Back to sign in'));
     if (mode === 'signin' || mode === 'reset') {
@@ -69,6 +71,23 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
       extra.append(a);
     }
   }
+
+  // Passkey sign-in (no email or password needed; the passkey identifies the account).
+  const passkeyBtn = h('button', { class: 'btn wide passkey-btn', type: 'button' }, 'Sign in with a passkey') as HTMLButtonElement;
+  passkeyBtn.addEventListener('click', async () => {
+    passkeyBtn.disabled = true;
+    setMsg('Follow your browser’s prompt...');
+    try {
+      const { error } = await sb.auth.signInWithPasskey();
+      if (error) throw error;
+      setMsg('');
+    } catch (err) {
+      const m = (err as Error).message || '';
+      setMsg(/not allowed|abort|cancel|timed out/i.test(m) ? 'Passkey sign-in was cancelled.' : m || 'Passkey sign-in failed', 'err');
+    } finally {
+      passkeyBtn.disabled = false;
+    }
+  });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -143,6 +162,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
         heading,
         description,
         form,
+        passkeyBtn,
         extra,
         msg,
         guestBox,
@@ -158,13 +178,24 @@ export function renderNewPassword(root: HTMLElement, sb: SupabaseClient, done: (
   const pass = h('input', { type: 'password', placeholder: 'New password', autocomplete: 'new-password', minlength: '6', required: true }) as HTMLInputElement;
   const msg = h('p', { class: 'auth-msg' });
   const form = h('form', { class: 'auth-form' }, pass, h('button', { class: 'btn primary wide', type: 'submit' }, 'Set new password'));
+  const others = h('input', { type: 'checkbox', checked: true }) as HTMLInputElement;
+  form.insertBefore(h('label', { class: 'set-check' }, others, h('span', {}, 'Sign out all other devices')), form.lastChild);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    msg.textContent = 'Please wait...';
+    msg.className = 'auth-msg';
     const { error } = await sb.auth.updateUser({ password: pass.value });
     if (error) {
       msg.textContent = error.message;
       msg.className = 'auth-msg err';
-    } else done();
+      return;
+    }
+    // Someone who reset their password may be locking out an intruder: end every other session.
+    if (others.checked) {
+      const { error: outErr } = await sb.auth.signOut({ scope: 'others' });
+      if (outErr) console.warn('Could not sign out other devices', outErr);
+    }
+    done();
   });
   root.replaceChildren(
     h('div', { class: 'auth-screen' }, h('div', { class: 'auth-card' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Set a new password')), form, msg)),
