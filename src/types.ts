@@ -1,5 +1,14 @@
 export type Tool = 'pen' | 'highlighter' | 'eraser';
 
+/**
+ * How the page takes ink.
+ * strips  one unlocked strip at a time (palm rests anywhere else)
+ * multi   any number of strips unlocked at once
+ * free    whole page takes ink, two fingers scroll and zoom
+ */
+export type BoardMode = 'strips' | 'multi' | 'free';
+export const BOARD_MODES: BoardMode[] = ['strips', 'multi', 'free'];
+
 /** A single ink stroke. Coordinates are in page units: the page is always 1000 units wide. */
 export interface Stroke {
   id: string;
@@ -38,8 +47,7 @@ export interface Settings {
   /** If an active pen (pointerType "pen") is ever seen, ignore finger touches entirely. */
   penOnlyWhenPenSeen: boolean;
   showLines: boolean;
-  /** Free whiteboard: no strips or locks; the whole page takes ink and two fingers scroll. */
-  freeMode: boolean;
+  mode: BoardMode;
   marginSide: 'left' | 'right';
   penColor: string;
   penWidth: number;
@@ -52,13 +60,25 @@ export const DEFAULT_SETTINGS: Settings = {
   touchThreshold: 45,
   penOnlyWhenPenSeen: true,
   showLines: true,
-  freeMode: false,
+  mode: 'strips',
   marginSide: 'left',
   penColor: '#111827',
   penWidth: 3.5,
   highlighterColor: '#fde047',
   highlighterWidth: 22,
 };
+
+/**
+ * Merge stored settings over the defaults. Settings saved before the mode menu had a
+ * `freeMode` flag instead of `mode`; carry it over.
+ */
+export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } | null | undefined): Settings {
+  const { freeMode, ...rest } = stored ?? {};
+  const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
+  if (!rest.mode && freeMode) out.mode = 'free';
+  if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
+  return out;
+}
 
 export interface AppUser {
   id: string;

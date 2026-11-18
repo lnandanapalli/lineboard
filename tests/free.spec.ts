@@ -3,7 +3,11 @@ import { PALM, PEN, attachBoard, drag, expectStrokes, send, setup, stripY, tp } 
 
 /** Free whiteboard mode: no strips or locks, whole page takes ink, two fingers scroll. */
 
-const freeSwitch = (page: Page) => page.getByRole('switch', { name: 'Free whiteboard' });
+const modeButton = (page: Page) => page.locator('.mode-btn');
+async function chooseMode(page: Page, name: 'Strips' | 'Multi-strip' | 'Free whiteboard') {
+  await modeButton(page).click();
+  await page.getByRole('menuitemradio', { name: new RegExp('^' + name) }).click();
+}
 
 /** Y (page units) of the first point of the newest stroke. */
 const lastStrokeY = (page: Page) =>
@@ -22,9 +26,10 @@ const lastStrokeSpan = (page: Page) =>
     return Math.max(...xs) - Math.min(...xs);
   });
 
-/** Switch free mode and return fresh board geometry (the margin hides/shows, so the page moves). */
+/** Switch free mode on/off and return fresh board geometry (the margin hides/shows, so the page moves). */
 async function toggleFree(page: Page) {
-  await freeSwitch(page).click();
+  const on = (await modeButton(page).getAttribute('aria-label'))?.includes('Free');
+  await chooseMode(page, on ? 'Strips' : 'Free whiteboard');
   await page.waitForTimeout(150);
   return attachBoard(page);
 }
@@ -85,11 +90,34 @@ test('turning free mode off brings the locks back, and the choice survives a rel
   await toggleFree(page);
   await page.reload();
   await attachBoard(page);
-  await expect(freeSwitch(page)).toHaveAttribute('aria-checked', 'true');
+  await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Free whiteboard');
 
   const { cdp, geo } = await toggleFree(page);
   await expect(page.locator('.strip-btn').first()).toBeVisible();
   await drag(cdp, geo.areaX + 100, stripY(geo, 5), geo.areaX + 400, stripY(geo, 5)); // locked strip
   await page.waitForTimeout(200);
   await expectStrokes(page, 0);
+});
+
+test('the mode menu lists every mode, and F / M switch modes from the keyboard', async ({ page }) => {
+  await setup(page);
+  await modeButton(page).click();
+  await expect(page.getByRole('menuitemradio')).toHaveText([/Strips/, /Multi-strip/, /Free whiteboard/]);
+  await expect(page.getByRole('menuitemradio', { name: /^Strips/ })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await page.keyboard.press('m');
+  await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Multi-strip');
+  await page.keyboard.press('f');
+  await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Free whiteboard');
+  await page.keyboard.press('f'); // back to the strip mode it came from
+  await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Multi-strip');
+});
+
+test('settings saved before the mode menu (freeMode: true) open in free mode', async ({ page }) => {
+  await page.goto('/app');
+  await page.evaluate(() => localStorage.setItem('lb-settings-local', JSON.stringify({ freeMode: true, stripHeight: 90 })));
+  await page.reload();
+  await attachBoard(page);
+  await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Free whiteboard');
 });

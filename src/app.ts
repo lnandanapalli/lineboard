@@ -5,7 +5,8 @@ import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import { DEFAULT_SETTINGS, type AppUser, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
+import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
+import { dropdown, type Dropdown } from './menu';
 import { debounce, dialog, h, lsGet, lsSet, toast } from './util';
 
 const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
@@ -50,8 +51,9 @@ export class App {
   private widths!: HTMLElement;
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
-  private multiBtn!: HTMLButtonElement;
-  private freeBtn!: HTMLButtonElement;
+  private modeMenu!: Dropdown<BoardMode>;
+  /** The last strip mode, so F (free on/off) returns to it. */
+  private lastStripMode: BoardMode = 'strips';
   private stripControls!: HTMLElement;
   private status!: HTMLElement;
   private settingsPanel!: SettingsPanel;
@@ -68,7 +70,7 @@ export class App {
     private opts: AppOptions = {},
   ) {
     this.root = root;
-    this.settings = { ...DEFAULT_SETTINGS, ...lsGet<Partial<Settings>>(this.lsKey('settings'), {}) };
+    this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
     this.queue.onState = (s) => this.renderStatus(s);
     this.build();
@@ -112,11 +114,11 @@ export class App {
     try {
       const remote = await this.store.loadSettings();
       if (remote) {
-        this.settings = { ...DEFAULT_SETTINGS, ...remote };
+        this.settings = withDefaults(remote);
         lsSet(this.lsKey('settings'), this.settings);
         this.board.updateSettings(this.settings);
         this.renderToolOptions();
-        this.renderFree();
+        this.renderMode();
       }
     } catch (e) {
       console.warn('Could not load settings', e);
@@ -183,27 +185,17 @@ export class App {
     this.undoBtn = this.iconBtn(icons.undo, 'Undo (Ctrl+Z)', () => this.undo());
     this.redoBtn = this.iconBtn(icons.redo, 'Redo (Ctrl+Shift+Z)', () => this.redo());
 
-    this.multiBtn = h('button', {
-      class: 'toggle',
-      type: 'button',
-      role: 'switch',
-      'aria-checked': 'false',
-      'aria-label': 'Multi-strip',
-      title: 'Multi-strip: unlock several strips at once (M)',
-    }) as HTMLButtonElement;
-    this.multiBtn.innerHTML = `${icons.multi}<span>Multi-strip</span><i class="knob"></i>`;
-    this.multiBtn.addEventListener('click', () => this.setMulti(!this.board.isMulti()));
-
-    this.freeBtn = h('button', {
-      class: 'toggle free-toggle',
-      type: 'button',
-      role: 'switch',
-      'aria-checked': 'false',
-      'aria-label': 'Free whiteboard',
-      title: 'Free whiteboard: no strips or locks (F). Two fingers scroll and zoom.',
-    }) as HTMLButtonElement;
-    this.freeBtn.innerHTML = `${icons.free}<span>Free</span><i class="knob"></i>`;
-    this.freeBtn.addEventListener('click', () => this.setFree(!this.settings.freeMode));
+    this.modeMenu = dropdown<BoardMode>({
+      name: 'Mode',
+      className: 'mode-btn',
+      value: this.settings.mode,
+      onSelect: (m) => this.setMode(m),
+      options: [
+        { value: 'strips', label: 'Strips', icon: icons.strip, hint: 'M', description: 'Unlock one strip to write; rest your palm anywhere else.' },
+        { value: 'multi', label: 'Multi-strip', icon: icons.multi, hint: 'M', description: 'Unlock several strips at once for bigger drawings.' },
+        { value: 'free', label: 'Free whiteboard', icon: icons.free, hint: 'F', description: 'The whole page takes ink. Two fingers scroll and zoom.' },
+      ],
+    });
 
     this.status = h('div', { class: 'status', title: '' });
 
@@ -219,11 +211,10 @@ export class App {
       h('div', { class: 'sep' }),
       h('div', { class: 'group' }, this.undoBtn, this.redoBtn),
       h('div', { class: 'sep' }),
-      this.freeBtn,
+      this.modeMenu.el,
       (this.stripControls = h(
         'div',
         { class: 'group strip-controls' },
-        this.multiBtn,
         this.iconBtn(icons.up, 'Previous strip (Up arrow)', () => this.board.stepLine(-1)),
         this.iconBtn(icons.down, 'Next strip (Down arrow)', () => this.board.stepLine(1)),
         this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
@@ -290,7 +281,7 @@ export class App {
 
     this.buildSettings();
     this.renderToolOptions();
-    this.renderFree();
+    this.renderMode();
     this.renderUndo();
     this.bindKeys();
   }
@@ -320,8 +311,8 @@ export class App {
         if (e.key === 'p') this.setTool('pen');
         if (e.key === 'h') this.setTool('highlighter');
         if (e.key === 'e') this.setTool('eraser');
-        if (e.key === 'm' && !this.settings.freeMode) this.setMulti(!this.board.isMulti());
-        if (e.key === 'f') this.setFree(!this.settings.freeMode);
+        if (e.key === 'm' && this.settings.mode !== 'free') this.setMode(this.settings.mode === 'multi' ? 'strips' : 'multi');
+        if (e.key === 'f') this.setMode(this.settings.mode === 'free' ? this.lastStripMode : 'free');
       }
     }, { signal: this.abort.signal });
   }
@@ -349,26 +340,27 @@ export class App {
     this.renderToolOptions();
   }
 
-  /** Free whiteboard on/off. Strokes are unaffected; only how input is taken changes. */
-  private setFree(on: boolean) {
-    this.settings.freeMode = on;
+  /** Switch how the page takes ink. Strokes are unaffected; only how input is taken changes. */
+  private setMode(m: BoardMode) {
+    const was = this.settings.mode;
+    if (m === was) return;
+    if (was !== 'free') this.lastStripMode = was;
+    this.settings.mode = m;
     this.settingsChanged();
-    this.renderFree();
-    toast(on ? 'Free whiteboard: write anywhere. Two fingers scroll and pinch to zoom.' : 'Strips are back: tap a lock in the margin to write.');
+    this.renderMode();
+    toast(
+      {
+        strips: was === 'multi' ? 'Strips: all locked. Tap a lock in the margin to write.' : 'Strips: tap a lock in the margin to write.',
+        multi: 'Multi-strip: tap several locks to unlock them together.',
+        free: 'Free whiteboard: write anywhere. Two fingers scroll and pinch to zoom.',
+      }[m],
+    );
   }
 
-  private renderFree() {
-    const on = this.settings.freeMode;
-    this.freeBtn.classList.toggle('on', on);
-    this.freeBtn.setAttribute('aria-checked', String(on));
-    this.stripControls.hidden = on;
-  }
-
-  private setMulti(on: boolean) {
-    this.board.setMulti(on);
-    this.multiBtn.classList.toggle('on', on);
-    this.multiBtn.setAttribute('aria-checked', String(on));
-    if (!on) toast('All strips locked. Tap a lock in the margin to write.');
+  private renderMode() {
+    this.modeMenu.set(this.settings.mode);
+    this.stripControls.hidden = this.settings.mode === 'free';
+    if (this.settings.mode !== 'free') this.lastStripMode = this.settings.mode;
   }
 
   private renderToolOptions() {
@@ -739,7 +731,6 @@ export class App {
       store: this.store,
       settings: () => this.settings,
       changed: () => this.settingsChanged(),
-      setFree: (on) => this.setFree(on),
       pendingSaves: () => this.queue.pending,
       noteCount: () => this.notes.length,
       signOut: this.opts.signOut,

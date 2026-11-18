@@ -88,7 +88,6 @@ export class Board {
   private viewH = 0;
 
   private unlocked = new Set<number>();
-  private multi = false;
   tool: Tool = 'pen';
   private penSeen = false;
 
@@ -167,8 +166,14 @@ export class Board {
 
   updateSettings(s: Settings) {
     const oldH = this.settings.stripHeight;
+    const oldMode = this.settings.mode;
     this.settings = { ...s }; // own copy, so changes can be compared with the previous settings
-    if (!s.freeMode) {
+    if (oldMode === 'multi' && s.mode === 'strips') {
+      // Leaving multi-strip locks everything; unlock one strip again by tapping its lock.
+      this.unlocked.clear();
+      this.cb.onUnlockChange([]);
+    }
+    if (s.mode !== 'free') {
       this.fingers.clear();
       this.pan = null;
       if (this.zoom !== 1 || this.scrollX) {
@@ -190,17 +195,6 @@ export class Board {
     this.tool = t;
     this.eraserCursor = null;
     this.invalidate('live');
-  }
-
-  setMulti(on: boolean) {
-    this.multi = on;
-    if (!on) this.unlocked.clear(); // turning multi off locks everything; unlock one manually again
-    this.cb.onUnlockChange(this.unlockedList());
-    this.invalidate('bg', 'margin');
-  }
-
-  isMulti() {
-    return this.multi;
   }
 
   /** Move the single unlocked strip up/down (dir = +/-1) and scroll it into a comfortable spot. */
@@ -337,7 +331,11 @@ export class Board {
   }
 
   private get free(): boolean {
-    return this.settings.freeMode;
+    return this.settings.mode === 'free';
+  }
+
+  private get multi(): boolean {
+    return this.settings.mode === 'multi';
   }
 
   private isUnlockedAt(y: number): boolean {

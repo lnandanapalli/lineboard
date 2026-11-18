@@ -1,6 +1,6 @@
 import type { LocalStore } from './store/localStore';
 import type { SupabaseStore } from './store/supabaseStore';
-import { DEFAULT_SETTINGS, type NoteMeta, type Settings } from './types';
+import { withDefaults, type NoteMeta, type Settings } from './types';
 import { lsDel, lsGet, lsSet } from './util';
 
 /**
@@ -69,7 +69,7 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
   // Carry the guest's settings (stylus calibration, strip height...) over if the account has none yet.
   const localSettings = (await local.loadSettings()) ?? lsGet<Partial<Settings> | null>('lb-settings-local', null);
   if (localSettings && !(await cloud.loadSettings())) {
-    await cloud.saveSettings({ ...DEFAULT_SETTINGS, ...localSettings });
+    await cloud.saveSettings(withDefaults(localSettings));
   }
 
   // Reopen the note they were working on.

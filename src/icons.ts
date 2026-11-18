@@ -8,6 +8,7 @@ export const icons = {
   eraser: svg('<path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l9.6-9.6a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
   undo: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>'),
   redo: svg('<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>'),
+  strip: svg('<path d="M3 4h18M3 20h18"/><rect x="3" y="9" width="18" height="6" rx="1"/>'),
   multi: svg('<rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/>'),
   down: svg('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>'),
   up: svg('<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>'),
