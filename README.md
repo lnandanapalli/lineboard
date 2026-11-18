@@ -18,7 +18,8 @@ you unlock accepts ink. Your palm can rest anywhere else.
 - **Palm filtering inside the unlocked strip:** one stroke at a time, oversized contacts ignored (with a
   calibration pad in Settings), strokes cancelled if a contact grows into a palm, and optional pen-only input
   when an active pen is detected.
-- Pen (pressure-aware with active pens), highlighter, stroke eraser, undo / redo, multiple notes, PNG export.
+- Pen (pressure-aware with active pens), highlighter, stroke eraser, shapes, text boxes, size slider, stroke
+  smoothing, undo / redo, multiple notes, PNG export.
 - **Accounts and sync** with Supabase, with background saving that survives reloads and offline periods.
 - **Account security.** See and sign out signed-in devices, change the password (which signs out other
   devices, as does a password reset), two-step verification with an authenticator app, and passkey sign-in.
@@ -152,8 +153,8 @@ For development, copy `.env.example` to `.env.local`. Never use the `service_rol
 
 Run [`supabase/schema.sql`](supabase/schema.sql) once in your project (SQL editor or `psql`). It creates the
 `notebooks`, `notes`, `strokes`, `user_settings` and `user_keys` tables with row-level security, and is safe to
-re-run. **When upgrading, run it again**: until you do, the app keeps working but the encryption switch in
-Settings stays unavailable.
+re-run. **When upgrading, run it again**: until you do, the app keeps working, but features that need newer
+tables or columns (the encryption switch, text boxes) say they need the database update.
 
 In Supabase Auth, add your site's URL to the allowed redirect URLs so that confirmation, sign-in-link and
 password-reset emails work.

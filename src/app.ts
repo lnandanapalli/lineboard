@@ -1,4 +1,4 @@
-import { Board, PAGE_W } from './board';
+import { Board, PAGE_W, TEXT_FONT } from './board';
 import { SettingsPanel } from './settings';
 import type { AccountSecurity } from './account';
 import { icons } from './icons';
@@ -18,9 +18,10 @@ const HL_COLORS = ['#fde047', '#86efac', '#f9a8d4', '#93c5fd'];
 const SIZES = {
   pen: { min: 1, max: 24, step: 0.5, presets: [2, 3.5, 6] },
   highlighter: { min: 6, max: 60, step: 1, presets: [14, 22, 32] },
+  text: { min: 10, max: 100, step: 1, presets: [20, 28, 44] },
 };
 
-type Action = { type: 'add' | 'remove'; strokes: Stroke[] };
+type Action = { type: 'add' | 'remove'; strokes: Stroke[] } | { type: 'replace'; from: Stroke[]; to: Stroke[] };
 
 export interface AppOptions {
   /** Signed in: sign out of the account. */
@@ -184,6 +185,7 @@ export class App {
       ['pen', icons.pen, 'Pen', 'P'],
       ['highlighter', icons.highlighter, 'Highlighter', 'H'],
       ['eraser', icons.eraser, 'Eraser', 'E'],
+      ['text', icons.text, 'Text', 'T'],
     ] as const) {
       const b = this.iconBtn(icon, label, () => this.setTool(t), 'tool');
       b.title = withShortcut(label, key);
@@ -314,6 +316,7 @@ export class App {
     this.board = new Board(boardHost, this.settings, {
       onStrokesAdded: (s) => this.record({ type: 'add', strokes: s }),
       onStrokesRemoved: (s) => this.record({ type: 'remove', strokes: s }),
+      onStrokesReplaced: (from, to) => this.record({ type: 'replace', from, to }),
       onContact: (size, type, accepted) => this.settingsPanel?.showContact(size, type, accepted),
       onUnlockChange: () => {},
     });
@@ -351,6 +354,7 @@ export class App {
         if (e.key === 'h') this.setTool('highlighter');
         if (e.key === 'e') this.setTool('eraser');
         if (e.key === 's') this.setTool('shape');
+        if (e.key === 't') this.setTool('text');
         if (e.key === 'm' && this.settings.mode !== 'free') this.setMode(this.settings.mode === 'multi' ? 'strips' : 'multi');
         if (e.key === 'f') this.setMode(this.settings.mode === 'free' ? this.lastStripMode : 'free');
       }
@@ -375,6 +379,18 @@ export class App {
   // ----------------------------- tools -----------------------------
 
   private setTool(t: Tool) {
+    if (t === 'text' && this.store.supportsText) {
+      // Older cloud databases can't store text boxes yet; ask once, then switch.
+      void this.store.supportsText().then((ok) => {
+        if (ok) this.useTool('text');
+        else toast('Text boxes need a database update: the site operator re-runs supabase/schema.sql.', 'error');
+      });
+      return;
+    }
+    this.useTool(t);
+  }
+
+  private useTool(t: Tool) {
     this.tool = t;
     this.board.setTool(t);
     this.renderToolOptions();
@@ -431,15 +447,19 @@ export class App {
   }
 
   /** The size of the pen or highlighter (whichever is in use). */
-  private get sizeTool(): 'pen' | 'highlighter' {
-    return this.tool === 'highlighter' ? 'highlighter' : 'pen';
+  private get sizeTool(): 'pen' | 'highlighter' | 'text' {
+    return this.tool === 'highlighter' || this.tool === 'text' ? this.tool : 'pen';
   }
   private get size() {
-    return this.sizeTool === 'highlighter' ? this.settings.highlighterWidth : this.settings.penWidth;
+    return { pen: this.settings.penWidth, highlighter: this.settings.highlighterWidth, text: this.settings.textSize }[this.sizeTool];
   }
   private set size(w: number) {
     if (this.sizeTool === 'highlighter') this.settings.highlighterWidth = w;
+    else if (this.sizeTool === 'text') this.settings.textSize = w;
     else this.settings.penWidth = w;
+  }
+  private get sizeName() {
+    return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text' }[this.sizeTool];
   }
 
   /** Toolbar button: a dot drawn at the current size (capped so it fits). */
@@ -453,7 +473,7 @@ export class App {
     if (this.sizeTool === 'highlighter') dot.style.background = this.settings.highlighterColor;
     else dot.style.background = this.settings.penColor;
     this.sizeBtn.append(dot);
-    const label = `${this.sizeTool === 'highlighter' ? 'Highlighter' : 'Pen'} size: ${w}`;
+    const label = `${this.sizeName} size: ${w}`;
     this.sizeBtn.setAttribute('aria-label', label);
     this.sizeBtn.title = label;
   }
@@ -467,7 +487,7 @@ export class App {
     const cfg = SIZES[tool];
     const isHL = tool === 'highlighter';
     const color = isHL ? this.settings.highlighterColor : this.settings.penColor;
-    const slider = h('input', { type: 'range', min: String(cfg.min), max: String(cfg.max), step: String(cfg.step), 'aria-label': `${isHL ? 'Highlighter' : 'Pen'} size` }) as HTMLInputElement;
+    const slider = h('input', { type: 'range', min: String(cfg.min), max: String(cfg.max), step: String(cfg.step), 'aria-label': `${this.sizeName} size` }) as HTMLInputElement;
     slider.value = String(this.size);
     const value = h('output', { class: 'size-value' });
     const preview = h('canvas', { class: 'size-preview', width: '440', height: '90', 'aria-hidden': 'true' }) as HTMLCanvasElement;
@@ -483,6 +503,14 @@ export class App {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = color;
+      if (tool === 'text') {
+        ctx.fillStyle = color;
+        ctx.font = `${Math.min(40, w * k)}px ${TEXT_FONT}`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Aa', 18, 23);
+        ctx.restore();
+        return;
+      }
       ctx.lineWidth = Math.max(0.5, w * k);
       if (isHL) ctx.globalAlpha = 0.38;
       ctx.beginPath();
@@ -511,7 +539,7 @@ export class App {
       }),
     );
     draw();
-    popover(this.sizeBtn, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${isHL ? 'Highlighter' : 'Pen'} size` });
+    popover(this.sizeBtn, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${this.sizeName} size` });
   }
 
   private settingsChanged() {
@@ -532,7 +560,14 @@ export class App {
 
   /** Persist an action. `toBoard` also updates the canvas (for undo/redo; live input already did). */
   private apply(a: Action, toBoard: boolean) {
-    if (a.type === 'add') {
+    if (a.type === 'replace') {
+      if (toBoard) {
+        this.board.removeStrokes(a.from.map((s) => s.id));
+        this.board.addStrokes(a.to);
+      }
+      this.queue.remove(a.from.map((s) => s.id));
+      this.queue.upsert(a.to);
+    } else if (a.type === 'add') {
       if (toBoard) this.board.addStrokes(a.strokes);
       this.queue.upsert(a.strokes);
     } else {
@@ -543,6 +578,7 @@ export class App {
   }
 
   private invert(a: Action): Action {
+    if (a.type === 'replace') return { type: 'replace', from: a.to, to: a.from };
     return { type: a.type === 'add' ? 'remove' : 'add', strokes: a.strokes };
   }
 

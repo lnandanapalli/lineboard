@@ -460,6 +460,7 @@ export class SettingsPanel {
               [['H'], 'Highlighter'],
               [['E'], 'Eraser'],
               [['S'], 'Shapes (hold Shift for square, circle, 45°)'],
+              [['T'], 'Text (tap to type; Escape finishes)'],
               [['Mod+Z'], 'Undo'],
               [isApple ? ['Mod+Shift+Z'] : ['Mod+Y', 'Mod+Shift+Z'], 'Redo'],
               [['Up', 'Down'], 'Previous / next strip'],

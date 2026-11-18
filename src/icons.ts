@@ -33,5 +33,6 @@ export const icons = {
   shapeRectangle: svg('<rect x="4" y="6" width="16" height="12" rx="1"/>'),
   shapeEllipse: svg('<ellipse cx="12" cy="12" rx="9" ry="7"/>'),
   shapeTriangle: svg('<path d="M12 4 21 20H3Z"/>'),
+  text: svg('<path d="M5 6V4h14v2"/><path d="M12 4v16"/><path d="M9 20h6"/>'),
   close: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
 };

@@ -29,4 +29,6 @@ export interface Store {
   deleteStrokes(ids: string[]): Promise<void>;
   loadSettings(): Promise<Partial<Settings> | null>;
   saveSettings(s: Settings): Promise<void>;
+  /** False when the cloud database predates text boxes (schema not updated yet). */
+  supportsText?(): Promise<boolean>;
 }

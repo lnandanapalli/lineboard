@@ -1,6 +1,6 @@
 import { SHAPES, type ShapeKind } from './shapes';
 
-export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape';
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text';
 
 /**
  * How the page takes ink.
@@ -15,11 +15,14 @@ export const BOARD_MODES: BoardMode[] = ['strips', 'multi', 'free'];
 export interface Stroke {
   id: string;
   note_id: string;
-  tool: 'pen' | 'highlighter';
+  /** 'text': a text box. Its points are [x, y, 0] (top-left), width is the font size. */
+  tool: 'pen' | 'highlighter' | 'text';
   color: string;
   width: number;
   /** Flat list: x0, y0, p0, x1, y1, p1, ... (p = pressure 0..1) */
   points: number[];
+  /** Text boxes only. */
+  text?: string;
   created_at?: string;
 }
 
@@ -59,6 +62,8 @@ export interface Settings {
   smoothing: number;
   /** The shape the shape tool draws. */
   shape: ShapeKind;
+  /** Font size for new text boxes (page units). */
+  textSize: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -74,6 +79,7 @@ export const DEFAULT_SETTINGS: Settings = {
   highlighterWidth: 22,
   smoothing: 0.25,
   shape: 'rectangle',
+  textSize: 28,
 };
 
 /**
