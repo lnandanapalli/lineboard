@@ -7,6 +7,7 @@ import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { dropdown, type Dropdown } from './menu';
+import { isApple, withShortcut } from './keys';
 import { debounce, dialog, h, lsGet, lsSet, toast } from './util';
 
 const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
@@ -170,20 +171,21 @@ export class App {
     });
 
     const tools = h('div', { class: 'group' });
-    for (const [t, icon, label] of [
-      ['pen', icons.pen, 'Pen'],
-      ['highlighter', icons.highlighter, 'Highlighter'],
-      ['eraser', icons.eraser, 'Eraser'],
+    for (const [t, icon, label, key] of [
+      ['pen', icons.pen, 'Pen', 'P'],
+      ['highlighter', icons.highlighter, 'Highlighter', 'H'],
+      ['eraser', icons.eraser, 'Eraser', 'E'],
     ] as const) {
       const b = this.iconBtn(icon, label, () => this.setTool(t), 'tool');
+      b.title = withShortcut(label, key);
       this.toolBtns.set(t, b);
       tools.append(b);
     }
     this.swatches = h('div', { class: 'group swatches' });
     this.widths = h('div', { class: 'group widths' });
 
-    this.undoBtn = this.iconBtn(icons.undo, 'Undo (Ctrl+Z)', () => this.undo());
-    this.redoBtn = this.iconBtn(icons.redo, 'Redo (Ctrl+Shift+Z)', () => this.redo());
+    this.undoBtn = this.iconBtn(icons.undo, withShortcut('Undo', 'Mod+Z'), () => this.undo());
+    this.redoBtn = this.iconBtn(icons.redo, withShortcut('Redo', isApple ? 'Mod+Shift+Z' : 'Mod+Y'), () => this.redo());
 
     this.modeMenu = dropdown<BoardMode>({
       name: 'Mode',
@@ -215,8 +217,8 @@ export class App {
       (this.stripControls = h(
         'div',
         { class: 'group strip-controls' },
-        this.iconBtn(icons.up, 'Previous strip (Up arrow)', () => this.board.stepLine(-1)),
-        this.iconBtn(icons.down, 'Next strip (Down arrow)', () => this.board.stepLine(1)),
+        this.iconBtn(icons.up, withShortcut('Previous strip', 'Up'), () => this.board.stepLine(-1)),
+        this.iconBtn(icons.down, withShortcut('Next strip', 'Down'), () => this.board.stepLine(1)),
         this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
       )),
       h('div', { class: 'spacer' }),

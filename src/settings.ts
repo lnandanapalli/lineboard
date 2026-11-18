@@ -7,6 +7,7 @@ import { confirmItsYou, SecurityPane } from './securityUi';
 import type { Store } from './store/store';
 import type { AppUser, Settings } from './types';
 import { dialog, h, toast } from './util';
+import { isApple, shortcut } from './keys';
 
 type Section = 'account' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
@@ -429,13 +430,22 @@ export class SettingsPanel {
         h(
           'dl',
           { class: 'shortcuts' },
-          ...[
-            ['P / H / E', 'Pen, highlighter, eraser'],
-            ['Ctrl+Z / Ctrl+Shift+Z', 'Undo, redo'],
-            ['Up / Down', 'Previous / next strip'],
-            ['M', 'Multi-strip'],
-            ['F', 'Free whiteboard'],
-          ].flatMap(([k, v]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, v)]),
+          ...(
+            [
+              [['P'], 'Pen'],
+              [['H'], 'Highlighter'],
+              [['E'], 'Eraser'],
+              [['Mod+Z'], 'Undo'],
+              [isApple ? ['Mod+Shift+Z'] : ['Mod+Y', 'Mod+Shift+Z'], 'Redo'],
+              [['Up', 'Down'], 'Previous / next strip'],
+              [['PageUp', 'PageDown'], 'Scroll the page'],
+              [['M'], 'Strips ↔ Multi-strip'],
+              [['F'], 'Free whiteboard on / off'],
+            ] as [string[], string][]
+          ).flatMap(([combos, what]) => [
+            h('dt', {}, ...combos.flatMap((c, i) => [i ? ' ' : null, h('kbd', {}, shortcut(c))])),
+            h('dd', {}, what),
+          ]),
         ),
       ),
     ];
