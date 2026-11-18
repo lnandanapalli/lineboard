@@ -459,6 +459,7 @@ export class SettingsPanel {
               [['P'], 'Pen'],
               [['H'], 'Highlighter'],
               [['E'], 'Eraser'],
+              [['S'], 'Shapes (hold Shift for square, circle, 45°)'],
               [['Mod+Z'], 'Undo'],
               [isApple ? ['Mod+Shift+Z'] : ['Mod+Y', 'Mod+Shift+Z'], 'Redo'],
               [['Up', 'Down'], 'Previous / next strip'],

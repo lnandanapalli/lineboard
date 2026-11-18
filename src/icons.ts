@@ -28,5 +28,10 @@ export const icons = {
   info: svg('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
   hand: svg('<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>'),
   rotate: svg('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/><rect x="9" y="9" width="6" height="6" rx="1"/>'),
+  shapeLine: svg('<path d="M5 19 19 5"/>'),
+  shapeArrow: svg('<path d="M5 19 19 5"/><path d="M10 5h9v9"/>'),
+  shapeRectangle: svg('<rect x="4" y="6" width="16" height="12" rx="1"/>'),
+  shapeEllipse: svg('<ellipse cx="12" cy="12" rx="9" ry="7"/>'),
+  shapeTriangle: svg('<path d="M12 4 21 20H3Z"/>'),
   close: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
 };

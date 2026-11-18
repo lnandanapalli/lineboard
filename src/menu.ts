@@ -36,6 +36,8 @@ export function dropdown<T extends string>(opts: {
   onSelect: (value: T) => void;
   /** Hide the text label on narrow toolbars (CSS decides); the icon always shows. */
   className?: string;
+  /** Call onSelect even when the current option is picked again (e.g. to switch to that tool). */
+  reselect?: boolean;
 }): Dropdown<T> {
   let value = opts.value;
   const btn = h('button', {
@@ -98,7 +100,7 @@ export function dropdown<T extends string>(opts: {
       }
       item.addEventListener('click', () => {
         close();
-        if (o.value !== value) opts.onSelect(o.value);
+        if (o.value !== value || opts.reselect) opts.onSelect(o.value);
       });
       menu.append(item);
     }

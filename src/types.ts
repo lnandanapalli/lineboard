@@ -1,4 +1,6 @@
-export type Tool = 'pen' | 'highlighter' | 'eraser';
+import { SHAPES, type ShapeKind } from './shapes';
+
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape';
 
 /**
  * How the page takes ink.
@@ -55,6 +57,8 @@ export interface Settings {
   highlighterWidth: number;
   /** Stroke smoothing, 0 (off) to 1 (strong). Steadies shaky lines as they are drawn. */
   smoothing: number;
+  /** The shape the shape tool draws. */
+  shape: ShapeKind;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -69,6 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
   highlighterColor: '#fde047',
   highlighterWidth: 22,
   smoothing: 0.25,
+  shape: 'rectangle',
 };
 
 /**
@@ -80,6 +85,7 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
+  if (!SHAPES.includes(out.shape)) out.shape = 'rectangle';
   return out;
 }
 

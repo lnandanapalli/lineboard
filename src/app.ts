@@ -5,6 +5,7 @@ import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
+import type { ShapeKind } from './shapes';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
@@ -57,6 +58,7 @@ export class App {
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private modeMenu!: Dropdown<BoardMode>;
+  private shapeMenu!: Dropdown<ShapeKind>;
   /** The last strip mode, so F (free on/off) returns to it. */
   private lastStripMode: BoardMode = 'strips';
   private stripControls!: HTMLElement;
@@ -188,6 +190,25 @@ export class App {
       this.toolBtns.set(t, b);
       tools.append(b);
     }
+    this.shapeMenu = dropdown<ShapeKind>({
+      name: 'Shape',
+      className: 'shape-btn',
+      value: this.settings.shape,
+      reselect: true,
+      onSelect: (k) => {
+        this.settings.shape = k;
+        this.settingsChanged();
+        this.setTool('shape');
+      },
+      options: [
+        { value: 'line', label: 'Line', icon: icons.shapeLine, description: 'Hold Shift to snap to 45°.' },
+        { value: 'arrow', label: 'Arrow', icon: icons.shapeArrow, description: 'Hold Shift to snap to 45°.' },
+        { value: 'rectangle', label: 'Rectangle', icon: icons.shapeRectangle, description: 'Hold Shift for a square.' },
+        { value: 'ellipse', label: 'Ellipse', icon: icons.shapeEllipse, description: 'Hold Shift for a circle.' },
+        { value: 'triangle', label: 'Triangle', icon: icons.shapeTriangle },
+      ],
+    });
+    tools.append(this.shapeMenu.el);
     this.swatches = h('div', { class: 'group swatches' });
     this.sizeBtn = h('button', { class: 'size-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
     this.sizeBtn.addEventListener('click', () => this.openSizePicker());
@@ -329,6 +350,7 @@ export class App {
         if (e.key === 'p') this.setTool('pen');
         if (e.key === 'h') this.setTool('highlighter');
         if (e.key === 'e') this.setTool('eraser');
+        if (e.key === 's') this.setTool('shape');
         if (e.key === 'm' && this.settings.mode !== 'free') this.setMode(this.settings.mode === 'multi' ? 'strips' : 'multi');
         if (e.key === 'f') this.setMode(this.settings.mode === 'free' ? this.lastStripMode : 'free');
       }
@@ -383,6 +405,8 @@ export class App {
 
   private renderToolOptions() {
     for (const [t, b] of this.toolBtns) b.classList.toggle('active', t === this.tool);
+    this.shapeMenu.el.classList.toggle('active', this.tool === 'shape');
+    this.shapeMenu.set(this.settings.shape);
     const isHL = this.tool === 'highlighter';
     const colors = isHL ? HL_COLORS : PEN_COLORS;
     const cur = isHL ? this.settings.highlighterColor : this.settings.penColor;

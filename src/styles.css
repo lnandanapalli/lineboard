@@ -470,3 +470,6 @@ html[data-rotation="270"] dialog[open] { rotate: 270deg; }
 html[data-rotation="90"] .modal, html[data-rotation="270"] .modal { width: min(600px, 94vh); max-height: 90vw; }
 html[data-rotation="90"] .modal.small, html[data-rotation="270"] .modal.small { width: min(400px, 92vh); }
 html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-modal { width: min(880px, 96vh); height: min(640px, 92vw); max-height: 92vw; }
+.dropdown-btn.shape-btn { border-color: transparent; border-radius: 9px; padding: 0 4px 0 8px; }
+.dropdown-btn.shape-btn .dropdown-label { display: none; }
+.dropdown-btn.shape-btn.active { background: var(--accent-soft); color: var(--accent); }

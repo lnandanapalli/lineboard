@@ -1,6 +1,7 @@
 import type { Settings, Stroke, Tool } from './types';
 import { uuid } from './util';
 import { appRect, clientToApp, deltaToApp } from './orientation';
+import { shapePoints } from './shapes';
 
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
@@ -36,12 +37,14 @@ interface Cached {
 interface ActiveInput {
   pointerId: number;
   pointerType: string;
-  kind: 'draw' | 'erase';
+  kind: 'draw' | 'erase' | 'shape';
   start: number;
   points: number[];
   erased: Cached[];
   /** The latest raw (unsmoothed) input point, so the stroke can end exactly where the pen lifted. */
   raw: [number, number, number] | null;
+  /** Shape tool: where the drag started, where it is now, and whether Shift is held. */
+  shape?: { x0: number; y0: number; x1: number; y1: number; constrain: boolean };
 }
 
 interface MarginDrag {
@@ -477,12 +480,17 @@ export class Board {
     this.active = {
       pointerId: e.pointerId,
       pointerType: e.pointerType,
-      kind: this.tool === 'eraser' ? 'erase' : 'draw',
+      kind: this.tool === 'eraser' ? 'erase' : this.tool === 'shape' ? 'shape' : 'draw',
       start: performance.now(),
       points: [],
       erased: [],
       raw: null,
     };
+    if (this.active.kind === 'shape') {
+      this.active.shape = { x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y, constrain: e.shiftKey };
+      this.invalidate('live');
+      return;
+    }
     this.addPoint(pt.x, pt.y, this.pressureOf(e));
   }
 
@@ -515,7 +523,12 @@ export class Board {
         return;
       }
       const pt = this.toLogical(ev.clientX, ev.clientY);
-      this.addPoint(pt.x, pt.y, this.pressureOf(ev));
+      if (a.shape) {
+        a.shape.x1 = pt.x;
+        a.shape.y1 = pt.y;
+        a.shape.constrain = ev.shiftKey;
+        this.invalidate('live');
+      } else this.addPoint(pt.x, pt.y, this.pressureOf(ev));
     }
   }
 
@@ -652,6 +665,11 @@ export class Board {
     return false;
   }
 
+  private shapeOf(a: ActiveInput): number[] {
+    const sh = a.shape!;
+    return shapePoints(this.settings.shape, sh.x0, sh.y0, sh.x1, sh.y1, sh.constrain);
+  }
+
   private cancelActive() {
     const a = this.active;
     if (!a) return;
@@ -676,6 +694,12 @@ export class Board {
       this.invalidate('live');
       return;
     }
+    if (a.shape) {
+      const { x0, y0, x1, y1 } = a.shape;
+      this.invalidate('live');
+      if (Math.hypot(x1 - x0, y1 - y0) < 3) return; // a tap, not a shape
+      a.points = this.shapeOf(a);
+    }
     if (!a.points.length) return;
     // Finish where the pen actually lifted (the stabilizer trails slightly behind it).
     if (a.raw && this.settings.smoothing > 0 && a.points.length >= 3) {
@@ -684,6 +708,7 @@ export class Board {
       if (Math.hypot(x - a.points[n - 3], y - a.points[n - 2]) >= MIN_POINT_DIST) a.points.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
     }
     const isHL = this.tool === 'highlighter';
+    // Shapes are pen strokes (see shapes.ts).
     const stroke: Stroke = {
       id: uuid(),
       note_id: this.noteId,
@@ -833,7 +858,8 @@ export class Board {
     ctx.clearRect(0, 0, this.live.width, this.live.height);
     this.setPageTransform(ctx);
     const a = this.active;
-    if (a && a.kind === 'draw' && a.points.length) {
+    const shapePts = a?.shape ? this.shapeOf(a) : null;
+    if (a && ((a.kind === 'draw' && a.points.length) || shapePts)) {
       const isHL = this.tool === 'highlighter';
       const tmp: Stroke = {
         id: '',
@@ -841,13 +867,13 @@ export class Board {
         tool: isHL ? 'highlighter' : 'pen',
         color: isHL ? this.settings.highlighterColor : this.settings.penColor,
         width: isHL ? this.settings.highlighterWidth : this.settings.penWidth,
-        points: a.points,
+        points: shapePts ?? a.points,
       };
       let pmin = 1,
         pmax = 0;
-      for (let i = 2; i < a.points.length; i += 3) {
-        pmin = Math.min(pmin, a.points[i]);
-        pmax = Math.max(pmax, a.points[i]);
+      for (let i = 2; i < tmp.points.length; i += 3) {
+        pmin = Math.min(pmin, tmp.points[i]);
+        pmax = Math.max(pmax, tmp.points[i]);
       }
       this.drawStroke(ctx, { s: tmp, minX: 0, minY: 0, maxX: 0, maxY: 0, variable: !isHL && pmax - pmin > 0.05, path: null });
     }
