@@ -47,4 +47,16 @@ jobs:
           curl -fsS http://localhost:8080/ | grep -q '<title>Lineboard</title>'
           curl -fsS http://localhost:8080/config.js | grep -q 'https://example.supabase.co'
           curl -fsSI http://localhost:8080/ | grep -qi 'content-security-policy'
+          # No CANONICAL_HOST: www is served, not redirected.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8080/app)" = 200
           docker rm -f lb
+      - name: Smoke test the www redirect
+        run: |
+          docker run -d --name lbc -p 8081:80 -e CANONICAL_HOST=example.com lineboard:ci
+          for i in $(seq 1 20); do curl -fsS http://localhost:8081/healthz && break; sleep 1; done
+          out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: www.example.com' 'http://localhost:8081/app?x=1')
+          echo "$out"; test "$out" = "301 https://example.com/app?x=1"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: example.com' http://localhost:8081/app)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: myapp.azurewebsites.net' http://localhost:8081/healthz)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8081/healthz)" = 200
+          docker rm -f lbc

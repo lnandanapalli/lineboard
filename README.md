@@ -139,6 +139,12 @@ To enable accounts and sync, point Lineboard at a Supabase project:
 | --- | --- | --- |
 | `SUPABASE_URL` | `VITE_SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` (no path) |
 | `SUPABASE_ANON_KEY` | `VITE_SUPABASE_ANON_KEY` | Anon or publishable key |
+| `CANONICAL_HOST` (optional) | (not used) | The one address to serve, e.g. `example.com`. The other spelling (`www.example.com`, or the reverse) gets a permanent redirect to it. |
+
+Serve the app from one address. Browsers keep sign-ins, notes made without an account, the remembered
+encryption key and passkey origins separately for `example.com` and `www.example.com`, so set
+`CANONICAL_HOST` if both reach the site. The site's platform hostname (e.g. `*.azurewebsites.net`) is not
+redirected, and neither is `/healthz` on any hostname.
 
 For development, copy `.env.example` to `.env.local`. Never use the `service_role` / secret key.
 
