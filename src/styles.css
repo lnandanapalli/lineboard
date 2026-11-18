@@ -444,3 +444,18 @@ kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px sol
 .dropdown-text small:empty { display: none; }
 .dropdown-item kbd { margin-top: 1px; }
 @media (max-width: 1100px) { .mode-btn .dropdown-label { display: none; } .dropdown-btn { padding: 0 6px 0 8px; } }
+
+/* ----- Size button and picker ----- */
+.size-btn { width: 40px; height: 40px; flex: none; border: 0; border-radius: 9px; background: transparent; display: grid; place-items: center; cursor: pointer; }
+.size-btn:hover, .size-btn[aria-expanded=true] { background: var(--accent-soft); }
+.size-dot { display: block; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.08); }
+.popover {
+  position: fixed; z-index: 60; padding: 14px; width: min(260px, calc(100vw - 16px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.16);
+}
+.size-picker { display: flex; flex-direction: column; gap: 10px; }
+.size-preview { width: 100%; height: 45px; background: #fafafa; border-radius: 8px; }
+.size-picker .range output { min-width: 34px; text-align: right; }
+.size-presets { display: flex; gap: 6px; }
+.size-presets .btn { flex: 1; height: 34px; padding: 0 6px; font-size: 13px; }
+.size-presets .btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }

@@ -6,14 +6,17 @@ import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
-import { dropdown, type Dropdown } from './menu';
+import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
 import { debounce, dialog, h, lsGet, lsSet, toast } from './util';
 
 const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
 const HL_COLORS = ['#fde047', '#86efac', '#f9a8d4', '#93c5fd'];
-const PEN_WIDTHS = [2, 3.5, 6];
-const HL_WIDTHS = [14, 22, 32];
+/** Size ranges (page units; the page is 1000 wide) and quick presets for each tool. */
+const SIZES = {
+  pen: { min: 1, max: 24, step: 0.5, presets: [2, 3.5, 6] },
+  highlighter: { min: 6, max: 60, step: 1, presets: [14, 22, 32] },
+};
 
 type Action = { type: 'add' | 'remove'; strokes: Stroke[] };
 
@@ -49,7 +52,7 @@ export class App {
   private titleInput!: HTMLInputElement;
   private toolBtns = new Map<Tool, HTMLButtonElement>();
   private swatches!: HTMLElement;
-  private widths!: HTMLElement;
+  private sizeBtn!: HTMLButtonElement;
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private modeMenu!: Dropdown<BoardMode>;
@@ -182,7 +185,8 @@ export class App {
       tools.append(b);
     }
     this.swatches = h('div', { class: 'group swatches' });
-    this.widths = h('div', { class: 'group widths' });
+    this.sizeBtn = h('button', { class: 'size-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+    this.sizeBtn.addEventListener('click', () => this.openSizePicker());
 
     this.undoBtn = this.iconBtn(icons.undo, withShortcut('Undo', 'Mod+Z'), () => this.undo());
     this.redoBtn = this.iconBtn(icons.redo, withShortcut('Redo', isApple ? 'Mod+Shift+Z' : 'Mod+Y'), () => this.redo());
@@ -209,7 +213,7 @@ export class App {
       h('div', { class: 'sep' }),
       tools,
       this.swatches,
-      this.widths,
+      this.sizeBtn,
       h('div', { class: 'sep' }),
       h('div', { class: 'group' }, this.undoBtn, this.redoBtn),
       h('div', { class: 'sep' }),
@@ -384,27 +388,94 @@ export class App {
         return b;
       }),
     );
-    const ws = isHL ? HL_WIDTHS : PEN_WIDTHS;
-    const curW = isHL ? this.settings.highlighterWidth : this.settings.penWidth;
-    this.widths.replaceChildren(
-      ...ws.map((w, i) => {
-        const b = h('button', { class: 'width-btn' + (w === curW ? ' active' : ''), type: 'button', 'aria-label': ['Thin', 'Medium', 'Thick'][i], title: ['Thin', 'Medium', 'Thick'][i] });
-        const dot = h('i');
-        const px = 4 + i * 4;
-        dot.style.width = dot.style.height = px + 'px';
-        b.append(dot);
-        b.addEventListener('click', () => {
-          if (isHL) this.settings.highlighterWidth = w;
-          else this.settings.penWidth = w;
-          this.settingsChanged();
-          this.renderToolOptions();
-        });
+    this.renderSizeButton();
+    const hide = this.tool === 'eraser';
+    this.swatches.style.display = hide ? 'none' : '';
+    this.sizeBtn.style.display = hide ? 'none' : '';
+  }
+
+  /** The size of the pen or highlighter (whichever is in use). */
+  private get sizeTool(): 'pen' | 'highlighter' {
+    return this.tool === 'highlighter' ? 'highlighter' : 'pen';
+  }
+  private get size() {
+    return this.sizeTool === 'highlighter' ? this.settings.highlighterWidth : this.settings.penWidth;
+  }
+  private set size(w: number) {
+    if (this.sizeTool === 'highlighter') this.settings.highlighterWidth = w;
+    else this.settings.penWidth = w;
+  }
+
+  /** Toolbar button: a dot drawn at the current size (capped so it fits). */
+  private renderSizeButton() {
+    const { min, max } = SIZES[this.sizeTool];
+    const w = this.size;
+    const px = 4 + ((w - min) / (max - min)) * 16;
+    this.sizeBtn.innerHTML = '';
+    const dot = h('i', { class: 'size-dot' });
+    dot.style.width = dot.style.height = `${px}px`;
+    if (this.sizeTool === 'highlighter') dot.style.background = this.settings.highlighterColor;
+    else dot.style.background = this.settings.penColor;
+    this.sizeBtn.append(dot);
+    const label = `${this.sizeTool === 'highlighter' ? 'Highlighter' : 'Pen'} size: ${w}`;
+    this.sizeBtn.setAttribute('aria-label', label);
+    this.sizeBtn.title = label;
+  }
+
+  private openSizePicker() {
+    if (this.sizeBtn.getAttribute('aria-expanded') === 'true') {
+      closeOpenMenu();
+      return;
+    }
+    const tool = this.sizeTool;
+    const cfg = SIZES[tool];
+    const isHL = tool === 'highlighter';
+    const color = isHL ? this.settings.highlighterColor : this.settings.penColor;
+    const slider = h('input', { type: 'range', min: String(cfg.min), max: String(cfg.max), step: String(cfg.step), 'aria-label': `${isHL ? 'Highlighter' : 'Pen'} size` }) as HTMLInputElement;
+    slider.value = String(this.size);
+    const value = h('output', { class: 'size-value' });
+    const preview = h('canvas', { class: 'size-preview', width: '440', height: '90', 'aria-hidden': 'true' }) as HTMLCanvasElement;
+    const draw = () => {
+      const ctx = preview.getContext('2d')!;
+      const w = Number(slider.value);
+      value.textContent = String(w);
+      ctx.clearRect(0, 0, preview.width, preview.height);
+      // Same scale as the board, so the preview matches what you will get on this screen.
+      const k = (document.querySelector('.canvas-area')?.clientWidth ?? PAGE_W) / PAGE_W;
+      ctx.save();
+      ctx.scale(2, 2); // canvas is drawn at 2x for sharpness
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(0.5, w * k);
+      if (isHL) ctx.globalAlpha = 0.38;
+      ctx.beginPath();
+      ctx.moveTo(18, 30);
+      ctx.bezierCurveTo(70, 5, 110, 45, 160, 22);
+      ctx.bezierCurveTo(185, 12, 200, 20, 205, 24);
+      ctx.stroke();
+      ctx.restore();
+    };
+    const set = (w: number) => {
+      slider.value = String(w);
+      this.size = w;
+      this.settingsChanged();
+      this.renderSizeButton();
+      for (const b of presets.children) b.classList.toggle('active', Number((b as HTMLElement).dataset.w) === w);
+      draw();
+    };
+    slider.addEventListener('input', () => set(Number(slider.value)));
+    const presets = h(
+      'div',
+      { class: 'size-presets' },
+      ...cfg.presets.map((w, i) => {
+        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, ['Thin', 'Medium', 'Thick'][i]);
+        b.addEventListener('click', () => set(w));
         return b;
       }),
     );
-    const hide = this.tool === 'eraser';
-    this.swatches.style.display = hide ? 'none' : '';
-    this.widths.style.display = hide ? 'none' : '';
+    draw();
+    popover(this.sizeBtn, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${isHL ? 'Highlighter' : 'Pen'} size` });
   }
 
   private settingsChanged() {

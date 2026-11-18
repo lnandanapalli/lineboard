@@ -125,3 +125,50 @@ export function dropdown<T extends string>(opts: {
     close,
   };
 }
+
+/**
+ * A panel anchored under a toolbar button (size slider, colour picker...). Closes on outside
+ * press, Escape or resize. Only one popover/menu is open at a time.
+ */
+export function popover(anchor: HTMLElement, content: HTMLElement, opts: { label: string; onClose?: () => void }) {
+  openMenu?.close();
+  const panel = h('div', { class: 'popover', role: 'dialog', 'aria-label': opts.label }, content);
+  document.body.append(panel);
+  const r = anchor.getBoundingClientRect();
+  panel.style.top = `${r.bottom + 6}px`;
+  panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, window.innerWidth - panel.offsetWidth - 8))}px`;
+  anchor.setAttribute('aria-expanded', 'true');
+  const onOutside = (e: PointerEvent) => {
+    if (!panel.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      anchor.focus();
+    }
+  };
+  function close() {
+    if (!panel.isConnected) return;
+    panel.remove();
+    anchor.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', onOutside, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', close);
+    if (openMenu?.close === close) openMenu = null;
+    opts.onClose?.();
+  }
+  document.addEventListener('pointerdown', onOutside, true);
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', close);
+  openMenu = { close };
+  panel.querySelector<HTMLElement>('input, button')?.focus();
+  return { close, panel };
+}
+
+/** Is a popover/menu open (so a second press on its button should just close it)? */
+export const closeOpenMenu = () => {
+  const had = !!openMenu;
+  openMenu?.close();
+  return had;
+};
