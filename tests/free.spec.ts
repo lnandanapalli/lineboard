@@ -125,3 +125,16 @@ test('settings saved before the mode menu (freeMode: true) open in free mode', a
   await attachBoard(page);
   await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Free whiteboard');
 });
+
+test('arrow keys in an open menu move through it without stepping strips', async ({ page }) => {
+  await setup(page);
+  await expect(page.getByLabel('Lock strip 1', { exact: true })).toBeAttached();
+  await modeButton(page).click();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowUp');
+  await expect(page.getByRole('menuitemradio', { name: /^Multi-strip/ })).toBeFocused();
+  await expect(page.getByLabel('Lock strip 1', { exact: true })).toBeAttached(); // still strip 1
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+});

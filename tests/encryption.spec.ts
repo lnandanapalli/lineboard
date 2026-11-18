@@ -64,6 +64,7 @@ test('turning on encryption encrypts existing notes, and another device must unl
   const db = await mockSupabase(page);
   await signIn(page);
   const { cdp, geo } = await attachBoard(page);
+  await expect(page.locator('.title-input')).not.toHaveValue(''); // the first note has opened
   await page.locator('.title-input').fill('Secret plans');
   await page.locator('.title-input').press('Enter');
   await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));

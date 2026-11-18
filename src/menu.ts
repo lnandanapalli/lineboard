@@ -63,12 +63,15 @@ export function dropdown<T extends string>(opts: {
     if (!menu) return;
     const items = [...menu.querySelectorAll<HTMLButtonElement>('[role=menuitemradio]')];
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    // Keys the menu handles must not also reach the board's shortcuts (arrows step strips).
     if (e.key === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
       close();
       btn.focus();
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
+      e.stopPropagation();
       const n = (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
       items[n]?.focus();
     } else if (e.key === 'Tab') close();
@@ -153,6 +156,7 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: { label
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
       close();
       anchor.focus();
     }

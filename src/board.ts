@@ -99,6 +99,8 @@ const UNLOCK_SVG =
 
 export const TEXT_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 export const TEXT_LINE = 1.25;
+/** Longest text box the database accepts (strokes.text check in supabase/schema.sql). */
+export const MAX_TEXT = 10000;
 let measureCtx: CanvasRenderingContext2D | null = null;
 /** Width and height (page units) of a text box. */
 function textBox(text: string, size: number) {
@@ -841,6 +843,7 @@ export class Board {
     el.setAttribute('aria-label', 'Text');
     el.spellcheck = true;
     el.wrap = 'off';
+    el.maxLength = MAX_TEXT;
     el.value = original?.s.text ?? '';
     this.area.append(el);
     this.editor = { el, x, y, size, color, original };
@@ -882,6 +885,11 @@ export class Board {
     });
   }
 
+  /** Save a text box that is still being typed (e.g. the page is about to close). */
+  finishText() {
+    this.commitText();
+  }
+
   /** Remove the editor without saving. */
   private closeEditor() {
     const ed = this.editor;
@@ -895,7 +903,9 @@ export class Board {
   private commitText() {
     const ed = this.editor;
     if (!ed) return;
-    const text = ed.el.value.replace(/\s+$/, '');
+    // The database keeps up to MAX_TEXT characters per box; never send more (it would be refused,
+    // and an edit would already have queued the old box's removal).
+    const text = ed.el.value.replace(/\s+$/, '').slice(0, MAX_TEXT);
     this.closeEditor();
     const old = ed.original;
     if (old && text === old.s.text) return;

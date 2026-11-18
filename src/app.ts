@@ -88,6 +88,7 @@ export class App {
     window.addEventListener(
       'beforeunload',
       (e) => {
+        this.board.finishText();
         if (this.queue.pending) {
           e.preventDefault();
           e.returnValue = '';
@@ -96,7 +97,16 @@ export class App {
       { signal: this.abort.signal },
     );
     // Settings are saved to the store shortly after the last change; don't lose that when the tab closes.
-    window.addEventListener('pagehide', () => this.saveSettingsDebounced.flush(), { signal: this.abort.signal });
+    // Before the tab goes away: save settings now, and finish a text box still being typed (its text
+    // goes into the persistent save queue, so it is not lost on reload).
+    window.addEventListener(
+      'pagehide',
+      () => {
+        this.board.finishText();
+        this.saveSettingsDebounced.flush();
+      },
+      { signal: this.abort.signal },
+    );
     void this.init();
   }
 
@@ -338,6 +348,7 @@ export class App {
 
   private bindKeys() {
     window.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented) return; // already handled (an open menu, a text box...)
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const mod = e.ctrlKey || e.metaKey;

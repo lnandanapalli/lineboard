@@ -111,3 +111,22 @@ test('text boxes sync to the account and come back after a reload', async ({ pag
   await tap(cdp, geo.areaX + 125, stripY(geo, 0));
   await expect(page.locator('textarea.text-editor')).toHaveValue('Synced');
 });
+
+test('a text box still being typed is saved when the page reloads', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  await tap(cdp, geo.areaX + 120, stripY(geo, 0));
+  await page.keyboard.type('Draft');
+  await page.reload();
+  await page.locator('.canvas-area canvas.live').waitFor();
+  await expect.poll(() => texts(page)).toEqual(['Draft']);
+});
+
+test('text longer than the database allows is capped instead of being refused', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  await tap(cdp, geo.areaX + 120, stripY(geo, 0));
+  await page.locator('textarea.text-editor').fill('x'.repeat(10050));
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await texts(page))[0]?.length).toBe(10000);
+});
