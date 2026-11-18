@@ -41,7 +41,7 @@ interface Cached {
 interface ActiveInput {
   pointerId: number;
   pointerType: string;
-  kind: 'draw' | 'erase' | 'shape';
+  kind: 'draw' | 'erase' | 'shape' | 'lasso' | 'move';
   start: number;
   points: number[];
   erased: Cached[];
@@ -49,6 +49,33 @@ interface ActiveInput {
   raw: [number, number, number] | null;
   /** Shape tool: where the drag started, where it is now, and whether Shift is held. */
   shape?: { x0: number; y0: number; x1: number; y1: number; constrain: boolean };
+  /** Select tool: the loop being drawn, or how far the selection has been dragged. */
+  lasso?: number[];
+  move?: { x0: number; y0: number; dx: number; dy: number };
+}
+
+/** Is (x, y) inside the polygon [x0, y0, x1, y1, ...]? (ray casting) */
+function inPolygon(poly: number[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const xi = poly[i], yi = poly[i + 1], xj = poly[j], yj = poly[j + 1];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** A copy of a stroke moved by (dx, dy); `id` defaults to the same one. */
+function moved(s: Stroke, dx: number, dy: number, id = s.id): Stroke {
+  const p = s.points.slice();
+  if (s.tool === 'text') {
+    p[0] = Math.round((p[0] + dx) * 10) / 10;
+    p[1] = Math.round((p[1] + dy) * 10) / 10;
+  } else
+    for (let i = 0; i < p.length; i += 3) {
+      p[i] = Math.round((p[i] + dx) * 10) / 10;
+      p[i + 1] = Math.round((p[i + 1] + dy) * 10) / 10;
+    }
+  return { ...s, id, points: p };
 }
 
 interface MarginDrag {
@@ -134,6 +161,9 @@ export class Board {
   /** Two-finger gesture: the page point under the fingers stays under them while they move and pinch. */
   private pan: { startDist: number; startZoom: number; anchorX: number; anchorY: number } | null = null;
   private eraserCursor: { x: number; y: number } | null = null;
+  /** Select tool: the selected strokes, and the Delete / Duplicate bar shown above them. */
+  private selection = new Set<Cached>();
+  private selectBar: HTMLElement | null = null;
   /** Text box being typed (new, or editing an existing one). */
   private editor: { el: HTMLTextAreaElement; x: number; y: number; size: number; color: string; original: Cached | null } | null = null;
 
@@ -174,12 +204,23 @@ export class Board {
   // ----------------------------- public API -----------------------------
 
   setStrokes(noteId: string, strokes: Stroke[]) {
-    this.commitText();
+    // The same note reloading (its saved strokes arriving after it opened) keeps a text box being
+    // typed; a different note finishes it first.
+    const sameNote = noteId === this.noteId && !!this.editor;
+    if (!sameNote) this.commitText();
+    this.clearSelection();
     this.cancelActive();
     this.noteId = noteId;
     this.strokes = [];
     this.byId.clear();
     for (const s of strokes) this.cache(s);
+    if (sameNote) {
+      // Keep the place on the page, and point an edit at the freshly loaded copy of its text box.
+      const ed = this.editor!;
+      if (ed.original) ed.original = this.byId.get(ed.original.s.id) ?? null;
+      this.invalidate('bg', 'ink', 'live', 'margin');
+      return;
+    }
     this.scrollY = 0;
     // Unlock the first empty strip after existing content, so you can continue where you left off.
     const H = this.settings.stripHeight;
@@ -198,6 +239,8 @@ export class Board {
 
   removeStrokes(ids: string[]) {
     const set = new Set(ids);
+    for (const c of this.selection) if (set.has(c.s.id)) this.selection.delete(c);
+    this.invalidate('live');
     if (this.editor?.original && set.has(this.editor.original.s.id)) this.closeEditor();
     this.strokes = this.strokes.filter((c) => !set.has(c.s.id));
     for (const id of ids) this.byId.delete(id);
@@ -234,6 +277,7 @@ export class Board {
 
   setTool(t: Tool) {
     if (t !== 'text') this.commitText();
+    if (t !== 'select') this.clearSelection();
     this.tool = t;
     this.eraserCursor = null;
     this.invalidate('live');
@@ -458,7 +502,8 @@ export class Board {
     // from treating a sideways stroke as a gesture, such as swipe-to-go-back navigation.
     // (Pointer events, which do the drawing, still arrive.)
     const block = (e: TouchEvent) => {
-      if (e.target instanceof HTMLTextAreaElement) return; // let the text box take taps (caret, selection)
+      // Let the text box (caret, selection) and the selection's buttons take taps.
+      if ((e.target as Element | null)?.closest?.('textarea, .select-bar')) return;
       if (e.cancelable) e.preventDefault();
     };
     this.el.addEventListener('touchstart', block, { passive: false });
@@ -566,6 +611,24 @@ export class Board {
     } catch {
       /* ignore */
     }
+    if (this.tool === 'select') {
+      // Inside the current selection: drag it. Elsewhere: start a new lasso.
+      const b = this.selectionBox();
+      const inside = b && pt.x >= b.minX && pt.x <= b.maxX && pt.y >= b.minY && pt.y <= b.maxY;
+      if (!inside) this.clearSelection();
+      this.active = {
+        pointerId: e.pointerId,
+        pointerType: e.pointerType,
+        kind: inside ? 'move' : 'lasso',
+        start: performance.now(),
+        points: [],
+        erased: [],
+        raw: null,
+        ...(inside ? { move: { x0: pt.x, y0: pt.y, dx: 0, dy: 0 } } : { lasso: [pt.x, pt.y] }),
+      };
+      this.invalidate('ink', 'live');
+      return;
+    }
     this.active = {
       pointerId: e.pointerId,
       pointerType: e.pointerType,
@@ -612,6 +675,18 @@ export class Board {
         return;
       }
       const pt = this.toLogical(ev.clientX, ev.clientY);
+      if (a.move) {
+        a.move.dx = pt.x - a.move.x0;
+        a.move.dy = pt.y - a.move.y0;
+        this.invalidate('live');
+        continue;
+      }
+      if (a.lasso) {
+        const n = a.lasso.length;
+        if (Math.hypot(pt.x - a.lasso[n - 2], pt.y - a.lasso[n - 1]) >= 2) a.lasso.push(pt.x, pt.y);
+        this.invalidate('live');
+        continue;
+      }
       if (a.shape) {
         a.shape.x1 = pt.x;
         a.shape.y1 = pt.y;
@@ -723,7 +798,10 @@ export class Board {
     if (!hit.length) return;
     const ids = new Set(hit.map((h) => h.s.id));
     this.strokes = this.strokes.filter((c) => !ids.has(c.s.id));
-    for (const h of hit) this.byId.delete(h.s.id);
+    for (const h of hit) {
+      this.byId.delete(h.s.id);
+      this.selection.delete(h);
+    }
     a.erased.push(...hit);
     this.invalidate('ink');
   }
@@ -845,6 +923,130 @@ export class Board {
     else this.cb.onStrokesAdded([stroke]);
   }
 
+  // ----------------------------- selection -----------------------------
+
+  hasSelection() {
+    return this.selection.size > 0;
+  }
+
+  clearSelection() {
+    if (!this.selection.size) return;
+    this.selection.clear();
+    this.invalidate('ink', 'live');
+  }
+
+  private selectionBox() {
+    if (!this.selection.size) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of this.selection) {
+      minX = Math.min(minX, c.minX);
+      minY = Math.min(minY, c.minY);
+      maxX = Math.max(maxX, c.maxX);
+      maxY = Math.max(maxY, c.maxY);
+    }
+    const pad = 6;
+    return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  }
+
+  /** A loop selects strokes that are mostly inside it; a tap selects the stroke under it. */
+  private finishLasso(poly: number[]) {
+    this.invalidate('live');
+    let w = 0, h = 0;
+    for (let i = 2; i < poly.length; i += 2) {
+      w = Math.max(w, Math.abs(poly[i] - poly[0]));
+      h = Math.max(h, Math.abs(poly[i + 1] - poly[1]));
+    }
+    if (poly.length < 8 || (w < 8 && h < 8)) {
+      const hit = [...this.strokes].reverse().find((c) => this.strokeHit(c, poly[0], poly[1], 6));
+      if (hit) this.selection = new Set([hit]);
+      this.invalidate('ink', 'live');
+      return;
+    }
+    for (const c of this.strokes) {
+      if (c.s.tool === 'text') {
+        if (inPolygon(poly, (c.minX + c.maxX) / 2, (c.minY + c.maxY) / 2)) this.selection.add(c);
+        continue;
+      }
+      const p = c.s.points;
+      const n = p.length / 3;
+      const step = Math.max(1, Math.floor(n / 40));
+      let inside = 0, total = 0;
+      for (let i = 0; i < n; i += step) {
+        total++;
+        if (inPolygon(poly, p[i * 3], p[i * 3 + 1])) inside++;
+      }
+      if (inside / total >= 0.6) this.selection.add(c);
+    }
+    this.invalidate('ink', 'live');
+  }
+
+  private finishMove(dx: number, dy: number) {
+    this.invalidate('ink', 'live');
+    if (Math.hypot(dx, dy) < 1) return;
+    const before = [...this.selection].map((c) => c.s);
+    const after = before.map((s) => moved(s, dx, dy));
+    this.replaceCached(before, after);
+    this.cb.onStrokesReplaced(before, after);
+  }
+
+  /** Swap cached strokes for new versions and keep them selected. */
+  private replaceCached(before: Stroke[], after: Stroke[]) {
+    const ids = new Set(before.map((s) => s.id));
+    this.strokes = this.strokes.filter((c) => !ids.has(c.s.id));
+    for (const id of ids) this.byId.delete(id);
+    this.selection = new Set(after.map((s) => this.cache(s)));
+    this.invalidate('ink', 'bg', 'live', 'margin');
+  }
+
+  deleteSelection() {
+    if (!this.selection.size) return;
+    const gone = [...this.selection];
+    const ids = new Set(gone.map((c) => c.s.id));
+    this.strokes = this.strokes.filter((c) => !ids.has(c.s.id));
+    for (const id of ids) this.byId.delete(id);
+    this.selection.clear();
+    this.invalidate('ink', 'live');
+    this.cb.onStrokesRemoved(gone.map((c) => c.s));
+  }
+
+  duplicateSelection() {
+    if (!this.selection.size) return;
+    const copies = [...this.selection].map((c) => moved(c.s, 24, 24, uuid()));
+    for (const s of copies) s.created_at = new Date().toISOString();
+    this.selection = new Set(copies.map((s) => this.cache(s)));
+    this.invalidate('ink', 'bg', 'live', 'margin');
+    this.cb.onStrokesAdded(copies);
+  }
+
+  /** The Delete / Duplicate bar floats above the selection. */
+  private positionSelectBar(box: { minX: number; minY: number; maxX: number } | null) {
+    if (!box || this.active?.kind === 'move') {
+      this.selectBar?.remove();
+      this.selectBar = null;
+      return;
+    }
+    if (!this.selectBar) {
+      const bar = document.createElement('div');
+      bar.className = 'select-bar';
+      const btn = (label: string, fn: () => void) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.addEventListener('pointerdown', (e) => e.stopPropagation());
+        b.addEventListener('click', fn);
+        return b;
+      };
+      bar.append(btn('Duplicate', () => this.duplicateSelection()), btn('Delete', () => this.deleteSelection()));
+      this.area.append(bar);
+      this.selectBar = bar;
+    }
+    const s = this.scale;
+    const left = ((box.minX + box.maxX) / 2 - this.scrollX) * s;
+    const top = (box.minY - this.scrollY) * s;
+    this.selectBar.style.left = `${Math.max(8, Math.min(left, this.viewW - 8))}px`;
+    this.selectBar.style.top = `${Math.max(8, top - 46)}px`;
+  }
+
   private shapeOf(a: ActiveInput): number[] {
     const sh = a.shape!;
     return shapePoints(this.settings.shape, sh.x0, sh.y0, sh.x1, sh.y1, sh.constrain);
@@ -868,6 +1070,8 @@ export class Board {
   private finish() {
     const a = this.active!;
     this.active = null;
+    if (a.lasso) return this.finishLasso(a.lasso);
+    if (a.move) return this.finishMove(a.move.dx, a.move.dy);
     if (a.kind === 'erase') {
       if (this.tool === 'eraser' && a.pointerType !== 'mouse') this.eraserCursor = null;
       if (a.erased.length) this.cb.onStrokesRemoved(a.erased.map((c) => c.s));
@@ -952,9 +1156,10 @@ export class Board {
     const H = this.settings.stripHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (this.free) {
-      // Plain whiteboard: white page, no strips, lines or locks.
+      // Whiteboard: white page, no strips or locks, with the chosen paper.
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, this.viewW, this.viewH);
+      this.drawPaper(ctx);
       return;
     }
     if (this.split) {
@@ -1004,6 +1209,39 @@ export class Board {
     }
   }
 
+  /** Free whiteboard paper: ruled lines, a grid or dots that scroll and zoom with the page. */
+  private drawPaper(ctx: CanvasRenderingContext2D) {
+    const paper = this.settings.paper;
+    if (paper === 'plain') return;
+    const s = this.scale;
+    const gap = paper === 'lines' ? this.settings.stripHeight / 2 : 40; // page units
+    const x0 = Math.floor(this.scrollX / gap) * gap;
+    const y0 = Math.floor(this.scrollY / gap) * gap;
+    const x1 = this.scrollX + this.viewW / s;
+    const y1 = this.scrollY + this.viewH / s;
+    const sx = (x: number) => Math.round((x - this.scrollX) * s) + 0.5;
+    const sy = (y: number) => Math.round((y - this.scrollY) * s) + 0.5;
+    if (paper === 'dots') {
+      ctx.fillStyle = '#c3cbd6';
+      const r = Math.max(1, 1.2 * Math.min(2, s));
+      for (let y = y0; y <= y1; y += gap) for (let x = x0; x <= x1; x += gap) ctx.fillRect(sx(x) - r / 2, sy(y) - r / 2, r, r);
+      return;
+    }
+    ctx.strokeStyle = '#e1e6ed';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let y = y0; y <= y1; y += gap) {
+      ctx.moveTo(0, sy(y));
+      ctx.lineTo(this.viewW, sy(y));
+    }
+    if (paper === 'grid')
+      for (let x = x0; x <= x1; x += gap) {
+        ctx.moveTo(sx(x), 0);
+        ctx.lineTo(sx(x), this.viewH);
+      }
+    ctx.stroke();
+  }
+
   private setPageTransform(ctx: CanvasRenderingContext2D) {
     const k = this.scale * this.dpr;
     ctx.setTransform(k, 0, 0, k, -this.scrollX * k, -this.scrollY * k);
@@ -1017,8 +1255,9 @@ export class Board {
     const y0 = this.scrollY;
     const y1 = this.scrollY + this.viewH / this.scale;
     const hidden = this.editor?.original;
+    const dragging = this.active?.kind === 'move';
     for (const c of this.strokes) {
-      if (c.maxY < y0 || c.minY > y1 || c === hidden) continue;
+      if (c.maxY < y0 || c.minY > y1 || c === hidden || (dragging && this.selection.has(c))) continue;
       this.drawStroke(ctx, c);
     }
   }
@@ -1089,6 +1328,34 @@ export class Board {
       }
       this.drawStroke(ctx, { s: tmp, minX: 0, minY: 0, maxX: 0, maxY: 0, variable: !isHL && pmax - pmin > 0.05, path: null });
     }
+    if (a?.lasso && a.lasso.length >= 4) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(a.lasso[0], a.lasso[1]);
+      for (let i = 2; i < a.lasso.length; i += 2) ctx.lineTo(a.lasso[i], a.lasso[i + 1]);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(37, 99, 235, 0.06)';
+      ctx.fill();
+      ctx.setLineDash([6 / this.scale, 5 / this.scale]);
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.strokeStyle = '#2563eb';
+      ctx.stroke();
+      ctx.restore();
+    }
+    const box = this.selectionBox();
+    if (box) {
+      const dx = a?.move?.dx ?? 0;
+      const dy = a?.move?.dy ?? 0;
+      ctx.save();
+      ctx.translate(dx, dy);
+      if (a?.move) for (const c of this.selection) this.drawStroke(ctx, c);
+      ctx.setLineDash([6 / this.scale, 4 / this.scale]);
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.strokeStyle = '#2563eb';
+      ctx.strokeRect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+      ctx.restore();
+    }
+    this.positionSelectBar(box);
     if (this.tool === 'eraser' && this.eraserCursor) {
       ctx.beginPath();
       ctx.arc(this.eraserCursor.x, this.eraserCursor.y, ERASER_RADIUS, 0, Math.PI * 2);

@@ -5,7 +5,7 @@ import { SupabaseStore } from './store/supabaseStore';
 import type { AccountSecurity } from './account';
 import { confirmItsYou, SecurityPane } from './securityUi';
 import type { Store } from './store/store';
-import type { AppUser, Settings } from './types';
+import type { AppUser, Paper, Settings } from './types';
 import { dialog, h, toast } from './util';
 import { isApple, shortcut } from './keys';
 import { orientation } from './orientation';
@@ -222,6 +222,22 @@ export class SettingsPanel {
       updStrip();
       this.host.changed();
     });
+    const paper = h(
+      'select',
+      { 'aria-label': 'Free whiteboard paper' },
+      ...(
+        [
+          ['plain', 'Plain'],
+          ['lines', 'Lined'],
+          ['grid', 'Grid'],
+          ['dots', 'Dots'],
+        ] as const
+      ).map(([v, l]) => h('option', { value: v }, l)),
+    ) as HTMLSelectElement;
+    paper.addEventListener('change', () => {
+      s().paper = paper.value as Paper;
+      this.host.changed();
+    });
     const smooth = h('input', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Smoothing' }) as HTMLInputElement;
     const smoothVal = h('output');
     const smoothText = (v: number) => (v === 0 ? 'Off' : v < 0.2 ? 'Light' : v < 0.5 ? 'Medium' : v < 0.8 ? 'Strong' : 'Very strong');
@@ -241,6 +257,7 @@ export class SettingsPanel {
       strip.value = String(s().stripHeight);
       updStrip();
       side.value = s().marginSide;
+      paper.value = s().paper;
       smooth.value = String(s().smoothing);
       smoothVal.textContent = smoothText(s().smoothing);
     });
@@ -252,6 +269,7 @@ export class SettingsPanel {
         this.row('Lock icons on the', side),
         lines,
       ),
+      this.card('Free whiteboard', this.row('Paper', paper, 'The background of the free whiteboard (Mode menu → Free whiteboard).')),
       this.card(
         'Ink',
         this.row('Smoothing', h('div', { class: 'range' }, smooth, smoothVal), 'Steadies shaky lines as you write. Turn it down if strokes feel like they lag behind the pen.'),
@@ -461,6 +479,8 @@ export class SettingsPanel {
               [['E'], 'Eraser'],
               [['S'], 'Shapes (hold Shift for square, circle, 45°)'],
               [['T'], 'Text (tap to type; Escape finishes)'],
+              [['V'], 'Select: draw a loop, drag to move'],
+              [['Delete'], 'Delete the selection'],
               [['Mod+Z'], 'Undo'],
               [isApple ? ['Mod+Shift+Z'] : ['Mod+Y', 'Mod+Shift+Z'], 'Redo'],
               [['Up', 'Down'], 'Previous / next strip'],

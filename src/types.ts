@@ -1,6 +1,6 @@
 import { SHAPES, type ShapeKind } from './shapes';
 
-export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text';
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text' | 'select';
 
 /**
  * How the page takes ink.
@@ -67,7 +67,12 @@ export interface Settings {
   textSize: number;
   /** Split mode: where the divider sits, as a fraction of the board's height. */
   splitRatio: number;
+  /** The free whiteboard's paper. */
+  paper: Paper;
 }
+
+export type Paper = 'plain' | 'lines' | 'grid' | 'dots';
+export const PAPERS: Paper[] = ['plain', 'lines', 'grid', 'dots'];
 
 export const DEFAULT_SETTINGS: Settings = {
   stripHeight: 90,
@@ -84,6 +89,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shape: 'rectangle',
   textSize: 28,
   splitRatio: 0.5,
+  paper: 'plain',
 };
 
 /**
@@ -96,6 +102,7 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
   if (!SHAPES.includes(out.shape)) out.shape = 'rectangle';
+  if (!PAPERS.includes(out.paper)) out.paper = 'plain';
   return out;
 }
 

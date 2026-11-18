@@ -188,6 +188,7 @@ export class App {
       ['highlighter', icons.highlighter, 'Highlighter', 'H'],
       ['eraser', icons.eraser, 'Eraser', 'E'],
       ['text', icons.text, 'Text', 'T'],
+      ['select', icons.lasso, 'Select', 'V'],
     ] as const) {
       const b = this.iconBtn(icon, label, () => this.setTool(t), 'tool');
       b.title = withShortcut(label, key);
@@ -362,6 +363,12 @@ export class App {
         if (e.key === 'e') this.setTool('eraser');
         if (e.key === 's') this.setTool('shape');
         if (e.key === 't') this.setTool('text');
+        if (e.key === 'v') this.setTool('select');
+        if ((e.key === 'Delete' || e.key === 'Backspace') && this.board.hasSelection()) {
+          e.preventDefault();
+          this.board.deleteSelection();
+        }
+        if (e.key === 'Escape') this.board.clearSelection();
         if (e.key === 'm' && this.settings.mode !== 'free') this.setMode(this.settings.mode === 'multi' ? 'strips' : 'multi');
         if (e.key === 'f') this.setMode(this.settings.mode === 'free' ? this.lastStripMode : 'free');
       }
@@ -436,22 +443,29 @@ export class App {
     const isHL = this.tool === 'highlighter';
     const colors = isHL ? HL_COLORS : PEN_COLORS;
     const cur = isHL ? this.settings.highlighterColor : this.settings.penColor;
-    this.swatches.replaceChildren(
-      ...colors.map((c) => {
-        const b = h('button', { class: 'swatch' + (c === cur ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, title: c });
-        b.style.setProperty('--c', c);
-        b.addEventListener('click', () => {
-          if (isHL) this.settings.highlighterColor = c;
-          else this.settings.penColor = c;
-          if (this.tool === 'eraser') this.setTool('pen');
-          this.settingsChanged();
-          this.renderToolOptions();
-        });
-        return b;
-      }),
-    );
+    const pick = (c: string) => {
+      if (isHL) this.settings.highlighterColor = c;
+      else this.settings.penColor = c;
+      if (this.tool === 'eraser' || this.tool === 'select') this.setTool('pen');
+      this.settingsChanged();
+      this.renderToolOptions();
+    };
+    const swatch = (c: string) => {
+      const b = h('button', { class: 'swatch' + (c.toLowerCase() === cur.toLowerCase() ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, title: c });
+      b.style.setProperty('--c', c);
+      b.addEventListener('click', () => pick(c));
+      return b;
+    };
+    // A colour chosen with the picker shows as its own swatch after the palette.
+    const custom = colors.some((c) => c.toLowerCase() === cur.toLowerCase()) ? null : swatch(cur);
+    const picker = h('input', { type: 'color', class: 'color-input', 'aria-label': 'Custom colour', tabindex: '-1' }) as HTMLInputElement;
+    picker.value = /^#[0-9a-f]{6}$/i.test(cur) ? cur : '#000000';
+    picker.addEventListener('input', () => pick(picker.value));
+    const more = h('label', { class: 'swatch-more', title: 'Custom colour' }, picker);
+    more.insertAdjacentHTML('beforeend', icons.plus);
+    this.swatches.replaceChildren(...colors.map(swatch), ...(custom ? [custom] : []), more);
     this.renderSizeButton();
-    const hide = this.tool === 'eraser';
+    const hide = this.tool === 'eraser' || this.tool === 'select';
     this.swatches.style.display = hide ? 'none' : '';
     this.sizeBtn.style.display = hide ? 'none' : '';
   }

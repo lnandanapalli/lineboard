@@ -102,9 +102,12 @@ test('text boxes sync to the account and come back after a reload', async ({ pag
 
   await page.reload();
   ({ cdp, geo } = await attachBoard(page));
-  // After a reload the first empty strip below the content is unlocked; unlock strip 0 to edit.
+  // Once the note has loaded, the first empty strip below the content is unlocked; unlock strip 0 to edit.
+  await expect(page.getByLabel('Lock strip 2', { exact: true })).toBeAttached();
   await tapMargin(cdp, geo, 0);
+  await expect(page.getByLabel('Lock strip 1', { exact: true })).toBeAttached(); // strip 0 is the unlocked one now
   await page.keyboard.press('t');
+  await expect(page.getByRole('button', { name: 'Text', exact: true })).toHaveClass(/active/); // after the schema check
   await tap(cdp, geo.areaX + 125, stripY(geo, 0));
   await expect(page.locator('textarea.text-editor')).toHaveValue('Synced');
 });
