@@ -87,7 +87,7 @@ export class SecurityPane {
     this.passwordCard.replaceChildren(
       h('h4', {}, 'Password'),
       h('p', { class: 'muted' }, 'Changing your password signs you out on every other device.'),
-      h('div', { class: 'set-buttons' }, this.btn('Change password', () => void changePasswordDialog(this.account))),
+      h('div', { class: 'set-buttons' }, this.btn('Change password', () => void changePasswordDialog(this.account, this.email))),
     );
   }
 
@@ -109,7 +109,7 @@ export class SecurityPane {
             ok: 'Remove',
             danger: true,
           });
-          if (!ok) return;
+          if (!ok || !(await confirmItsYou(this.account, this.email))) return;
           try {
             await this.account.removeAuthenticator(f.id);
             toast(last ? 'Two-step verification is off.' : 'Authenticator removed.');
@@ -126,6 +126,7 @@ export class SecurityPane {
         );
       });
       const add = this.btn(list.length ? 'Add another authenticator' : 'Set up authenticator app', async () => {
+        if (!(await confirmItsYou(this.account, this.email))) return;
         if (await addAuthenticatorDialog(this.account, list.length)) void this.renderMfa();
         void this.renderDevices();
       }, list.length ? '' : 'primary');
@@ -189,7 +190,7 @@ export class SecurityPane {
             ok: 'Remove',
             danger: true,
           });
-          if (!ok) return;
+          if (!ok || !(await confirmItsYou(this.account, this.email))) return;
           try {
             await this.account.removePasskey(p.id);
             toast('Passkey removed.');
@@ -206,6 +207,7 @@ export class SecurityPane {
         );
       });
       const add = this.btn('Add a passkey', async () => {
+        if (!(await confirmItsYou(this.account, this.email))) return;
         const guess = navigator.userAgent ? describeDevice(navigator.userAgent) : 'Passkey';
         const name = await dialog({ title: 'Add a passkey', message: 'Give it a name you will recognise, then follow your browser’s prompt.', input: guess, ok: 'Continue' });
         if (name === null) return;
@@ -292,26 +294,114 @@ export class SecurityPane {
 
 // ----------------------------- dialogs -----------------------------
 
-export async function changePasswordDialog(account: AccountSecurity) {
+/**
+ * Ask for the account password (or an authenticator code) before a risky change, unless the user
+ * confirmed in the last few minutes. Resolves false if they cancel.
+ */
+export async function confirmItsYou(account: AccountSecurity, email: string | null, why = 'This change affects how your account is protected.'): Promise<boolean> {
+  if (account.recentlyConfirmed) return true;
+  const factors = await account.authenticators().catch(() => []);
+  const d = new StepDialog('confirm-dialog');
+  let ok = false;
+
+  const withPassword = () => {
+    const pass = passInput('current-password');
+    const err = errorLine();
+    const go = button(
+      'Confirm',
+      'primary',
+      () => {
+        if (!pass.value) return err.set('Enter your password.');
+        if (!email) return err.set('This account has no email address to check the password against.');
+        void busy(go, 'Checking...', err, async () => {
+          await account.verifyPassword(email, pass.value);
+          ok = true;
+          d.close();
+        });
+      },
+      'submit',
+    );
+    const alt = factors.length ? button('Use a code from your authenticator app instead', 'link-btn', withCode) : null;
+    d.show(
+      h('h3', {}, 'Confirm it’s you'),
+      h('p', {}, why + ' Enter your password to continue.'),
+      h('form', { class: 'enc-form' }, field('Password', pass), err.el, alt, actions(button('Cancel', '', () => d.close()), go)),
+      factors.length ? null : h('small', { class: 'muted' }, 'Signed up with an email link or a passkey and never set a password? Set one first with Change password.'),
+    );
+  };
+
+  const withCode = () => {
+    const code = codeInput();
+    const err = errorLine();
+    const go = button(
+      'Confirm',
+      'primary',
+      () => {
+        const problem = codeProblem(code.value);
+        if (problem) return err.set(problem);
+        void busy(go, 'Checking...', err, async () => {
+          await account.confirmWithCode(factors[0].id, code.value);
+          ok = true;
+          d.close();
+        });
+      },
+      'submit',
+    );
+    d.show(
+      h('h3', {}, 'Confirm it’s you'),
+      h('p', {}, why + ' Enter the 6-digit code from your authenticator app.'),
+      h('form', { class: 'enc-form' }, field('6-digit code', code), err.el, button('Use your password instead', 'link-btn', withPassword), actions(button('Cancel', '', () => d.close()), go)),
+    );
+  };
+
+  withPassword();
+  await d.closed;
+  return ok;
+}
+
+export async function changePasswordDialog(account: AccountSecurity, email: string | null) {
   const d = new StepDialog();
+  const current = passInput('current-password');
   const a = passInput('new-password');
   const b = passInput('new-password');
   const others = check('Sign out all other devices', true);
   const code = codeInput();
   const codeField = field('Confirmation code from your email', code);
   codeField.hidden = true;
+  const currentField = field('Current password', current);
   const err = errorLine();
+  /** Accounts without a password (email link / passkey sign-up) confirm with an emailed code instead. */
+  let byEmail = false;
+  const noPassword = button('No password yet, or forgot it? Email me a code instead', 'link-btn', () => {
+    void busy(noPassword, 'Sending...', err, async () => {
+      await account.sendPasswordCode();
+      byEmail = true;
+      currentField.hidden = true;
+      noPassword.hidden = true;
+      codeField.hidden = false;
+      code.focus();
+      err.set('');
+      toast(email ? `Code sent to ${email}.` : 'Code sent.');
+    });
+  });
   const go = button(
     'Change password',
     'primary',
     () => {
+      if (!byEmail && !current.value) return err.set('Enter your current password.');
       if (a.value.length < MIN_PASSWORD) return err.set(`Use at least ${MIN_PASSWORD} characters.`);
-      if (a.value !== b.value) return err.set('The two passwords do not match.');
+      if (a.value !== b.value) return err.set('The two new passwords do not match.');
+      if (!codeField.hidden && !/^\d{6,10}$/.test(cleanCode(code.value))) return err.set('Enter the code from the email.');
       void busy(go, 'Saving...', err, async () => {
         try {
-          await account.changePassword(a.value, { nonce: codeField.hidden ? undefined : cleanCode(code.value), signOutOthers: others.input.checked });
+          if (!codeField.hidden) await account.changePassword(a.value, { nonce: cleanCode(code.value) }, { signOutOthers: others.input.checked });
+          else await account.changePassword(a.value, { currentPassword: current.value, email: email ?? '' }, { signOutOthers: others.input.checked });
         } catch (e) {
+          // The project wants an emailed code too (old session and "secure password change" on).
           if (e instanceof AccountError && e.code === 'reauthentication_needed') {
+            byEmail = true;
+            currentField.hidden = true;
+            noPassword.hidden = true;
             codeField.hidden = false;
             code.focus();
           }
@@ -326,8 +416,20 @@ export async function changePasswordDialog(account: AccountSecurity) {
   d.show(
     h('h3', {}, 'Change password'),
     h('p', {}, 'This is the password you sign in with. If you use end-to-end encryption, your encryption passphrase does not change.'),
-    h('form', { class: 'enc-form' }, field('New password', a, `At least ${MIN_PASSWORD} characters.`), field('Type it again', b), codeField, others.el, err.el, actions(button('Cancel', '', () => d.close()), go)),
+    h(
+      'form',
+      { class: 'enc-form' },
+      currentField,
+      noPassword,
+      codeField,
+      field('New password', a, `At least ${MIN_PASSWORD} characters.`),
+      field('Type the new password again', b),
+      others.el,
+      err.el,
+      actions(button('Cancel', '', () => d.close()), go),
+    ),
   );
+  current.focus();
   await d.closed;
 }
 

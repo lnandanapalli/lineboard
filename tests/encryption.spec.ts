@@ -30,6 +30,10 @@ async function openSecurity(page: Page) {
 async function enableEncryption(page: Page): Promise<string> {
   await openSecurity(page);
   await page.getByRole('switch', { name: 'End-to-end encryption' }).click();
+  // Turning encryption on asks for the account password first.
+  const confirm = page.locator('dialog.confirm-dialog');
+  await confirm.locator('input[type=password]').fill('secret123');
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
   const dlg = page.locator('dialog.enc-wizard');
   await expect(dlg).toContainText('Turn on end-to-end encryption?');
   await dlg.getByRole('button', { name: 'Continue' }).click();

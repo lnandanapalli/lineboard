@@ -1,3 +1,4 @@
+import { config } from './config';
 import { isAuthSessionMissingError, type Factor, type SupabaseClient } from '@supabase/supabase-js';
 
 /**
@@ -79,25 +80,81 @@ export class AccountSecurity {
     return null;
   }
 
+  // ----------------------------- confirming it's you -----------------------------
+
+  /**
+   * When the user last proved who they are (password or authenticator code) on this page. Risky
+   * actions (new passkey, two-step changes, encryption) need a recent proof, so someone who picks up
+   * an unlocked device can't quietly add their own way into the account.
+   */
+  private confirmedAt = 0;
+  static readonly CONFIRM_WINDOW_MS = 5 * 60_000;
+
+  get recentlyConfirmed() {
+    return Date.now() - this.confirmedAt < AccountSecurity.CONFIRM_WINDOW_MS;
+  }
+
+  /**
+   * Check the account password without touching this device's session: sign in on the side, then
+   * end that extra session straight away.
+   */
+  async verifyPassword(email: string, password: string) {
+    const base = config.supabaseUrl.replace(/\/+$/, '') + '/auth/v1';
+    const headers = { apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}`, 'Content-Type': 'application/json' };
+    let res: Response;
+    try {
+      res = await fetch(`${base}/token?grant_type=password`, { method: 'POST', headers, body: JSON.stringify({ email, password }) });
+    } catch {
+      throw new AccountError('Could not reach the server. Check your connection and try again.');
+    }
+    if (res.status === 429) throw new AccountError('Too many attempts. Wait a minute and try again.', 'over_request_rate_limit');
+    if (!res.ok) throw new AccountError('That password is not right.', 'invalid_credentials');
+    const { access_token } = (await res.json()) as { access_token?: string };
+    if (access_token) {
+      await fetch(`${base}/logout?scope=local`, { method: 'POST', headers: { ...headers, Authorization: `Bearer ${access_token}` } }).catch(() => {});
+    }
+    this.confirmedAt = Date.now();
+  }
+
+  /** Prove it's you with a code from an authenticator app (two-step verification users). */
+  async confirmWithCode(factorId: string, code: string) {
+    await this.verifyCode(factorId, code);
+    this.confirmedAt = Date.now();
+  }
+
   // ----------------------------- password -----------------------------
 
   /**
-   * Set a new password and, by default, sign out every other device. When the project requires a
-   * recent sign-in ("secure password change"), the first call throws code "reauthentication_needed"
-   * after emailing a code; call again with that code as `nonce`.
+   * Set a new password and, by default, sign out every other device. Needs proof: the current
+   * password (checked here, and by the server too when "require current password" is on), or the
+   * code from `sendPasswordCode()` for accounts that never had a password.
    */
-  async changePassword(password: string, opts: { nonce?: string; signOutOthers?: boolean } = {}) {
-    const { error } = await this.sb.auth.updateUser({ password, ...(opts.nonce ? { nonce: opts.nonce } : {}) });
+  async changePassword(
+    password: string,
+    proof: { currentPassword: string; email: string } | { nonce: string },
+    opts: { signOutOthers?: boolean } = {},
+  ) {
+    if ('currentPassword' in proof) await this.verifyPassword(proof.email, proof.currentPassword);
+    const { error } = await this.sb.auth.updateUser(
+      'currentPassword' in proof ? { password, current_password: proof.currentPassword } : { password, nonce: proof.nonce },
+    );
     if (error) {
       const code = (error as AnyErr)?.code;
       if (code === 'reauthentication_needed' || code === 'reauth_nonce_missing') {
-        const { error: re } = await this.sb.auth.reauthenticate();
-        if (re) fail(re, 'Could not send a confirmation code');
-        throw new AccountError('We emailed you a confirmation code. Enter it to change your password.', 'reauthentication_needed');
+        await this.sendPasswordCode();
+        throw new AccountError('For your security we emailed you a confirmation code as well. Enter it to change your password.', 'reauthentication_needed');
       }
+      if (code === 'reauthentication_not_valid' || code === 'otp_expired') fail(error, 'That code is not right or has expired.');
+      if (code === 'same_password') fail(error, 'The new password must be different from the current one.');
       fail(error, 'Could not change the password');
     }
     if (opts.signOutOthers !== false) await this.signOutOthers();
+  }
+
+  /** Email a one-time code that authorises a password change (for accounts without a password). */
+  async sendPasswordCode() {
+    const { error } = await this.sb.auth.reauthenticate();
+    if (error) fail(error, 'Could not send a confirmation code');
   }
 
   // ----------------------------- authenticator apps (TOTP) -----------------------------

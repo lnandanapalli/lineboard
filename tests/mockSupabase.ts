@@ -22,6 +22,8 @@ export interface MockDb {
   factors: Row[];
   passkeys: Row[];
   passwordChanges: number;
+  /** The account password (tests sign in with it). */
+  password: string;
 }
 
 export interface Session {
@@ -76,7 +78,7 @@ function paginate(url: URL, rows: Row[]) {
 
 /** Pass `shared` to give a second browser context (another device) the same database. */
 export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb> {
-  const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], passwordChanges: 0 };
+  const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], passwordChanges: 0, password: 'secret123' };
 
   await page.route('**/config.js', (r) =>
     r.fulfill({
@@ -149,12 +151,18 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
         if (!existing) return authError(route, 400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
         return json(route, 200, tokenResponse(existing));
       }
+      if (grant === 'password' && body()?.password !== db.password) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
       return json(route, 200, tokenResponse(newSession(ua)));
     }
     if (path === '/auth/v1/user') {
       if (!session) return authError(route, 403, 'session_not_found', 'Session from session_id claim in JWT does not exist');
       if (method === 'PUT') {
-        if (body()?.password) db.passwordChanges++;
+        const b = body() ?? {};
+        if (b.current_password !== undefined && b.current_password !== db.password) return authError(route, 400, 'invalid_credentials', 'Current password is incorrect');
+        if (b.password) {
+          db.password = b.password;
+          db.passwordChanges++;
+        }
         return json(route, 200, user());
       }
       return json(route, 200, user());

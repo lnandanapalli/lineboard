@@ -3,7 +3,7 @@ import { changePassphrase, disableEncryption, enableEncryption, replaceRecoveryK
 import { icons } from './icons';
 import { SupabaseStore } from './store/supabaseStore';
 import type { AccountSecurity } from './account';
-import { SecurityPane } from './securityUi';
+import { confirmItsYou, SecurityPane } from './securityUi';
 import type { Store } from './store/store';
 import type { AppUser, Settings } from './types';
 import { dialog, h, toast } from './util';
@@ -368,7 +368,11 @@ export class SettingsPanel {
     const ctx = { vault, store: store as SupabaseStore, email: this.host.user.email, noteCount: this.host.noteCount() };
     toggle.addEventListener('click', async () => {
       if (on) await disableEncryption(ctx);
-      else await enableEncryption(ctx);
+      else {
+        // Someone with an unlocked device must not be able to lock the owner out with their own passphrase.
+        if (this.host.account && !(await confirmItsYou(this.host.account, this.host.user.email, 'Encryption changes who can read your notes.'))) return;
+        await enableEncryption(ctx);
+      }
       this.renderSecurity();
     });
 
