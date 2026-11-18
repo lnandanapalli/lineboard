@@ -53,6 +53,8 @@ export interface Settings {
   penWidth: number;
   highlighterColor: string;
   highlighterWidth: number;
+  /** Stroke smoothing, 0 (off) to 1 (strong). Steadies shaky lines as they are drawn. */
+  smoothing: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -66,6 +68,7 @@ export const DEFAULT_SETTINGS: Settings = {
   penWidth: 3.5,
   highlighterColor: '#fde047',
   highlighterWidth: 22,
+  smoothing: 0.25,
 };
 
 /**

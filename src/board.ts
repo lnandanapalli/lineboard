@@ -39,6 +39,8 @@ interface ActiveInput {
   start: number;
   points: number[];
   erased: Cached[];
+  /** The latest raw (unsmoothed) input point, so the stroke can end exactly where the pen lifted. */
+  raw: [number, number, number] | null;
 }
 
 interface MarginDrag {
@@ -469,6 +471,7 @@ export class Board {
       start: performance.now(),
       points: [],
       erased: [],
+      raw: null,
     };
     this.addPoint(pt.x, pt.y, this.pressureOf(e));
   }
@@ -574,6 +577,17 @@ export class Board {
     const a = this.active!;
     const pts = a.points;
     const n = pts.length;
+    if (a.kind === 'draw') {
+      a.raw = [x, y, p];
+      // Stabilizer: each point moves only part of the way from the previous one towards the pen,
+      // which evens out tremor. 0 = off; at 1 the line trails the pen by ~85% per sample.
+      const k = Math.min(0.85, Math.max(0, this.settings.smoothing) * 0.85);
+      if (n >= 3 && k > 0) {
+        x = pts[n - 3] + (x - pts[n - 3]) * (1 - k);
+        y = pts[n - 2] + (y - pts[n - 2]) * (1 - k);
+        p = pts[n - 1] + (p - pts[n - 1]) * (1 - k);
+      }
+    }
     if (n >= 3) {
       const dx = x - pts[n - 3],
         dy = y - pts[n - 2];
@@ -653,6 +667,12 @@ export class Board {
       return;
     }
     if (!a.points.length) return;
+    // Finish where the pen actually lifted (the stabilizer trails slightly behind it).
+    if (a.raw && this.settings.smoothing > 0 && a.points.length >= 3) {
+      const [x, y, p] = a.raw;
+      const n = a.points.length;
+      if (Math.hypot(x - a.points[n - 3], y - a.points[n - 2]) >= MIN_POINT_DIST) a.points.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
+    }
     const isHL = this.tool === 'highlighter';
     const stroke: Stroke = {
       id: uuid(),

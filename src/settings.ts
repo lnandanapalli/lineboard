@@ -221,6 +221,14 @@ export class SettingsPanel {
       updStrip();
       this.host.changed();
     });
+    const smooth = h('input', { type: 'range', min: '0', max: '1', step: '0.05', 'aria-label': 'Smoothing' }) as HTMLInputElement;
+    const smoothVal = h('output');
+    const smoothText = (v: number) => (v === 0 ? 'Off' : v < 0.2 ? 'Light' : v < 0.5 ? 'Medium' : v < 0.8 ? 'Strong' : 'Very strong');
+    smooth.addEventListener('input', () => {
+      s().smoothing = Number(smooth.value);
+      smoothVal.textContent = smoothText(s().smoothing);
+      this.host.changed();
+    });
     const lines = this.toggle('Ruled lines', 'Show a line between strips.', () => s().showLines, (on) => (s().showLines = on));
     const side = h('select', {}, h('option', { value: 'left' }, 'Left (right-handed)'), h('option', { value: 'right' }, 'Right (left-handed)')) as HTMLSelectElement;
     side.addEventListener('change', () => {
@@ -232,6 +240,8 @@ export class SettingsPanel {
       strip.value = String(s().stripHeight);
       updStrip();
       side.value = s().marginSide;
+      smooth.value = String(s().smoothing);
+      smoothVal.textContent = smoothText(s().smoothing);
     });
 
     return [
@@ -240,6 +250,10 @@ export class SettingsPanel {
         this.row('Strip height', h('div', { class: 'range' }, strip, stripVal), 'Taller strips leave more room for big handwriting.'),
         this.row('Lock icons on the', side),
         lines,
+      ),
+      this.card(
+        'Ink',
+        this.row('Smoothing', h('div', { class: 'range' }, smooth, smoothVal), 'Steadies shaky lines as you write. Turn it down if strokes feel like they lag behind the pen.'),
       ),
       this.card(null, h('p', { class: 'muted' }, 'Choose Strips, Multi-strip or Free whiteboard from the Mode menu in the toolbar.')),
     ];
