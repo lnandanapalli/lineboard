@@ -1,8 +1,10 @@
 import type { Page, Route } from '@playwright/test';
 
 /**
- * A tiny in-memory stand-in for the Supabase endpoints Lineboard uses (auth + three tables),
+ * A tiny in-memory stand-in for the Supabase endpoints Lineboard uses (auth + its tables),
  * served through Playwright request interception. Lets tests cover signed-in flows with no real backend.
+ * Supports the PostgREST filters the app sends (eq, in, is.null, not.is.null), offset/limit, and the
+ * schema's rule that plaintext notes are refused once encryption is on.
  */
 
 export const MOCK_URL = 'https://mock-project.supabase.co';
@@ -14,6 +16,7 @@ export interface MockDb {
   notes: Row[];
   strokes: Row[];
   settings: Row | null;
+  keys: Row | null;
 }
 
 const cors = {
@@ -23,8 +26,32 @@ const cors = {
   'access-control-expose-headers': 'content-range',
 };
 
-export async function mockSupabase(page: Page): Promise<MockDb> {
-  const db: MockDb = { notebooks: [], notes: [], strokes: [], settings: null };
+const NOT_FILTERS = new Set(['select', 'order', 'offset', 'limit', 'on_conflict', 'columns']);
+
+/** Rows matching the request's column filters. */
+function matches(url: URL) {
+  const tests: ((r: Row) => boolean)[] = [];
+  for (const [col, raw] of url.searchParams) {
+    if (NOT_FILTERS.has(col)) continue;
+    if (raw.startsWith('eq.')) tests.push((r) => String(r[col]) === raw.slice(3));
+    else if (raw.startsWith('in.(')) {
+      const set = raw.slice(4, -1).split(',').map((x) => x.replace(/"/g, ''));
+      tests.push((r) => set.includes(String(r[col])));
+    } else if (raw === 'is.null') tests.push((r) => r[col] == null);
+    else if (raw === 'not.is.null') tests.push((r) => r[col] != null);
+  }
+  return (r: Row) => tests.every((t) => t(r));
+}
+
+function paginate(url: URL, rows: Row[]) {
+  const offset = Number(url.searchParams.get('offset') ?? 0);
+  const limit = url.searchParams.get('limit');
+  return rows.slice(offset, limit ? offset + Number(limit) : undefined);
+}
+
+/** Pass `shared` to give a second browser context (another device) the same database. */
+export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb> {
+  const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null };
 
   await page.route('**/config.js', (r) =>
     r.fulfill({
@@ -35,6 +62,7 @@ export async function mockSupabase(page: Page): Promise<MockDb> {
 
   const json = (route: Route, status: number, body: unknown, extra: Record<string, string> = {}) =>
     route.fulfill({ status, headers: { ...cors, 'content-type': 'application/json', ...extra }, body: JSON.stringify(body) });
+  const denied = (route: Route) => json(route, 403, { code: '42501', message: 'new row violates row-level security policy' });
 
   const user = {
     id: USER_ID,
@@ -45,6 +73,11 @@ export async function mockSupabase(page: Page): Promise<MockDb> {
     user_metadata: {},
     created_at: '2026-01-01T00:00:00Z',
   };
+
+  const encryptionRequired = () => db.keys?.state === 'on';
+  /** The schema's row-level security "with check" for encryption. */
+  const allowed = (table: 'notebooks' | 'notes' | 'strokes', r: Row) =>
+    !encryptionRequired() || !!r[{ notebooks: 'name_enc', notes: 'title_enc', strokes: 'enc' }[table]];
 
   await page.route(`${MOCK_URL}/**`, async (route) => {
     const req = route.request();
@@ -66,102 +99,93 @@ export async function mockSupabase(page: Page): Promise<MockDb> {
       const d = req.postData();
       return d ? JSON.parse(d) : null;
     };
-    const eqParam = (name: string) => url.searchParams.get(name)?.replace(/^eq\./, '');
-    const inParam = (name: string) =>
-      (url.searchParams.get(name) ?? '')
-        .replace(/^in\.\(|\)$/g, '')
-        .split(',')
-        .map((x) => x.replace(/"/g, ''));
-    const matchIds = (name: string) => {
-      const v = url.searchParams.get(name) ?? '';
-      return v.startsWith('in.') ? inParam(name) : [eqParam(name)];
-    };
     const prefer = req.headers()['prefer'] ?? '';
+    const match = matches(url);
+    const now = () => new Date().toISOString();
 
-    // ---- notebooks ----
-    if (path === '/rest/v1/notebooks') {
-      if (method === 'GET') return json(route, 200, [...db.notebooks].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))));
+    const cascadeNotes = (ids: unknown[]) => {
+      db.notes = db.notes.filter((n) => !ids.includes(n.id));
+      db.strokes = db.strokes.filter((s) => !ids.includes(s.note_id));
+    };
+
+    // ---- notebooks / notes ----
+    if (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') {
+      const table = path.endsWith('notebooks') ? 'notebooks' : 'notes';
+      const rows = () => db[table];
+      const set = (v: Row[]) => (db[table] = v);
+      if (method === 'GET') {
+        const sorted = [...rows()].sort((a, b) =>
+          table === 'notebooks' ? String(a.created_at).localeCompare(String(b.created_at)) : String(b.updated_at).localeCompare(String(a.updated_at)),
+        );
+        return json(route, 200, paginate(url, sorted.filter(match)));
+      }
       if (method === 'POST') {
-        const rows: Row[] = [body()].flat();
-        const saved = rows.map((r) => {
-          const now = new Date().toISOString();
-          const row = { id: r.id ?? crypto.randomUUID(), created_at: now, updated_at: now, ...r };
-          const exists = db.notebooks.some((b) => b.id === row.id);
-          if (exists && prefer.includes('ignore-duplicates')) return db.notebooks.find((b) => b.id === row.id)!;
-          db.notebooks = db.notebooks.filter((b) => b.id !== row.id).concat(row);
-          return row;
-        });
+        const incoming: Row[] = [body()].flat();
+        const saved: Row[] = [];
+        for (const r of incoming) {
+          const existing = rows().find((b) => b.id === r.id);
+          if (existing && prefer.includes('ignore-duplicates')) {
+            saved.push(existing);
+            continue;
+          }
+          const row = { id: r.id ?? crypto.randomUUID(), created_at: now(), updated_at: now(), ...(table === 'notes' ? { notebook_id: null } : {}), ...existing, ...r };
+          if (!allowed(table, row)) return denied(route);
+          set(rows().filter((b) => b.id !== row.id).concat(row));
+          saved.push(row);
+        }
         return wantsObject ? json(route, 201, saved[0]) : route.fulfill({ status: 201, headers: cors });
       }
       if (method === 'PATCH') {
-        const ids = matchIds('id');
-        db.notebooks = db.notebooks.map((b) => (ids.includes(String(b.id)) ? { ...b, ...body() } : b));
+        const patch = body();
+        const next = rows().map((b) => (match(b) ? { ...b, ...patch } : b));
+        if (next.some((b, i) => b !== rows()[i] && !allowed(table, b))) return denied(route);
+        set(next);
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {
-        const ids = matchIds('id');
-        const gone = db.notes.filter((n) => ids.includes(String(n.notebook_id))).map((n) => n.id);
-        db.notebooks = db.notebooks.filter((b) => !ids.includes(String(b.id)));
-        db.notes = db.notes.filter((n) => !gone.includes(n.id));
-        db.strokes = db.strokes.filter((st) => !gone.includes(st.note_id));
-        return route.fulfill({ status: 204, headers: cors });
-      }
-    }
-
-    // ---- notes ----
-    if (path === '/rest/v1/notes') {
-      if (method === 'GET') return json(route, 200, [...db.notes].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))));
-      if (method === 'POST') {
-        const rows: Row[] = [body()].flat();
-        const saved = rows.map((r) => {
-          const now = new Date().toISOString();
-          const row = { id: r.id ?? crypto.randomUUID(), notebook_id: null, created_at: now, updated_at: now, ...r };
-          db.notes = db.notes.filter((n) => n.id !== row.id).concat(row);
-          return row;
-        });
-        return wantsObject ? json(route, 201, saved[0]) : route.fulfill({ status: 201, headers: cors });
-      }
-      if (method === 'PATCH') {
-        const ids = matchIds('id');
-        db.notes = db.notes.map((n) => (ids.includes(String(n.id)) ? { ...n, ...body() } : n));
-        return route.fulfill({ status: 204, headers: cors });
-      }
-      if (method === 'DELETE') {
-        const id = eqParam('id');
-        db.notes = db.notes.filter((n) => n.id !== id);
-        db.strokes = db.strokes.filter((s) => s.note_id !== id);
+        const gone = rows().filter(match).map((r) => r.id);
+        set(rows().filter((r) => !match(r)));
+        if (table === 'notebooks') cascadeNotes(db.notes.filter((n) => gone.includes(n.notebook_id)).map((n) => n.id));
+        else cascadeNotes(gone);
         return route.fulfill({ status: 204, headers: cors });
       }
     }
 
     // ---- strokes ----
     if (path === '/rest/v1/strokes') {
-      if (method === 'GET') {
-        const noteId = eqParam('note_id');
-        const offset = Number(url.searchParams.get('offset') ?? 0);
-        const rows = offset ? [] : db.strokes.filter((s) => s.note_id === noteId);
-        return json(route, 200, rows);
-      }
+      if (method === 'GET') return json(route, 200, paginate(url, db.strokes.filter(match)));
       if (method === 'POST') {
-        for (const r of [body()].flat() as Row[]) db.strokes = db.strokes.filter((s) => s.id !== r.id).concat(r);
+        const incoming = [body()].flat() as Row[];
+        if (incoming.some((r) => !allowed('strokes', r))) return denied(route);
+        for (const r of incoming) db.strokes = db.strokes.filter((s) => s.id !== r.id).concat(r);
+        // touch_note trigger
+        for (const r of incoming) db.notes = db.notes.map((n) => (n.id === r.note_id ? { ...n, updated_at: now() } : n));
         return route.fulfill({ status: 201, headers: cors });
       }
       if (method === 'DELETE') {
-        const ids = (url.searchParams.get('id') ?? '').replace(/^in\.\(|\)$/g, '').split(',').map((x) => x.replace(/"/g, ''));
-        db.strokes = db.strokes.filter((s) => !ids.includes(String(s.id)));
+        db.strokes = db.strokes.filter((s) => !match(s));
         return route.fulfill({ status: 204, headers: cors });
       }
     }
 
-    // ---- user_settings ----
-    if (path === '/rest/v1/user_settings') {
+    // ---- user_settings / user_keys (one row per user) ----
+    if (path === '/rest/v1/user_settings' || path === '/rest/v1/user_keys') {
+      const k = path.endsWith('settings') ? 'settings' : 'keys';
       if (method === 'GET') {
-        if (wantsObject) return db.settings ? json(route, 200, db.settings) : json(route, 406, { code: 'PGRST116', message: 'no rows' });
-        return json(route, 200, db.settings ? [db.settings] : []);
+        if (wantsObject) return db[k] ? json(route, 200, db[k]) : json(route, 406, { code: 'PGRST116', message: 'no rows' });
+        return json(route, 200, db[k] ? [db[k]] : []);
       }
       if (method === 'POST') {
-        db.settings = [body()].flat()[0] as Row;
+        db[k] = [body()].flat()[0] as Row;
         return route.fulfill({ status: 201, headers: cors });
+      }
+      if (method === 'PATCH') {
+        if (db[k]) db[k] = { ...db[k], ...body() };
+        return route.fulfill({ status: 204, headers: cors });
+      }
+      if (method === 'DELETE') {
+        db[k] = null;
+        return route.fulfill({ status: 204, headers: cors });
       }
     }
 

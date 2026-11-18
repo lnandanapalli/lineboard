@@ -41,6 +41,40 @@ create table if not exists public.strokes (
 create index if not exists strokes_note_created_idx on public.strokes (note_id, created_at, id);
 create index if not exists strokes_user_idx on public.strokes (user_id);
 
+-- ------------- End-to-end encryption (optional, per user) -------------
+-- When a user turns encryption on, the app encrypts titles, names and ink on the device. Encrypted
+-- rows keep the ciphertext in *_enc columns and leave the plaintext columns empty (or null).
+alter table public.notebooks add column if not exists name_enc text check (char_length(name_enc) <= 4000);
+alter table public.notes     add column if not exists title_enc text check (char_length(title_enc) <= 4000);
+alter table public.strokes   add column if not exists enc text;
+alter table public.strokes alter column tool   drop not null;
+alter table public.strokes alter column color  drop not null;
+alter table public.strokes alter column width  drop not null;
+alter table public.strokes alter column points drop not null;
+alter table public.strokes drop constraint if exists strokes_payload_present;
+alter table public.strokes add constraint strokes_payload_present check (
+  enc is not null or (tool is not null and color is not null and width is not null and points is not null)
+);
+
+-- Wrapped copies of the user's data key. The key itself never reaches the server: one copy is
+-- encrypted with a key derived from the user's passphrase, the other with their recovery key.
+create table if not exists public.user_keys (
+  user_id           uuid primary key default auth.uid() references auth.users (id) on delete cascade,
+  state             text not null check (state in ('off', 'encrypting', 'on', 'decrypting')),
+  key_id            uuid not null,
+  kdf               jsonb not null,
+  pass_wrapped      text not null check (char_length(pass_wrapped) <= 1000),
+  recovery_wrapped  text not null check (char_length(recovery_wrapped) <= 1000),
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now()
+);
+
+-- True once the signed-in user's notes must be stored encrypted.
+create or replace function public.encryption_required() returns boolean
+language sql stable security invoker set search_path = '' as $$
+  select exists (select 1 from public.user_keys k where k.user_id = (select auth.uid()) and k.state = 'on')
+$$;
+
 create table if not exists public.user_settings (
   user_id     uuid primary key default auth.uid() references auth.users (id) on delete cascade,
   settings    jsonb not null default '{}'::jsonb,
@@ -68,12 +102,13 @@ alter table public.notebooks     enable row level security;
 alter table public.notes         enable row level security;
 alter table public.strokes       enable row level security;
 alter table public.user_settings enable row level security;
+alter table public.user_keys     enable row level security;
 
 drop policy if exists "own notebooks" on public.notebooks;
 create policy "own notebooks" on public.notebooks
   for all to authenticated
   using (user_id = (select auth.uid()))
-  with check (user_id = (select auth.uid()));
+  with check (user_id = (select auth.uid()) and (name_enc is not null or not (select public.encryption_required())));
 
 drop policy if exists "own notes" on public.notes;
 create policy "own notes" on public.notes
@@ -81,6 +116,7 @@ create policy "own notes" on public.notes
   using (user_id = (select auth.uid()))
   with check (
     user_id = (select auth.uid())
+    and (title_enc is not null or not (select public.encryption_required()))
     and (notebook_id is null
          or exists (select 1 from public.notebooks b where b.id = notebook_id and b.user_id = (select auth.uid())))
   );
@@ -91,6 +127,7 @@ create policy "own strokes" on public.strokes
   using (user_id = (select auth.uid()))
   with check (
     user_id = (select auth.uid())
+    and (enc is not null or not (select public.encryption_required()))
     and exists (select 1 from public.notes n where n.id = note_id and n.user_id = (select auth.uid()))
   );
 
@@ -100,6 +137,14 @@ create policy "own settings" on public.user_settings
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
 
+drop policy if exists "own keys" on public.user_keys;
+create policy "own keys" on public.user_keys
+  for all to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
+
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
-grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings to authenticated;
-revoke all on public.notebooks, public.notes, public.strokes, public.user_settings from anon;
+grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys to authenticated;
+revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys from anon;
+grant execute on function public.encryption_required() to authenticated;
+revoke execute on function public.encryption_required() from anon, public;

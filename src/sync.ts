@@ -13,6 +13,7 @@ export type SyncState = 'saved' | 'saving' | 'retrying';
 export class SyncQueue {
   private ops: Op[];
   private running = false;
+  private stopped = false;
   private wake: (() => void) | null = null;
   state: SyncState = 'saved';
   onState: (s: SyncState) => void = () => {};
@@ -24,6 +25,12 @@ export class SyncQueue {
     this.ops = lsGet<Op[]>(key, []);
     window.addEventListener('online', () => this.wake?.());
     if (this.ops.length) void this.run();
+  }
+
+  /** Stop saving (the app is being torn down); queued work stays persisted for the next queue. */
+  stop() {
+    this.stopped = true;
+    this.wake?.();
   }
 
   get pending() {
@@ -57,6 +64,7 @@ export class SyncQueue {
   }
 
   private push(op: Op) {
+    if (this.stopped) return;
     this.ops.push(op);
     this.persist();
     void this.run();
@@ -88,7 +96,7 @@ export class SyncQueue {
     if (this.running) return;
     this.running = true;
     let delay = 0;
-    while (this.ops.length) {
+    while (this.ops.length && !this.stopped) {
       this.setState(delay ? 'retrying' : 'saving');
       const op = this.ops[0];
       try {
@@ -111,6 +119,6 @@ export class SyncQueue {
       }
     }
     this.running = false;
-    this.setState('saved');
+    if (!this.stopped) this.setState('saved');
   }
 }

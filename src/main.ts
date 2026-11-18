@@ -9,6 +9,8 @@ import { config, hasCloud } from './config';
 import { GUEST_MIGRATE, guestNotesWithInk, isGuestActive, keepSeparateKey, migrateGuestData, setGuestActive } from './guest';
 import { LocalStore } from './store/localStore';
 import { SupabaseStore } from './store/supabaseStore';
+import { KeyVault } from './crypto/vault';
+import { renderUnlock } from './encryptionUi';
 import { h, lsGet, lsSet, toast } from './util';
 
 const root = document.getElementById('app')!;
@@ -144,6 +146,43 @@ if (!hasCloud) {
     }
   };
 
+  /**
+   * Get end-to-end encryption ready before any notes are read or written: unlock with the key
+   * remembered on this device or ask for the passphrase, then finish an interrupted switch.
+   * Returns false if the user left (signed out) meanwhile.
+   */
+  const prepareEncryption = async (vault: KeyVault, store: SupabaseStore, uid: string, email: string | null, signOut: () => void) => {
+    try {
+      await vault.refresh();
+    } catch (e) {
+      console.warn('Could not check encryption state', e); // offline: the server still refuses plaintext if encryption is on
+    }
+    if (vault.needsKey && !(await vault.restore())) {
+      await renderUnlock(root, { vault, store, email, signOut });
+      if (current !== uid) return false;
+    }
+    if (vault.state === 'encrypting' || vault.state === 'decrypting') {
+      const finishing = vault.state;
+      showBusy(finishing === 'encrypting' ? 'Finishing encrypting your notes...' : 'Finishing decrypting your notes...');
+      try {
+        await store.convertAll((done, total) => {
+          if (total) showBusy(`${finishing === 'encrypting' ? 'Encrypting' : 'Decrypting'} your notes: ${done} of ${total}...`);
+        });
+        await vault.setState(finishing === 'encrypting' ? 'on' : 'off');
+      } catch (e) {
+        console.error('Could not finish converting notes', e);
+        toast('Some notes are not converted yet; Lineboard will try again next time.', 'error');
+      }
+    } else if (vault.state === 'off' && vault.hasKeys) {
+      // Encryption was turned off; tidy up anything another device still wrote encrypted.
+      if (await vault.restore()) void store.sweep().catch((e) => console.warn('Sweep failed', e));
+    } else if (vault.state === 'on' && vault.unlocked) {
+      // Encrypt anything an older client or another device saved in plaintext meanwhile.
+      void store.sweep().catch((e) => console.warn('Sweep failed', e));
+    }
+    return current === uid;
+  };
+
   const show = async (session: Session | null) => {
     activeSession = session;
     if (recovering) return;
@@ -174,18 +213,30 @@ if (!hasCloud) {
     document.title = 'Lineboard';
     current = uid; // set before awaiting, so repeated auth events don't run this twice
     setGuestActive(false);
-    const store = new SupabaseStore(sb, uid);
+    const vault = new KeyVault(sb, uid);
+    const store = new SupabaseStore(sb, uid, vault);
+    const email = session.user.email ?? null;
+    const signOut = async () => {
+      const { error } = await sb.auth.signOut();
+      if (error) { toast(error.message, 'error'); return; }
+      await vault.lock(); // forget the encryption key on this device
+      setGuestActive(false);
+      activeSession = null;
+      navigate('/home');
+    };
+    let relocking = false;
+    vault.onLocked = () => {
+      // Encryption was turned on from another device: ask for the passphrase, then carry on saving.
+      if (relocking || current !== uid) return;
+      relocking = true;
+      clearApp();
+      current = undefined;
+      void show(activeSession ?? null);
+    };
+    if (!(await prepareEncryption(vault, store, uid, email, () => void signOut()))) return;
     await maybeMoveGuestNotes(store, uid);
     if (current !== uid) return; // signed out meanwhile
-    app = new App(root, store, { id: uid, email: session.user.email ?? null }, {
-      signOut: async () => {
-        const { error } = await sb.auth.signOut();
-        if (error) { toast(error.message, 'error'); return; }
-        setGuestActive(false);
-        activeSession = null;
-        navigate('/home');
-      },
-    });
+    app = new App(root, store, { id: uid, email }, { signOut });
   };
 
   window.addEventListener(navigationEvent, () => {

@@ -1,4 +1,5 @@
 import { Board, PAGE_W } from './board';
+import { SettingsPanel } from './settings';
 import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
@@ -50,8 +51,7 @@ export class App {
   private freeBtn!: HTMLButtonElement;
   private stripControls!: HTMLElement;
   private status!: HTMLElement;
-  private settingsDlg!: HTMLDialogElement;
-  private contactReadout!: HTMLElement;
+  private settingsPanel!: SettingsPanel;
   private hint!: HTMLElement;
 
   private saveSettingsDebounced = debounce(() => {
@@ -97,7 +97,8 @@ export class App {
   /** Tear down before switching user. */
   destroy() {
     this.abort.abort();
-    this.settingsDlg.remove();
+    this.queue.stop();
+    this.settingsPanel.destroy();
   }
 
   private lsKey(k: string) {
@@ -280,7 +281,7 @@ export class App {
     this.board = new Board(boardHost, this.settings, {
       onStrokesAdded: (s) => this.record({ type: 'add', strokes: s }),
       onStrokesRemoved: (s) => this.record({ type: 'remove', strokes: s }),
-      onContact: (size, type, accepted) => this.showContact(size, type, accepted),
+      onContact: (size, type, accepted) => this.settingsPanel?.showContact(size, type, accepted),
       onUnlockChange: () => {},
     });
 
@@ -326,7 +327,7 @@ export class App {
     const b = h('button', { class: 'btn primary signin-save signin-' + where, type: 'button', title: 'Sign in or create an account to save your notes' }) as HTMLButtonElement;
     b.innerHTML = `${icons.cloud}<span>Sign in to save</span>`;
     b.addEventListener('click', () => {
-      if (where === 'settings') this.settingsDlg.close();
+      if (where === 'settings') this.settingsPanel.close();
       void this.goSignIn();
     });
     return b;
@@ -729,160 +730,21 @@ export class App {
 
   // ----------------------------- settings -----------------------------
 
-  private showContact(size: number, type: string, accepted: boolean) {
-    if (!this.contactReadout) return;
-    const reason = accepted ? 'drawn' : 'ignored';
-    this.contactReadout.textContent = `Last contact on page: ${size ? Math.round(size) + ' px' : 'size not reported'} (${type}, ${reason})`;
-  }
-
   private buildSettings() {
-    const s = () => this.settings;
-    const row = (label: string, control: HTMLElement, help?: string) =>
-      h('label', { class: 'set-row' }, h('span', { class: 'set-label' }, label), control, help ? h('small', {}, help) : null);
-
-    // Strip height
-    const stripVal = h('output');
-    const strip = h('input', { type: 'range', min: '40', max: '220', step: '5' }) as HTMLInputElement;
-    const updStrip = () => {
-      const px = Math.round((Number(strip.value) * (document.querySelector('.canvas-area')?.clientWidth ?? PAGE_W)) / PAGE_W);
-      stripVal.textContent = `${strip.value} (~ ${px} px on this screen)`;
-    };
-    strip.addEventListener('input', () => {
-      s().stripHeight = Number(strip.value);
-      updStrip();
-      this.settingsChanged();
+    this.settingsPanel = new SettingsPanel({
+      user: this.user,
+      store: this.store,
+      settings: () => this.settings,
+      changed: () => this.settingsChanged(),
+      setFree: (on) => this.setFree(on),
+      pendingSaves: () => this.queue.pending,
+      noteCount: () => this.notes.length,
+      signOut: this.opts.signOut,
+      signInButton: this.opts.signIn ? () => this.signInButton('settings') : undefined,
     });
-
-    // Touch threshold
-    const thrVal = h('output');
-    const thr = h('input', { type: 'range', min: '5', max: '150', step: '1' }) as HTMLInputElement;
-    thr.addEventListener('input', () => {
-      s().touchThreshold = Number(thr.value);
-      thrVal.textContent = thr.value + ' px';
-      this.settingsChanged();
-    });
-
-    // Calibration pad
-    let samples: number[] = [];
-    const calOut = h('span', { class: 'cal-out' }, 'No samples yet.');
-    const pad = h('div', { class: 'cal-pad' }, 'Write here with your stylus');
-    pad.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      pad.setPointerCapture(e.pointerId);
-    });
-    const sample = (e: PointerEvent) => {
-      if (e.buttons === 0 && e.type === 'pointermove') return;
-      const v = Math.max(e.width || 0, e.height || 0);
-      samples.push(v);
-      const max = Math.max(...samples);
-      calOut.textContent = `Stylus contact: up to ${Math.round(max)} px over ${samples.length} samples.`;
-    };
-    pad.addEventListener('pointerdown', sample);
-    pad.addEventListener('pointermove', sample);
-    const useCal = h('button', { class: 'btn', type: 'button' }, 'Set limit from samples');
-    useCal.addEventListener('click', () => {
-      if (!samples.length) return toast('Write in the box with your stylus first.');
-      const max = Math.max(...samples);
-      if (max <= 1) return toast('This browser does not report contact size, so size filtering cannot help here. Strips still work.');
-      const v = Math.min(150, Math.max(5, Math.ceil(max * 1.4 + 4)));
-      s().touchThreshold = v;
-      thr.value = String(v);
-      thrVal.textContent = v + ' px';
-      this.settingsChanged();
-      toast(`Palm limit set to ${v} px.`);
-    });
-    const resetCal = h('button', { class: 'btn', type: 'button' }, 'Clear');
-    resetCal.addEventListener('click', () => {
-      samples = [];
-      calOut.textContent = 'No samples yet.';
-    });
-
-    const penOnly = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    penOnly.addEventListener('change', () => {
-      s().penOnlyWhenPenSeen = penOnly.checked;
-      this.settingsChanged();
-    });
-    const free = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    free.addEventListener('change', () => this.setFree(free.checked));
-    const lines = h('input', { type: 'checkbox' }) as HTMLInputElement;
-    lines.addEventListener('change', () => {
-      s().showLines = lines.checked;
-      this.settingsChanged();
-    });
-    const side = h('select', {}, h('option', { value: 'left' }, 'Left (right-handed)'), h('option', { value: 'right' }, 'Right (left-handed)')) as HTMLSelectElement;
-    side.addEventListener('change', () => {
-      s().marginSide = side.value as 'left' | 'right';
-      this.settingsChanged();
-    });
-
-    this.contactReadout = h('p', { class: 'readout' }, 'Last contact on page: none yet');
-
-    const account = h('div', { class: 'set-account' });
-    if (this.opts.signOut) {
-      const out = h('button', { class: 'btn', type: 'button' }, 'Sign out');
-      out.addEventListener('click', async () => {
-        if (this.queue.pending) {
-          const ok = await dialog({ title: 'Unsaved changes', message: 'Some strokes are still being saved. Sign out anyway?', ok: 'Sign out', danger: true });
-          if (!ok) return;
-        }
-        await this.opts.signOut!();
-      });
-      account.append(h('span', {}, 'Signed in as ', h('b', {}, this.user.email ?? '')), out);
-    } else if (this.opts.signIn) {
-      account.append(
-        h('span', {}, "You're trying Lineboard without an account. Notes are saved only in this browser. Sign in or create a free account to keep them and use them on other devices."),
-        this.signInButton('settings'),
-      );
-    } else {
-      account.append(h('span', {}, 'Local mode. Configure Supabase to sync across devices.'));
-    }
-
-    const close = h('button', { class: 'btn primary', type: 'button' }, 'Done');
-    this.settingsDlg = h(
-      'dialog',
-      { class: 'modal' },
-      h(
-        'div',
-        { class: 'settings' },
-        h('h2', {}, 'Settings'),
-        h('h4', {}, 'Strips'),
-        row('Strip height', h('div', { class: 'range' }, strip, stripVal), 'Taller strips leave more room for big handwriting.'),
-        row('Lock icons on the', side),
-        h('label', { class: 'set-check' }, lines, h('span', {}, 'Show ruled lines between strips')),
-        h('label', { class: 'set-check' }, free, h('span', {}, 'Free whiteboard: no strips or locks, write anywhere (two fingers scroll and zoom)')),
-        h('h4', {}, 'Palm rejection inside the unlocked strip'),
-        row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts. Calibrate below for your stylus.'),
-        h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
-        this.contactReadout,
-        h('label', { class: 'set-check' }, penOnly, h('span', {}, 'If an active pen is detected, ignore finger touches completely')),
-        h('h4', {}, 'Account'),
-        account,
-        h('p', {}, h('a', { href: '/home', target: '_blank', rel: 'noopener' }, 'About Lineboard'), ' · ', h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy')),
-        h('div', { class: 'dlg-actions' }, close),
-      ),
-    );
-    close.addEventListener('click', () => this.settingsDlg.close());
-    this.settingsDlg.addEventListener('click', (e) => {
-      if (e.target === this.settingsDlg) this.settingsDlg.close();
-    });
-    document.body.append(this.settingsDlg);
-
-    this.syncSettingsForm = () => {
-      strip.value = String(s().stripHeight);
-      updStrip();
-      thr.value = String(s().touchThreshold);
-      thrVal.textContent = s().touchThreshold + ' px';
-      penOnly.checked = s().penOnlyWhenPenSeen;
-      lines.checked = s().showLines;
-      free.checked = s().freeMode;
-      side.value = s().marginSide;
-    };
   }
-
-  private syncSettingsForm: () => void = () => {};
 
   private openSettings() {
-    this.syncSettingsForm();
-    this.settingsDlg.showModal();
+    this.settingsPanel.open();
   }
 }
