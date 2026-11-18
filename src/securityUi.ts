@@ -1,4 +1,4 @@
-import { AccountError, describeDevice, passkeysSupported, type AccountSecurity, type DeviceSession } from './account';
+import { AccountError, describeDevice, passkeysSupported, type AccountSecurity, type DeviceSession, type Passkey } from './account';
 import { logo } from './brand';
 import { actions, busy, button, check, errorLine, field, passInput, StepDialog } from './encryptionUi';
 import { dialog, h, toast } from './util';
@@ -161,7 +161,6 @@ export class SecurityPane {
 
   // ----- passkeys -----
 
-  private passkeyCount = 0;
 
   /** A message that stays in the passkey card (toasts are easy to miss). */
   private passkeyNotice(text: string) {
@@ -171,17 +170,17 @@ export class SecurityPane {
     this.passkeyCard.insertBefore(note, this.passkeyCard.querySelector('.set-buttons'));
   }
 
-  private async renderPasskeys(problem: string | null = null) {
+  /** Redraw the passkey card. Resolves to the list it loaded, or null if it couldn't load it. */
+  private async renderPasskeys(problem: string | null = null): Promise<Passkey[] | null> {
     const card = this.passkeyCard;
     const intro = h('p', { class: 'muted' }, 'Sign in with your fingerprint, face or device PIN instead of typing a password. Passkeys cannot be phished or reused.');
     if (!passkeysSupported()) {
       card.replaceChildren(h('h4', {}, 'Passkeys'), intro, h('p', { class: 'muted' }, 'This browser does not support passkeys.'));
-      return;
+      return null;
     }
     this.loading(card, 'Passkeys');
     try {
       const list = await this.account.passkeys();
-      this.passkeyCount = list.length;
       const rows = list.map((p) => {
         const name = p.friendly_name || 'Passkey';
         const rename = this.btn('Rename', async () => {
@@ -223,28 +222,31 @@ export class SecurityPane {
         const name = await dialog({ title: 'Add a passkey', message: 'Give it a name you will recognise, then follow your browser’s prompt.', input: guess, ok: 'Continue' });
         if (name === null) return;
         let problem: string | null = null;
-        let before = 0;
+        let id: string | null = null;
         try {
-          before = (await this.account.passkeys().catch(() => [])).length;
-          await this.account.addPasskey(name.trim());
+          id = await this.account.addPasskey(name.trim());
         } catch (e) {
           problem = (e as Error).message;
         }
-        await this.renderPasskeys(problem);
-        if (!problem) {
-          const now = this.passkeyCount;
-          if (now > before) toast('Passkey added. You can now sign in with it.');
-          else this.passkeyNotice('Your browser created the passkey, but it does not appear on your account. Remove it from your device or password manager, then try again; if this keeps happening, the server’s passkey settings may need checking.');
-        }
+        const list = await this.renderPasskeys(problem);
+        if (problem) return;
+        // Only judge once the list really reloaded; a failed reload says nothing about the new passkey.
+        if (!list) this.passkeyNotice('The passkey was saved, but the list could not be refreshed. Reopen this section to see it.');
+        else if (!id || list.some((p) => p.id === id)) toast('Passkey added. You can now sign in with it.');
+        else this.passkeyNotice('Your browser created the passkey, but it does not appear on your account. Remove it from your device or password manager, then try again; if this keeps happening, the server’s passkey settings may need checking.');
       });
       put(card, h('h4', {}, 'Passkeys'), intro, list.length ? h('ul', { class: 'item-list' }, ...rows) : null, h('div', { class: 'set-buttons' }, add));
       if (problem) this.passkeyNotice(problem);
+      return list;
     } catch (e) {
+      const off = e instanceof AccountError && e.code === 'passkey_disabled';
       card.replaceChildren(
         h('h4', {}, 'Passkeys'),
         intro,
-        h('p', { class: 'muted' }, 'Passkeys are not turned on for this Lineboard server yet. ' + (e instanceof AccountError && e.code ? '' : `(${(e as Error).message})`)),
+        h('p', { class: off ? 'muted' : 'enc-error' }, off ? 'Passkeys are not turned on for this Lineboard server yet.' : `Could not load your passkeys: ${(e as Error).message}`),
       );
+      if (problem) this.passkeyNotice(problem);
+      return null;
     }
   }
 

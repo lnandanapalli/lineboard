@@ -26,6 +26,8 @@ export interface MockDb {
   password: string;
   /** When set, the server refuses new passkeys with this message (e.g. a misconfigured origin). */
   rejectPasskeys?: string;
+  /** When set, the next passkey list request fails (a network blip). */
+  failNextPasskeyList?: boolean;
 }
 
 export interface Session {
@@ -244,7 +246,13 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
       p.last_used_at = new Date().toISOString();
       return json(route, 200, tokenResponse(newSession(ua)));
     }
-    if (path === '/auth/v1/passkeys' || path === '/auth/v1/passkeys/') return json(route, 200, db.passkeys);
+    if (path === '/auth/v1/passkeys' || path === '/auth/v1/passkeys/') {
+      if (db.failNextPasskeyList) {
+        db.failNextPasskeyList = false;
+        return json(route, 503, { message: 'Service unavailable' });
+      }
+      return json(route, 200, db.passkeys);
+    }
     m = /^\/auth\/v1\/passkeys\/([^/]+)$/.exec(path);
     if (m) {
       const p = db.passkeys.find((x) => x.id === m![1]);

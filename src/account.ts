@@ -223,13 +223,15 @@ export class AccountSecurity {
    * Register a passkey for this account. Throws AccountError with code "cancelled" when the person
    * dismissed the browser prompt; any other failure (including the server refusing it) is reported.
    */
-  async addPasskey(name: string) {
+  /** Returns the new passkey's id as the server reported it. */
+  async addPasskey(name: string): Promise<string | null> {
     const { data, error } = await this.sb.auth.registerPasskey();
     if (error) throw passkeyError(error, 'add');
     if (name && data?.id) {
       const { error: re } = await this.sb.auth.passkey.update({ passkeyId: data.id, friendlyName: name.slice(0, 120) });
       if (re) console.warn('Passkey added but not renamed', re);
     }
+    return data?.id ?? null;
   }
 
   async renamePasskey(id: string, name: string) {

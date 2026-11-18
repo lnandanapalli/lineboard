@@ -268,3 +268,21 @@ test('a passkey the server refuses is reported in the card, not silently dropped
   expect(db.passkeys).toHaveLength(0);
 });
 
+
+test('a saved passkey is not reported missing when only the list refresh fails', async ({ page }) => {
+  const db = await mockSupabase(page);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('WebAuthn.enable');
+  await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
+  });
+  await signIn(page);
+  await expect(board(page)).toBeVisible();
+  await openSignin(page);
+  await expect(page.locator('.set-card', { hasText: 'Passkeys' }).getByRole('button', { name: 'Add a passkey' })).toBeVisible();
+  db.failNextPasskeyList = true;
+  const card = await addPasskeyFromSettings(page);
+  await expect(card.locator('.card-notice')).toContainText('could not be refreshed');
+  await expect(card).not.toContainText('does not appear on your account');
+  expect(db.passkeys).toHaveLength(1);
+});
