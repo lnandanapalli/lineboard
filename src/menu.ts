@@ -1,5 +1,12 @@
 import { icons } from './icons';
 import { h } from './util';
+import { appRect, appViewport } from './orientation';
+
+/**
+ * Menus and popovers go inside the app element, so they turn with it when the app is rotated
+ * (a fixed-position child of a transformed element is placed in that element's coordinates).
+ */
+const popupHost = () => document.querySelector<HTMLElement>('.app') ?? document.body;
 
 /**
  * A toolbar dropdown: a button showing the current choice, opening a menu of options.
@@ -95,11 +102,11 @@ export function dropdown<T extends string>(opts: {
       });
       menu.append(item);
     }
-    document.body.append(menu);
-    const r = btn.getBoundingClientRect();
+    popupHost().append(menu);
+    const r = appRect(btn);
     const w = menu.offsetWidth;
     menu.style.top = `${r.bottom + 6}px`;
-    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+    menu.style.left = `${Math.max(8, Math.min(r.left, appViewport().width - w - 8))}px`;
     btn.setAttribute('aria-expanded', 'true');
     document.addEventListener('pointerdown', onOutside, true);
     document.addEventListener('keydown', onKey, true);
@@ -133,10 +140,10 @@ export function dropdown<T extends string>(opts: {
 export function popover(anchor: HTMLElement, content: HTMLElement, opts: { label: string; onClose?: () => void }) {
   openMenu?.close();
   const panel = h('div', { class: 'popover', role: 'dialog', 'aria-label': opts.label }, content);
-  document.body.append(panel);
-  const r = anchor.getBoundingClientRect();
+  popupHost().append(panel);
+  const r = appRect(anchor);
   panel.style.top = `${r.bottom + 6}px`;
-  panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, window.innerWidth - panel.offsetWidth - 8))}px`;
+  panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, appViewport().width - panel.offsetWidth - 8))}px`;
   anchor.setAttribute('aria-expanded', 'true');
   const onOutside = (e: PointerEvent) => {
     if (!panel.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();

@@ -8,6 +8,7 @@ import type { Store } from './store/store';
 import type { AppUser, Settings } from './types';
 import { dialog, h, toast } from './util';
 import { isApple, shortcut } from './keys';
+import { orientation } from './orientation';
 
 type Section = 'account' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
@@ -254,6 +255,15 @@ export class SettingsPanel {
       this.card(
         'Ink',
         this.row('Smoothing', h('div', { class: 'range' }, smooth, smoothVal), 'Steadies shaky lines as you write. Turn it down if strokes feel like they lag behind the pen.'),
+      ),
+      this.card(
+        'Display',
+        this.toggle(
+          'Manual orientation',
+          'Keep the layout fixed to this device even when it rotates, and turn it yourself with the rotate button in the toolbar. Saved on this device only.',
+          () => orientation.manual,
+          (on) => orientation.setManual(on),
+        ),
       ),
       this.card(null, h('p', { class: 'muted' }, 'Choose Strips, Multi-strip or Free whiteboard from the Mode menu in the toolbar.')),
     ];

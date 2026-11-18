@@ -459,3 +459,14 @@ kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px sol
 .size-presets { display: flex; gap: 6px; }
 .size-presets .btn { flex: 1; height: 34px; padding: 0 6px; font-size: 13px; }
 .size-presets .btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+/* ----- Manual orientation (see orientation.ts) ----- */
+.app.rotated { position: fixed; top: 0; left: 0; transform-origin: 0 0; }
+.rotate-btn[hidden] { display: none; }
+/* Dialogs are drawn in the top layer, outside the app element: turn them about their centre. */
+html[data-rotation="90"] dialog[open] { rotate: 90deg; }
+html[data-rotation="180"] dialog[open] { rotate: 180deg; }
+html[data-rotation="270"] dialog[open] { rotate: 270deg; }
+html[data-rotation="90"] .modal, html[data-rotation="270"] .modal { width: min(600px, 94vh); max-height: 90vw; }
+html[data-rotation="90"] .modal.small, html[data-rotation="270"] .modal.small { width: min(400px, 92vh); }
+html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-modal { width: min(880px, 96vh); height: min(640px, 92vw); max-height: 92vw; }

@@ -1,5 +1,6 @@
 import type { Settings, Stroke, Tool } from './types';
 import { uuid } from './util';
+import { appRect, clientToApp, deltaToApp } from './orientation';
 
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
@@ -345,9 +346,16 @@ export class Board {
     return y >= 0 && this.unlocked.has(Math.floor(y / this.settings.stripHeight));
   }
 
+  /** Screen coordinates to page units (taking a manually rotated app into account). */
   private toLogical(clientX: number, clientY: number) {
-    const r = this.live.getBoundingClientRect();
-    return { x: (clientX - r.left) / this.scale + this.scrollX, y: (clientY - r.top) / this.scale + this.scrollY };
+    const p = clientToApp(clientX, clientY);
+    return this.appToLogical(p.x, p.y);
+  }
+
+  /** App coordinates (see orientation.ts) to page units. */
+  private appToLogical(x: number, y: number) {
+    const r = appRect(this.live);
+    return { x: (x - r.left) / this.scale + this.scrollX, y: (y - r.top) / this.scale + this.scrollY };
   }
 
   private toggleStrip(i: number) {
@@ -403,11 +411,13 @@ export class Board {
           // Trackpad pinch / Ctrl+wheel: zoom around the pointer.
           const at = this.toLogical(e.clientX, e.clientY);
           this.setZoom(this.zoom * Math.exp(-e.deltaY * mult * 0.002));
-          const r = this.live.getBoundingClientRect();
-          this.setScroll(at.y - (e.clientY - r.top) / this.scale, at.x - (e.clientX - r.left) / this.scale);
+          const r = appRect(this.live);
+          const p = clientToApp(e.clientX, e.clientY);
+          this.setScroll(at.y - (p.y - r.top) / this.scale, at.x - (p.x - r.left) / this.scale);
           return;
         }
-        this.setScroll(this.scrollY + (e.deltaY * mult) / this.scale, this.scrollX + (e.deltaX * mult) / this.scale);
+        const d = deltaToApp(e.deltaX * mult, e.deltaY * mult);
+        this.setScroll(this.scrollY + d.dy / this.scale, this.scrollX + d.dx / this.scale);
       },
       { passive: false },
     );
@@ -417,12 +427,12 @@ export class Board {
       if (this.marginDrag) return;
       e.preventDefault();
       M.setPointerCapture(e.pointerId);
-      this.marginDrag = { pointerId: e.pointerId, y0: e.clientY, scroll0: this.scrollY, moved: false };
+      this.marginDrag = { pointerId: e.pointerId, y0: clientToApp(e.clientX, e.clientY).y, scroll0: this.scrollY, moved: false };
     });
     M.addEventListener('pointermove', (e) => {
       const d = this.marginDrag;
       if (!d || d.pointerId !== e.pointerId) return;
-      const dy = e.clientY - d.y0;
+      const dy = clientToApp(e.clientX, e.clientY).y - d.y0;
       if (!d.moved && Math.abs(dy) > 10) d.moved = true;
       if (d.moved) this.setScroll(d.scroll0 - dy / this.scale);
     });
@@ -431,8 +441,8 @@ export class Board {
       if (!d || d.pointerId !== e.pointerId) return;
       this.marginDrag = null;
       if (!d.moved && !cancelled) {
-        const r = M.getBoundingClientRect();
-        const y = (e.clientY - r.top) / this.scale + this.scrollY;
+        const r = appRect(M);
+        const y = (clientToApp(e.clientX, e.clientY).y - r.top) / this.scale + this.scrollY;
         this.toggleStrip(Math.floor(y / this.settings.stripHeight));
       }
     };
@@ -478,11 +488,11 @@ export class Board {
 
   private onMove(e: PointerEvent) {
     if (this.fingers.has(e.pointerId)) {
-      this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: this.fingers.get(e.pointerId)!.t });
+      this.fingers.set(e.pointerId, { ...clientToApp(e.clientX, e.clientY), t: this.fingers.get(e.pointerId)!.t });
       if (this.pan) {
         const g = this.fingerGeometry();
         if (this.pan.startDist > 0) this.setZoom((this.pan.startZoom * g.dist) / this.pan.startDist);
-        const r = this.live.getBoundingClientRect();
+        const r = appRect(this.live);
         this.setScroll(this.pan.anchorY - (g.cy - r.top) / this.scale, this.pan.anchorX - (g.cx - r.left) / this.scale);
         return;
       }
@@ -532,7 +542,7 @@ export class Board {
   private tryStartPan(e: PointerEvent): boolean {
     const now = performance.now();
     for (const [id, f] of this.fingers) if (now - f.t > 5000) this.fingers.delete(id); // stale entries
-    this.fingers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now });
+    this.fingers.set(e.pointerId, { ...clientToApp(e.clientX, e.clientY), t: now });
     if (this.pan || this.fingers.size !== 2) return !!this.pan;
     const [a, b] = [...this.fingers.values()];
     if (Math.abs(a.t - b.t) > PAN_PAIR_MS) return false;
@@ -547,12 +557,12 @@ export class Board {
       /* ignore */
     }
     const g = this.fingerGeometry();
-    const anchor = this.toLogical(g.cx, g.cy);
+    const anchor = this.appToLogical(g.cx, g.cy);
     this.pan = { startDist: g.dist, startZoom: this.zoom, anchorX: anchor.x, anchorY: anchor.y };
     return true;
   }
 
-  /** Centre of the (first two) fingers and the distance between them. */
+  /** Centre of the (first two) fingers and the distance between them, in app coordinates. */
   private fingerGeometry() {
     const [a, b] = [...this.fingers.values()];
     if (!b) return { cx: a.x, cy: a.y, dist: 0 };

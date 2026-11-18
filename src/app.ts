@@ -8,6 +8,7 @@ import { SyncQueue, type SyncState } from './sync';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
+import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast } from './util';
 
 const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
@@ -60,6 +61,8 @@ export class App {
   private lastStripMode: BoardMode = 'strips';
   private stripControls!: HTMLElement;
   private status!: HTMLElement;
+  private rotateBtn!: HTMLButtonElement;
+  private appEl!: HTMLElement;
   private settingsPanel!: SettingsPanel;
   private hint!: HTMLElement;
 
@@ -107,6 +110,7 @@ export class App {
   destroy() {
     this.abort.abort();
     this.queue.stop();
+    detachOrientation(this.appEl);
     this.settingsPanel.destroy();
   }
 
@@ -204,6 +208,7 @@ export class App {
     });
 
     this.status = h('div', { class: 'status', title: '' });
+    this.rotateBtn = this.iconBtn(icons.rotate, 'Rotate right', () => orientation.rotateRight(), 'rotate-btn');
 
     const toolbar = h(
       'header',
@@ -228,6 +233,7 @@ export class App {
       h('div', { class: 'spacer' }),
       this.opts.signIn ? this.signInButton('toolbar') : null,
       this.status,
+      this.rotateBtn,
       this.iconBtn(icons.download, 'Export as PNG', () => void this.exportPNG()),
       this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
     );
@@ -276,7 +282,13 @@ export class App {
     const main = h('div', { class: 'main' }, this.sidebar, scrim, boardHost);
     if (!lsGet('lb-hint-dismissed', false)) boardHost.append(this.hint);
 
-    this.root.replaceChildren(h('div', { class: 'app' }, toolbar, main));
+    this.appEl = h('div', { class: 'app' }, toolbar, main);
+    this.root.replaceChildren(this.appEl);
+    attachOrientation(this.appEl);
+    const showRotate = () => (this.rotateBtn.hidden = !orientation.manual);
+    showRotate();
+    const off = orientation.onChange(showRotate);
+    this.abort.signal.addEventListener('abort', () => off());
 
     this.board = new Board(boardHost, this.settings, {
       onStrokesAdded: (s) => this.record({ type: 'add', strokes: s }),
