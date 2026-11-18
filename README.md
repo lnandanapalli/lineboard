@@ -143,8 +143,8 @@ To enable accounts and sync, point Lineboard at a Supabase project:
 
 Serve the app from one address. Browsers keep sign-ins, notes made without an account, the remembered
 encryption key and passkey origins separately for `example.com` and `www.example.com`, so set
-`CANONICAL_HOST` if both reach the site. The site's platform hostname (e.g. `*.azurewebsites.net`) and
-`/healthz` are not redirected.
+`CANONICAL_HOST` if both reach the site. The site's platform hostname (e.g. `*.azurewebsites.net`) is not
+redirected, and neither is `/healthz` on any hostname.
 
 For development, copy `.env.example` to `.env.local`. Never use the `service_role` / secret key.
 

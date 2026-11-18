@@ -58,4 +58,5 @@ jobs:
           echo "$out"; test "$out" = "301 https://example.com/app?x=1"
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: example.com' http://localhost:8081/app)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: myapp.azurewebsites.net' http://localhost:8081/healthz)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8081/healthz)" = 200
           docker rm -f lbc

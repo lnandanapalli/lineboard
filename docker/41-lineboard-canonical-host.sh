@@ -8,8 +8,8 @@
 #   CANONICAL_HOST=www.example.com  example.com/...     -> 301 https://www.example.com/...
 #   unset                           no redirect (every hostname is served)
 #
-# Only that one alternate hostname is redirected: the platform's own hostname (e.g.
-# *.azurewebsites.net) and health probes are left alone.
+# Only that one alternate hostname is redirected, and /healthz never is: the platform's own
+# hostname (e.g. *.azurewebsites.net) and health probes on any hostname are left alone.
 set -eu
 out=/etc/nginx/snippets/canonical-host.conf
 host=$(printf '%s' "${CANONICAL_HOST:-}" | tr 'A-Z' 'a-z' | sed -E 's#^https?://##; s#[/:].*$##')
@@ -32,8 +32,15 @@ case "$host" in
 esac
 
 cat > "$out" <<CONF
-# Generated at container start from CANONICAL_HOST.
+# Generated at container start from CANONICAL_HOST. /healthz answers on every hostname.
+set \$lb_canonical_redirect "";
 if (\$host = $other) {
+  set \$lb_canonical_redirect 1;
+}
+if (\$uri = /healthz) {
+  set \$lb_canonical_redirect "";
+}
+if (\$lb_canonical_redirect) {
   return 301 https://$host\$request_uri;
 }
 CONF
