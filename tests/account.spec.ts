@@ -78,8 +78,17 @@ test('changing the password signs out the other devices', async ({ page, browser
   await openSignin(page);
   await page.getByRole('button', { name: 'Change password' }).click();
   const dlg = page.locator('dialog[open].modal.small');
-  const [a, b] = [dlg.locator('input[type=password]').nth(0), dlg.locator('input[type=password]').nth(1)];
+  const [current, a, b] = [0, 1, 2].map((i) => dlg.locator('input[type=password]').nth(i));
+  // The current password is required, and checked.
   await a.fill('new password 1');
+  await b.fill('new password 1');
+  await dlg.getByRole('button', { name: 'Change password' }).click();
+  await expect(dlg.locator('.enc-error')).toContainText('Enter your current password');
+  await current.fill('not my password');
+  await dlg.getByRole('button', { name: 'Change password' }).click();
+  await expect(dlg.locator('.enc-error')).toContainText('not right');
+  expect(db.passwordChanges).toBe(0);
+  await current.fill('secret123');
   await b.fill('new password 2');
   await dlg.getByRole('button', { name: 'Change password' }).click();
   await expect(dlg.locator('.enc-error')).toContainText('do not match');
@@ -87,6 +96,7 @@ test('changing the password signs out the other devices', async ({ page, browser
   await dlg.getByRole('button', { name: 'Change password' }).click();
   await expect(dlg).toHaveCount(0);
   expect(db.passwordChanges).toBe(1);
+  expect(db.password).toBe('new password 1');
   expect(db.sessions).toHaveLength(1);
   await refocus(tablet);
   await expect(tablet).toHaveURL(/\/login$/);
@@ -123,6 +133,12 @@ test('authenticator-app two-step verification: set up, required at sign-in, remo
   const mfa = page.locator('.set-card', { hasText: 'Two-step verification' });
   await expect(mfa.locator('.pill')).toHaveText('Off');
   await page.getByRole('button', { name: 'Set up authenticator app' }).click();
+  const confirm = page.locator('dialog.confirm-dialog');
+  await confirm.locator('input[type=password]').fill('wrong');
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  await expect(confirm.locator('.enc-error')).toContainText('not right');
+  await confirm.locator('input[type=password]').fill('secret123');
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
   const dlg = page.locator('dialog.mfa-dialog');
   await expect(dlg.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible();
   await expect(dlg.locator('.mfa-secret')).toHaveText('JBSW Y3DP EHPK 3PXP');
@@ -168,6 +184,8 @@ test('passkeys: add one in settings, then sign in with it', async ({ page }) => 
   await openSignin(page);
   const card = page.locator('.set-card', { hasText: 'Passkeys' });
   await card.getByRole('button', { name: 'Add a passkey' }).click();
+  await page.locator('dialog.confirm-dialog input[type=password]').fill('secret123');
+  await page.locator('dialog.confirm-dialog').getByRole('button', { name: 'Confirm' }).click();
   await page.locator('dialog.modal.small[open]').locator('input.dlg-input').fill('My tablet');
   await page.locator('dialog.modal.small[open]').getByRole('button', { name: 'Continue' }).click();
   await expect(card.locator('.item-row')).toHaveCount(1);
@@ -181,4 +199,37 @@ test('passkeys: add one in settings, then sign in with it', async ({ page }) => 
   await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
   await expect(board(page)).toBeVisible();
   expect(db.passkeys[0].last_used_at).toBeTruthy();
+});
+
+test('someone at an unlocked device cannot add a passkey or authenticator without the password', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await signIn(page);
+  await expect(board(page)).toBeVisible();
+  await openSignin(page);
+  for (const name of ['Add a passkey', 'Set up authenticator app']) {
+    await page.getByRole('button', { name }).click();
+    const confirm = page.locator('dialog.confirm-dialog');
+    await expect(confirm).toContainText('Confirm it’s you');
+    await confirm.getByRole('button', { name: 'Cancel' }).click();
+    await expect(confirm).toHaveCount(0);
+  }
+  await expect(page.locator('dialog.mfa-dialog')).toHaveCount(0);
+  expect(db.passkeys).toHaveLength(0);
+  expect(db.factors).toHaveLength(0);
+});
+
+test('with two-step verification on, an authenticator code also confirms it is you', async ({ page }) => {
+  const db = await mockSupabase(page);
+  db.factors.push({ id: 'f1', factor_type: 'totp', friendly_name: 'Phone', status: 'verified', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' });
+  await signIn(page);
+  await page.getByLabel('Code').fill(MOCK_TOTP);
+  await expect(board(page)).toBeVisible();
+  await openSignin(page);
+  await page.locator('.set-card', { hasText: 'Passkeys' }).getByRole('button', { name: 'Add a passkey' }).click();
+  const confirm = page.locator('dialog.confirm-dialog');
+  await confirm.getByRole('button', { name: 'Use a code from your authenticator app instead' }).click();
+  await confirm.getByLabel('6-digit code').fill(MOCK_TOTP);
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(page.locator('dialog.modal.small[open]')).toContainText('Add a passkey'); // on to the next step
 });

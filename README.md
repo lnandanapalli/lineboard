@@ -53,8 +53,13 @@ Settings → Sign-in & devices, built on Supabase Auth:
   session to still exist, so a signed-out device loses access to notes at once instead of when its access
   token expires (up to an hour). The app also re-checks its session when the tab regains focus and every
   five minutes, and returns to the sign-in page.
-- **Passwords.** Changing the password signs out other devices by default; so does a password reset from
-  the email link. If the project enables *Secure password change*, the app asks for the emailed code.
+- **Passwords.** Changing the password needs the current one: the app checks it, and sends it as
+  `current_password` so the server checks it too when *Require current password* is on in the project's
+  Auth settings. Accounts without a password (email-link or passkey sign-up) confirm with an emailed code
+  instead. It signs out other devices by default; so does a password reset from the email link.
+- **Confirm it's you.** Adding or removing a passkey or authenticator, and turning encryption on, ask for
+  the password (or an authenticator code) if it wasn't entered in the last five minutes, so someone at an
+  unlocked device can't add their own way into the account or lock the owner out of their notes.
 - **Two-step verification** with any TOTP authenticator app (`auth.mfa`). Several authenticators can be
   added as backups. The same `access_ok()` policy requires `aal2` for users who turned it on, so notes can't
   be read with the password alone even by calling the API directly. Turning it on signs out other devices.
