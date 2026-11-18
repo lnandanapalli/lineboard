@@ -95,6 +95,8 @@ export class App {
       },
       { signal: this.abort.signal },
     );
+    // Settings are saved to the store shortly after the last change; don't lose that when the tab closes.
+    window.addEventListener('pagehide', () => this.saveSettingsDebounced.flush(), { signal: this.abort.signal });
     void this.init();
   }
 
@@ -226,6 +228,7 @@ export class App {
       options: [
         { value: 'strips', label: 'Strips', icon: icons.strip, hint: 'M', description: 'Unlock one strip to write; rest your palm anywhere else.' },
         { value: 'multi', label: 'Multi-strip', icon: icons.multi, hint: 'M', description: 'Unlock several strips at once for bigger drawings.' },
+        { value: 'split', label: 'Split', icon: icons.split, description: 'Two panes, each locked or unlocked; the page scrolls under them. Tap the divider grip, then drag, to resize.' },
         { value: 'free', label: 'Free whiteboard', icon: icons.free, hint: 'F', description: 'The whole page takes ink. Two fingers scroll and zoom.' },
       ],
     });
@@ -249,8 +252,8 @@ export class App {
       (this.stripControls = h(
         'div',
         { class: 'group strip-controls' },
-        this.iconBtn(icons.up, withShortcut('Previous strip', 'Up'), () => this.board.stepLine(-1)),
-        this.iconBtn(icons.down, withShortcut('Next strip', 'Down'), () => this.board.stepLine(1)),
+        this.iconBtn(icons.up, withShortcut('Previous strip', 'Up'), () => this.board.stepLine(-1), 'step-btn'),
+        this.iconBtn(icons.down, withShortcut('Next strip', 'Down'), () => this.board.stepLine(1), 'step-btn'),
         this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
       )),
       h('div', { class: 'spacer' }),
@@ -319,6 +322,10 @@ export class App {
       onStrokesReplaced: (from, to) => this.record({ type: 'replace', from, to }),
       onContact: (size, type, accepted) => this.settingsPanel?.showContact(size, type, accepted),
       onUnlockChange: () => {},
+      onSplitRatio: (r) => {
+        this.settings.splitRatio = r;
+        this.settingsChanged();
+      },
     });
 
     this.buildSettings();
@@ -408,6 +415,7 @@ export class App {
       {
         strips: was === 'multi' ? 'Strips: all locked. Tap a lock in the margin to write.' : 'Strips: tap a lock in the margin to write.',
         multi: 'Multi-strip: tap several locks to unlock them together.',
+        split: 'Split: tap a pane’s lock to lock or unlock it. Tap the divider grip in the margin, then drag, to move it.',
         free: 'Free whiteboard: write anywhere. Two fingers scroll and pinch to zoom.',
       }[m],
     );
@@ -416,6 +424,8 @@ export class App {
   private renderMode() {
     this.modeMenu.set(this.settings.mode);
     this.stripControls.hidden = this.settings.mode === 'free';
+    // Previous / next strip mean nothing when the screen is split into two fixed panes.
+    for (const b of this.stripControls.querySelectorAll<HTMLElement>('.step-btn')) b.hidden = this.settings.mode === 'split';
     if (this.settings.mode !== 'free') this.lastStripMode = this.settings.mode;
   }
 

@@ -22,6 +22,7 @@ export const icons = {
   notebook: svg('<path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5a2.5 2.5 0 0 0-2.5 2.5Z"/><path d="M4 19.5v-15"/><path d="M8 7h8"/>'),
   move: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M10 13h6"/><path d="m13 10 3 3-3 3"/>'),
   chevron: svg('<path d="m6 9 6 6 6-6"/>'),
+  split: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18"/><path d="M7 7.5h6M7 16.5h4"/>'),
   free: svg('<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a1 1 0 0 1 3 3l-9 9a2 2 0 0 1-.9.5l-2.9.8a.5.5 0 0 1-.6-.6l.8-2.9a2 2 0 0 1 .5-.8Z"/>'),
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
   shield: svg('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>'),

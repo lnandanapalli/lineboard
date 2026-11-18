@@ -24,6 +24,8 @@ export interface BoardCallbacks {
   /** Reports every contact that touches the drawing area (used for calibration readout). */
   onContact(size: number, pointerType: string, accepted: boolean): void;
   onUnlockChange(unlocked: number[]): void;
+  /** Split mode: the divider was moved (fraction of the board's height). */
+  onSplitRatio?(ratio: number): void;
 }
 
 interface Cached {
@@ -54,7 +56,14 @@ interface MarginDrag {
   y0: number;
   scroll0: number;
   moved: boolean;
+  /** Split mode: this drag moves the divider (it was activated first) instead of scrolling. */
+  divider?: boolean;
 }
+
+/** Split mode: the divider's grip in the margin is this tall (px), and it stays within these bounds. */
+const SPLIT_GRIP = 30;
+const SPLIT_MIN = 0.15;
+const SPLIT_MAX = 0.85;
 
 const LOCK_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
@@ -73,6 +82,9 @@ function textBox(text: string, size: number) {
   for (const l of lines) w = Math.max(w, measureCtx.measureText(l).width);
   return { w: Math.max(w, size * 0.3), h: lines.length * size * TEXT_LINE };
 }
+
+const GRIP_SVG =
+  '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 9h14M5 15h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 function contactSize(e: PointerEvent): number {
   return Math.max(e.width || 0, e.height || 0);
@@ -109,6 +121,9 @@ export class Board {
   private viewH = 0;
 
   private unlocked = new Set<number>();
+  /** Split mode: which panes take ink, and whether the divider is armed for moving. */
+  private panes = { top: true, bottom: false };
+  private dividerArmed = false;
   tool: Tool = 'pen';
   private penSeen = false;
 
@@ -193,6 +208,7 @@ export class Board {
     const oldH = this.settings.stripHeight;
     const oldMode = this.settings.mode;
     this.settings = { ...s }; // own copy, so changes can be compared with the previous settings
+    if (s.mode !== 'split') this.dividerArmed = false;
     if (oldMode === 'multi' && s.mode === 'strips') {
       // Leaving multi-strip locks everything; unlock one strip again by tapping its lock.
       this.unlocked.clear();
@@ -242,8 +258,9 @@ export class Board {
 
   lockAll() {
     this.unlocked.clear();
+    this.panes = { top: false, bottom: false };
     this.cb.onUnlockChange([]);
-    this.invalidate('bg', 'margin');
+    this.invalidate('bg', 'live', 'margin');
   }
 
   scrollBy(dyLogical: number) {
@@ -371,8 +388,22 @@ export class Board {
     return this.settings.mode === 'multi';
   }
 
+  private get split(): boolean {
+    return this.settings.mode === 'split';
+  }
+
+  /** Split mode: the divider's position in board pixels from the top. */
+  private get dividerY(): number {
+    return this.viewH * Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, this.settings.splitRatio));
+  }
+
   private isUnlockedAt(y: number): boolean {
     if (this.free) return y >= 0; // free whiteboard: the whole page takes ink
+    if (this.split) {
+      // Panes are fixed on screen; the page scrolls under them.
+      const screenY = (y - this.scrollY) * this.scale;
+      return y >= 0 && (screenY < this.dividerY ? this.panes.top : this.panes.bottom);
+    }
     return y >= 0 && this.unlocked.has(Math.floor(y / this.settings.stripHeight));
   }
 
@@ -458,24 +489,44 @@ export class Board {
       if (this.marginDrag) return;
       e.preventDefault();
       M.setPointerCapture(e.pointerId);
-      this.marginDrag = { pointerId: e.pointerId, y0: clientToApp(e.clientX, e.clientY).y, scroll0: this.scrollY, moved: false };
+      // Split mode: once the divider was armed by tapping its grip, the next drag moves it.
+      this.marginDrag = { pointerId: e.pointerId, y0: clientToApp(e.clientX, e.clientY).y, scroll0: this.scrollY, moved: false, divider: this.split && this.dividerArmed };
     });
     M.addEventListener('pointermove', (e) => {
       const d = this.marginDrag;
       if (!d || d.pointerId !== e.pointerId) return;
-      const dy = clientToApp(e.clientX, e.clientY).y - d.y0;
+      const y = clientToApp(e.clientX, e.clientY).y;
+      const dy = y - d.y0;
       if (!d.moved && Math.abs(dy) > 10) d.moved = true;
-      if (d.moved) this.setScroll(d.scroll0 - dy / this.scale);
+      if (!d.moved) return;
+      if (d.divider) {
+        const r = appRect(M);
+        this.settings.splitRatio = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, (y - r.top) / this.viewH));
+        this.invalidate('bg', 'live', 'margin');
+      } else this.setScroll(d.scroll0 - dy / this.scale);
     });
     const endMargin = (e: PointerEvent, cancelled: boolean) => {
       const d = this.marginDrag;
       if (!d || d.pointerId !== e.pointerId) return;
       this.marginDrag = null;
-      if (!d.moved && !cancelled) {
-        const r = appRect(M);
-        const y = (clientToApp(e.clientX, e.clientY).y - r.top) / this.scale + this.scrollY;
-        this.toggleStrip(Math.floor(y / this.settings.stripHeight));
+      const r = appRect(M);
+      const py = clientToApp(e.clientX, e.clientY).y - r.top;
+      if (d.divider && d.moved) {
+        // One move per activation, so a later scroll can never shift the divider by accident.
+        this.dividerArmed = false;
+        this.cb.onSplitRatio?.(this.settings.splitRatio);
+        this.invalidate('live', 'margin');
+        return;
       }
+      if (d.moved || cancelled) return;
+      if (this.split) {
+        if (Math.abs(py - this.dividerY) <= SPLIT_GRIP / 2 + 4) this.dividerArmed = !this.dividerArmed;
+        else if (py < this.dividerY) this.panes.top = !this.panes.top;
+        else this.panes.bottom = !this.panes.bottom;
+        this.invalidate('bg', 'live', 'margin');
+        return;
+      }
+      this.toggleStrip(Math.floor((py / this.scale + this.scrollY) / this.settings.stripHeight));
     };
     M.addEventListener('pointerup', (e) => endMargin(e, false));
     M.addEventListener('pointercancel', (e) => endMargin(e, true));
@@ -906,6 +957,23 @@ export class Board {
       ctx.fillRect(0, 0, this.viewW, this.viewH);
       return;
     }
+    if (this.split) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, this.viewW, this.viewH);
+      if (this.settings.showLines) {
+        const [first, last] = this.visibleStrips();
+        ctx.strokeStyle = '#dde3ea';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = first; i <= last; i++) {
+          const y = Math.round(((i + 1) * H - this.scrollY) * s) + 0.5;
+          ctx.moveTo(0, y);
+          ctx.lineTo(this.viewW, y);
+        }
+        ctx.stroke();
+      }
+      return;
+    }
     ctx.fillStyle = '#eef0f3';
     ctx.fillRect(0, 0, this.viewW, this.viewH);
     const [first, last] = this.visibleStrips();
@@ -999,6 +1067,7 @@ export class Board {
     const ctx = this.liveCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.live.width, this.live.height);
+    if (this.split) this.drawSplitOverlay(ctx);
     this.setPageTransform(ctx);
     const a = this.active;
     const shapePts = a?.shape ? this.shapeOf(a) : null;
@@ -1029,9 +1098,41 @@ export class Board {
     }
   }
 
+  /** Split mode: a tinted mask over each locked pane (the page still shows through) and the divider. */
+  private drawSplitOverlay(ctx: CanvasRenderingContext2D) {
+    const d = this.dividerY;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.fillStyle = 'rgba(203, 213, 225, 0.55)';
+    if (!this.panes.top) ctx.fillRect(0, 0, this.viewW, d);
+    if (!this.panes.bottom) ctx.fillRect(0, d, this.viewW, this.viewH - d);
+    ctx.fillStyle = this.dividerArmed ? '#2563eb' : '#94a3b8';
+    ctx.fillRect(0, Math.round(d) - (this.dividerArmed ? 1.5 : 1), this.viewW, this.dividerArmed ? 3 : 2);
+  }
+
   private drawMargin() {
     if (this.free) {
       this.margin.replaceChildren(); // hidden in free mode
+      return;
+    }
+    if (this.split) {
+      const d = this.dividerY;
+      const pane = (which: 'top' | 'bottom', top: number, height: number) => {
+        const on = this.panes[which];
+        const el = document.createElement('div');
+        el.className = 'strip-btn split-pane' + (on ? ' on' : '');
+        el.style.top = top + 'px';
+        el.style.height = height + 'px';
+        el.innerHTML = on ? UNLOCK_SVG : LOCK_SVG;
+        el.setAttribute('aria-label', `${on ? 'Lock' : 'Unlock'} ${which} pane`);
+        return el;
+      };
+      const grip = document.createElement('div');
+      grip.className = 'split-grip' + (this.dividerArmed ? ' armed' : '');
+      grip.style.top = d - SPLIT_GRIP / 2 + 'px';
+      grip.style.height = SPLIT_GRIP + 'px';
+      grip.innerHTML = GRIP_SVG;
+      grip.setAttribute('aria-label', this.dividerArmed ? 'Divider ready: drag in the margin to move it' : 'Divider: tap, then drag to move');
+      this.margin.replaceChildren(pane('top', 0, d), pane('bottom', d, this.viewH - d), grip);
       return;
     }
     const H = this.settings.stripHeight;

@@ -7,9 +7,10 @@ export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text';
  * strips  one unlocked strip at a time (palm rests anywhere else)
  * multi   any number of strips unlocked at once
  * free    whole page takes ink, two fingers scroll and zoom
+ * split   the screen is two panes (top/bottom), each locked or unlocked; the page scrolls under them
  */
-export type BoardMode = 'strips' | 'multi' | 'free';
-export const BOARD_MODES: BoardMode[] = ['strips', 'multi', 'free'];
+export type BoardMode = 'strips' | 'multi' | 'split' | 'free';
+export const BOARD_MODES: BoardMode[] = ['strips', 'multi', 'split', 'free'];
 
 /** A single ink stroke. Coordinates are in page units: the page is always 1000 units wide. */
 export interface Stroke {
@@ -64,6 +65,8 @@ export interface Settings {
   shape: ShapeKind;
   /** Font size for new text boxes (page units). */
   textSize: number;
+  /** Split mode: where the divider sits, as a fraction of the board's height. */
+  splitRatio: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -80,6 +83,7 @@ export const DEFAULT_SETTINGS: Settings = {
   smoothing: 0.25,
   shape: 'rectangle',
   textSize: 28,
+  splitRatio: 0.5,
 };
 
 /**

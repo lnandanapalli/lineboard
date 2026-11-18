@@ -102,7 +102,7 @@ test('turning free mode off brings the locks back, and the choice survives a rel
 test('the mode menu lists every mode, and F / M switch modes from the keyboard', async ({ page }) => {
   await setup(page);
   await modeButton(page).click();
-  await expect(page.getByRole('menuitemradio')).toHaveText([/Strips/, /Multi-strip/, /Free whiteboard/]);
+  await expect(page.getByRole('menuitemradio')).toHaveText([/Strips/, /Multi-strip/, /Split/, /Free whiteboard/]);
   await expect(page.getByRole('menuitemradio', { name: /^Strips/ })).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('menu')).toHaveCount(0);
@@ -115,9 +115,13 @@ test('the mode menu lists every mode, and F / M switch modes from the keyboard',
 });
 
 test('settings saved before the mode menu (freeMode: true) open in free mode', async ({ page }) => {
+  // As a returning visitor's browser would have them, before the app starts.
+  await page.addInitScript(() => {
+    const old = JSON.stringify({ freeMode: true, stripHeight: 90 });
+    localStorage.setItem('lb-settings-local', old);
+    localStorage.setItem('lb-local-settings', old);
+  });
   await page.goto('/app');
-  await page.evaluate(() => localStorage.setItem('lb-settings-local', JSON.stringify({ freeMode: true, stripHeight: 90 })));
-  await page.reload();
   await attachBoard(page);
   await expect(modeButton(page)).toHaveAttribute('aria-label', 'Mode: Free whiteboard');
 });

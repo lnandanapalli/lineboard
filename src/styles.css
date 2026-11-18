@@ -480,3 +480,11 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
   background: rgba(255,255,255,0.6); resize: none; overflow: hidden; white-space: pre; touch-action: auto;
   min-width: 1em;
 }
+
+/* ----- Split mode margin: pane locks and the divider grip ----- */
+.split-pane { border-bottom: 0; }
+.split-grip {
+  position: absolute; left: 4px; right: 4px; display: grid; place-items: center; border-radius: 8px;
+  background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1; pointer-events: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.split-grip.armed { background: var(--accent); color: #fff; border-color: var(--accent); }
