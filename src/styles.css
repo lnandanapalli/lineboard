@@ -470,9 +470,25 @@ html[data-rotation="270"] dialog[open] { rotate: 270deg; }
 html[data-rotation="90"] .modal, html[data-rotation="270"] .modal { width: min(600px, 94vh); max-height: 90vw; }
 html[data-rotation="90"] .modal.small, html[data-rotation="270"] .modal.small { width: min(400px, 92vh); }
 html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-modal { width: min(880px, 96vh); height: min(640px, 92vw); max-height: 92vw; }
-.dropdown-btn.shape-btn { border-color: transparent; border-radius: 9px; padding: 0 4px 0 8px; }
-.dropdown-btn.shape-btn .dropdown-label { display: none; }
-.dropdown-btn.shape-btn.active { background: var(--accent-soft); color: var(--accent); }
+.dropdown-btn.tool-dropdown { border-color: transparent; border-radius: 9px; padding: 0 4px 0 8px; }
+.dropdown-btn.tool-dropdown .dropdown-label { display: none; }
+.dropdown-btn.tool-dropdown.active { background: var(--accent-soft); color: var(--accent); }
+.dropdown-btn.tool-dropdown svg:first-child { width: 20px; height: 20px; }
+
+/* ----- Shape palette ----- */
+.popover:has(.shape-palette) { width: min(296px, calc(100vw - 16px)); }
+.shape-palette { display: flex; flex-direction: column; gap: 12px; }
+.shape-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.shape-cell {
+  aspect-ratio: 1; display: grid; place-items: center; border: 0; border-radius: 12px; background: transparent; cursor: pointer; color: var(--ink);
+}
+.shape-cell svg { width: 26px; height: 26px; }
+.shape-cell:hover { background: var(--bg); }
+.shape-cell[aria-checked=true] { background: var(--accent-soft); color: var(--accent); }
+.shape-foot { display: flex; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.shape-foot > div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.shape-foot b { font-size: 14px; font-weight: 600; }
+.shape-foot small { font-size: 12px; color: var(--muted); line-height: 1.35; }
 
 /* ----- Text boxes being typed (see Board.openEditor) ----- */
 .text-editor {

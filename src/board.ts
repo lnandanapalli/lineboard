@@ -1,7 +1,7 @@
 import type { Settings, Stroke, Tool } from './types';
 import { uuid } from './util';
 import { appRect, clientToApp, deltaToApp } from './orientation';
-import { shapePoints } from './shapes';
+import { shapeStrokes } from './shapes';
 
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
@@ -51,6 +51,8 @@ interface ActiveInput {
   shape?: { x0: number; y0: number; x1: number; y1: number; constrain: boolean };
   /** Select tool: the loop being drawn, or how far the selection has been dragged. */
   lasso?: number[];
+  /** Select tool, rectangle mode: the box being dragged out. */
+  rect?: { x0: number; y0: number; x1: number; y1: number };
   move?: { x0: number; y0: number; dx: number; dy: number };
 }
 
@@ -626,7 +628,11 @@ export class Board {
         points: [],
         erased: [],
         raw: null,
-        ...(inside ? { move: { x0: pt.x, y0: pt.y, dx: 0, dy: 0 } } : { lasso: [pt.x, pt.y] }),
+        ...(inside
+          ? { move: { x0: pt.x, y0: pt.y, dx: 0, dy: 0 } }
+          : this.settings.selectMode === 'rect'
+            ? { rect: { x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y } }
+            : { lasso: [pt.x, pt.y] }),
       };
       this.invalidate('ink', 'live');
       return;
@@ -680,6 +686,12 @@ export class Board {
       if (a.move) {
         a.move.dx = pt.x - a.move.x0;
         a.move.dy = pt.y - a.move.y0;
+        this.invalidate('live');
+        continue;
+      }
+      if (a.rect) {
+        a.rect.x1 = pt.x;
+        a.rect.y1 = pt.y;
         this.invalidate('live');
         continue;
       }
@@ -1057,9 +1069,10 @@ export class Board {
     this.selectBar.style.top = `${Math.max(8, top - 46)}px`;
   }
 
-  private shapeOf(a: ActiveInput): number[] {
+  /** The strokes of the shape being dragged (the proportions switch or Shift keeps it square). */
+  private shapeOf(a: ActiveInput): number[][] {
     const sh = a.shape!;
-    return shapePoints(this.settings.shape, sh.x0, sh.y0, sh.x1, sh.y1, sh.constrain);
+    return shapeStrokes(this.settings.shape, sh.x0, sh.y0, sh.x1, sh.y1, sh.constrain || this.settings.shapeLock);
   }
 
   private cancelActive() {
@@ -1081,6 +1094,10 @@ export class Board {
     const a = this.active!;
     this.active = null;
     if (a.lasso) return this.finishLasso(a.lasso);
+    if (a.rect) {
+      const { x0, y0, x1, y1 } = a.rect;
+      return this.finishLasso([x0, y0, x1, y0, x1, y1, x0, y1]); // same "mostly inside" rule; a tap picks one
+    }
     if (a.move) return this.finishMove(a.move.dx, a.move.dy);
     if (a.kind === 'erase') {
       if (this.tool === 'eraser' && a.pointerType !== 'mouse') this.eraserCursor = null;
@@ -1090,9 +1107,15 @@ export class Board {
     }
     if (a.shape) {
       const { x0, y0, x1, y1 } = a.shape;
-      this.invalidate('live');
+      this.invalidate('ink', 'live');
       if (Math.hypot(x1 - x0, y1 - y0) < 3) return; // a tap, not a shape
-      a.points = this.shapeOf(a);
+      // Shapes are pen strokes (see shapes.ts); some, like a crossed box, are several.
+      const parts = this.shapeOf(a).filter((p) => p.length);
+      const now = new Date().toISOString();
+      const made = parts.map((points): Stroke => ({ id: uuid(), note_id: this.noteId, tool: 'pen', color: this.settings.penColor, width: this.settings.penWidth, points, created_at: now }));
+      for (const st of made) this.cache(st);
+      if (made.length) this.cb.onStrokesAdded(made); // one undo step for the whole shape
+      return;
     }
     if (!a.points.length) return;
     // Finish where the pen actually lifted (the stabilizer trails slightly behind it).
@@ -1102,7 +1125,6 @@ export class Board {
       if (Math.hypot(x - a.points[n - 3], y - a.points[n - 2]) >= MIN_POINT_DIST) a.points.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
     }
     const isHL = this.tool === 'highlighter';
-    // Shapes are pen strokes (see shapes.ts).
     const stroke: Stroke = {
       id: uuid(),
       note_id: this.noteId,
@@ -1319,8 +1341,13 @@ export class Board {
     if (this.split) this.drawSplitOverlay(ctx);
     this.setPageTransform(ctx);
     const a = this.active;
-    const shapePts = a?.shape ? this.shapeOf(a) : null;
-    if (a && ((a.kind === 'draw' && a.points.length) || shapePts)) {
+    if (a?.shape) {
+      for (const points of this.shapeOf(a)) {
+        if (!points.length) continue;
+        const tmp: Stroke = { id: '', note_id: '', tool: 'pen', color: this.settings.penColor, width: this.settings.penWidth, points };
+        this.drawStroke(ctx, { s: tmp, minX: 0, minY: 0, maxX: 0, maxY: 0, variable: false, path: null });
+      }
+    } else if (a && a.kind === 'draw' && a.points.length) {
       const isHL = this.tool === 'highlighter';
       const tmp: Stroke = {
         id: '',
@@ -1328,7 +1355,7 @@ export class Board {
         tool: isHL ? 'highlighter' : 'pen',
         color: isHL ? this.settings.highlighterColor : this.settings.penColor,
         width: isHL ? this.settings.highlighterWidth : this.settings.penWidth,
-        points: shapePts ?? a.points,
+        points: a.points,
       };
       let pmin = 1,
         pmax = 0;
@@ -1337,6 +1364,17 @@ export class Board {
         pmax = Math.max(pmax, tmp.points[i]);
       }
       this.drawStroke(ctx, { s: tmp, minX: 0, minY: 0, maxX: 0, maxY: 0, variable: !isHL && pmax - pmin > 0.05, path: null });
+    }
+    if (a?.rect) {
+      const { x0, y0, x1, y1 } = a.rect;
+      ctx.save();
+      ctx.fillStyle = 'rgba(37, 99, 235, 0.06)';
+      ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      ctx.setLineDash([6 / this.scale, 5 / this.scale]);
+      ctx.lineWidth = 1.5 / this.scale;
+      ctx.strokeStyle = '#2563eb';
+      ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      ctx.restore();
     }
     if (a?.lasso && a.lasso.length >= 4) {
       ctx.save();

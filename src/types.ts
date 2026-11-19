@@ -63,6 +63,10 @@ export interface Settings {
   smoothing: number;
   /** The shape the shape tool draws. */
   shape: ShapeKind;
+  /** Shapes keep equal sides (square, circle...) and lines snap to 45°. */
+  shapeLock: boolean;
+  /** How the Select tool picks: a free-hand loop or a dragged rectangle. */
+  selectMode: 'lasso' | 'rect';
   /** Font size for new text boxes (page units). */
   textSize: number;
   /** Split mode: where the divider sits, as a fraction of the board's height. */
@@ -87,6 +91,8 @@ export const DEFAULT_SETTINGS: Settings = {
   highlighterWidth: 22,
   smoothing: 0.25,
   shape: 'rectangle',
+  shapeLock: false,
+  selectMode: 'lasso',
   textSize: 28,
   splitRatio: 0.5,
   paper: 'plain',
@@ -101,7 +107,8 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
-  if (!SHAPES.includes(out.shape)) out.shape = 'rectangle';
+  if (!(SHAPES as readonly string[]).includes(out.shape)) out.shape = 'rectangle';
+  if (out.selectMode !== 'rect') out.selectMode = 'lasso';
   if (!PAPERS.includes(out.paper)) out.paper = 'plain';
   return out;
 }

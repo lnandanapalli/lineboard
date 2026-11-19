@@ -5,7 +5,7 @@ import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import type { ShapeKind } from './shapes';
+import { SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
@@ -59,7 +59,8 @@ export class App {
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private modeMenu!: Dropdown<BoardMode>;
-  private shapeMenu!: Dropdown<ShapeKind>;
+  private shapeBtn!: HTMLButtonElement;
+  private selectMenu!: Dropdown<'lasso' | 'rect'>;
   /** The last strip mode, so F (free on/off) returns to it. */
   private lastStripMode: BoardMode = 'strips';
   private stripControls!: HTMLElement;
@@ -198,32 +199,33 @@ export class App {
       ['highlighter', icons.highlighter, 'Highlighter', 'H'],
       ['eraser', icons.eraser, 'Eraser', 'E'],
       ['text', icons.text, 'Text', 'T'],
-      ['select', icons.lasso, 'Select', 'V'],
     ] as const) {
       const b = this.iconBtn(icon, label, () => this.setTool(t), 'tool');
       b.title = withShortcut(label, key);
       this.toolBtns.set(t, b);
       tools.append(b);
     }
-    this.shapeMenu = dropdown<ShapeKind>({
-      name: 'Shape',
-      className: 'shape-btn',
-      value: this.settings.shape,
+    // Select: a free-hand loop or a dragged rectangle.
+    this.selectMenu = dropdown<'lasso' | 'rect'>({
+      name: 'Select',
+      className: 'tool-dropdown select-btn',
+      value: this.settings.selectMode,
       reselect: true,
-      onSelect: (k) => {
-        this.settings.shape = k;
+      onSelect: (m) => {
+        this.settings.selectMode = m;
         this.settingsChanged();
-        this.setTool('shape');
+        this.setTool('select');
       },
       options: [
-        { value: 'line', label: 'Line', icon: icons.shapeLine, description: 'Hold Shift to snap to 45°.' },
-        { value: 'arrow', label: 'Arrow', icon: icons.shapeArrow, description: 'Hold Shift to snap to 45°.' },
-        { value: 'rectangle', label: 'Rectangle', icon: icons.shapeRectangle, description: 'Hold Shift for a square.' },
-        { value: 'ellipse', label: 'Ellipse', icon: icons.shapeEllipse, description: 'Hold Shift for a circle.' },
-        { value: 'triangle', label: 'Triangle', icon: icons.shapeTriangle },
+        { value: 'lasso', label: 'Lasso select', icon: icons.lasso, hint: 'V', description: 'Draw a loop around what you want.' },
+        { value: 'rect', label: 'Rectangle select', icon: icons.rectSelect, hint: 'V', description: 'Drag a box around what you want.' },
       ],
     });
-    tools.append(this.shapeMenu.el);
+    tools.append(this.selectMenu.el);
+    // Shapes: a palette of shapes, opened from one button.
+    this.shapeBtn = h('button', { class: 'dropdown-btn tool-dropdown shape-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+    this.shapeBtn.addEventListener('click', () => this.openShapePalette());
+    tools.append(this.shapeBtn);
     this.swatches = h('div', { class: 'group swatches' });
     this.sizeBtn = h('button', { class: 'size-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
     this.sizeBtn.addEventListener('click', () => this.openSizePicker());
@@ -449,8 +451,12 @@ export class App {
 
   private renderToolOptions() {
     for (const [t, b] of this.toolBtns) b.classList.toggle('active', t === this.tool);
-    this.shapeMenu.el.classList.toggle('active', this.tool === 'shape');
-    this.shapeMenu.set(this.settings.shape);
+    this.shapeBtn.classList.toggle('active', this.tool === 'shape');
+    this.shapeBtn.innerHTML = `${SHAPE_ICONS[this.settings.shape]}${icons.chevron}`;
+    this.shapeBtn.setAttribute('aria-label', `Shapes: ${SHAPE_NAMES[this.settings.shape]}`);
+    this.shapeBtn.title = withShortcut(`Shapes: ${SHAPE_NAMES[this.settings.shape]}`, 'S');
+    this.selectMenu.el.classList.toggle('active', this.tool === 'select');
+    this.selectMenu.set(this.settings.selectMode);
     const isHL = this.tool === 'highlighter';
     const colors = isHL ? HL_COLORS : PEN_COLORS;
     const cur = isHL ? this.settings.highlighterColor : this.settings.penColor;
@@ -575,6 +581,46 @@ export class App {
     );
     draw();
     popover(this.sizeBtn, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${this.sizeName} size` });
+  }
+
+  /** The shape palette: a grid of shapes, and a switch for perfect squares / circles. */
+  private openShapePalette() {
+    if (this.shapeBtn.getAttribute('aria-expanded') === 'true') {
+      closeOpenMenu();
+      return;
+    }
+    const grid = h('div', { class: 'shape-grid', role: 'radiogroup', 'aria-label': 'Shape' });
+    let close = () => {};
+    for (const k of SHAPES) {
+      const b = h('button', { class: 'shape-cell', type: 'button', role: 'radio', 'aria-checked': String(k === this.settings.shape), 'aria-label': SHAPE_NAMES[k], title: SHAPE_NAMES[k] });
+      b.innerHTML = SHAPE_ICONS[k];
+      b.addEventListener('click', () => {
+        this.settings.shape = k;
+        this.settingsChanged();
+        this.setTool('shape');
+        close();
+      });
+      grid.append(b);
+    }
+    const lock = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-label': 'Keep proportions' }) as HTMLButtonElement;
+    lock.append(h('i', { class: 'knob' }));
+    const paint = () => {
+      lock.classList.toggle('on', this.settings.shapeLock);
+      lock.setAttribute('aria-checked', String(this.settings.shapeLock));
+    };
+    paint();
+    lock.addEventListener('click', () => {
+      this.settings.shapeLock = !this.settings.shapeLock;
+      this.settingsChanged();
+      paint();
+    });
+    const foot = h(
+      'div',
+      { class: 'shape-foot' },
+      h('div', {}, h('b', {}, 'Keep proportions'), h('small', {}, 'Squares, circles, even stars; lines at 45°. Off: nearly-square shapes still snap.')),
+      lock,
+    );
+    ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, foot), { label: 'Shapes' }));
   }
 
   private settingsChanged() {
