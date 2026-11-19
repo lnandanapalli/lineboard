@@ -1,5 +1,7 @@
 // Minimal offline support: cache the app shell. Supabase requests (other origin) are never cached.
 const CACHE = 'lineboard-v1';
+/** Build files kept for offline use (old ones from earlier deploys are dropped). */
+const MAX_ASSETS = 80;
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {
   e.waitUntil(
@@ -18,7 +20,12 @@ self.addEventListener('fetch', (e) => {
           hit ||
           fetch(req).then((res) => {
             const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy));
+            caches.open(CACHE).then(async (c) => {
+              await c.put(req, copy);
+              // Every deploy brings new hashed files: keep the newest ones, drop the rest.
+              const keys = (await c.keys()).filter((k) => new URL(k.url).pathname.startsWith('/assets/'));
+              for (const k of keys.slice(0, Math.max(0, keys.length - MAX_ASSETS))) await c.delete(k);
+            });
             return res;
           }),
       ),

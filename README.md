@@ -18,13 +18,26 @@ you unlock accepts ink. Your palm can rest anywhere else.
 - **Palm filtering inside the unlocked strip:** one stroke at a time, oversized contacts ignored (with a
   calibration pad in Settings), strokes cancelled if a contact grows into a palm, and optional pen-only input
   when an active pen is detected.
-- Pen (pressure-aware with active pens), highlighter, stroke eraser, shapes, text boxes, size slider, stroke
-  smoothing, undo / redo, multiple notes, PNG export.
+- **Modes:** strips, multi-strip, a **free whiteboard** (write anywhere; two fingers scroll and zoom; plain,
+  lined, grid or dotted paper) and **split** (two panes, each locked or unlocked, with a movable divider).
+- **Tools:**
+  - pen, pressure-aware with active pens;
+  - highlighter, stroke eraser, size slider, stroke smoothing, colours (including a custom one);
+  - undo / redo, OS-aware keyboard shortcuts.
+- **Shapes:** a palette of 19 shapes that snap to perfect squares, circles and 45° lines without a keyboard,
+  with a Keep proportions switch, solid / dashed / dotted lines and four thicknesses.
+- **Text boxes** with font (sans, serif, mono, handwriting), size, bold / italic / underline, alignment and
+  colour; drag them to move.
+- **Pictures:** insert, paste or drop them, draw on top, and move or resize them. With encryption on they are
+  encrypted too.
+- **Select:** lasso or rectangle (anything touched is picked), then move, resize, duplicate or delete.
+- **Organise and export:** notebooks and notes, PNG export, manual orientation lock.
+- **Your data:** download everything as a zip, delete your account (Settings → Account).
 - **Accounts and sync** with Supabase, with background saving that survives reloads and offline periods.
 - **Account security.** See and sign out signed-in devices, change the password (which signs out other
   devices, as does a password reset), two-step verification with an authenticator app, and passkey sign-in.
   See [Account security](#account-security).
-- **Optional end-to-end encryption.** Turn it on in Settings → Privacy & security: ink, note titles and
+- **Optional end-to-end encryption.** Turn it on in Settings → Encryption: ink, note titles and
   notebook names are encrypted on the device before upload. See [End-to-end encryption](#end-to-end-encryption).
 - **Try without an account.** Notes stay in the browser and move into the account on sign-in.
 - **Local mode.** With no backend configured, the whole app runs in the browser with no sign-in.
