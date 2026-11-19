@@ -11,7 +11,8 @@ import { IMAGE_TYPES, prepareImage } from './images';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
-import { attachOrientation, detachOrientation, orientation } from './orientation';
+import { appRect, appViewport, attachOrientation, clientToApp, detachOrientation, orientation } from './orientation';
+import { attachNameTips } from './nameTip';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
 import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
@@ -44,6 +45,19 @@ export interface AppOptions {
 }
 
 /** Said when an export could not include every picture. */
+/** Is a colour light (dark marks show better on it)? Relative luminance, as in WCAG. */
+function isLight(color: string) {
+  // The whole value: #rgb or #rrggbb, with an optional alpha (#rgba, #rrggbbaa) that is ignored.
+  const m = /^#(?:([0-9a-f]{6})(?:[0-9a-f]{2})?|([0-9a-f]{3})[0-9a-f]?)$/i.exec(color);
+  if (!m) return true;
+  const hex = m[1] ?? [...m[2]].map((x) => x + x).join('');
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4;
+}
+
 const missingNote = (n: number) =>
   `Downloaded, but ${n === 1 ? '1 picture' : `${n} pictures`} could not be read and ${n === 1 ? 'is' : 'are'} not in the file. Check your connection and export again.`;
 
@@ -355,14 +369,17 @@ export class App {
       h(
         'div',
         { class: 'sidebar-foot' },
+        // No email here: the sidebar is on screen in recordings and screen shares.
         this.opts.signIn
           ? 'Trying without an account: notes are saved in this browser only.'
           : this.store.mode === 'local'
             ? 'Local mode: notes stay on this device.'
-            : (this.user.email ?? ''),
+            : 'Synced to your account.',
       ),
       this.opts.signIn ? this.signInButton('sidebar') : null,
     );
+    this.sidebar.append(this.resizeHandle());
+    attachNameTips(this.sidebar, '.note-title, .book-title, .book-name');
     const scrim = h('div', { class: 'scrim' });
     scrim.addEventListener('click', () => this.toggleSidebar(false));
 
@@ -390,6 +407,17 @@ export class App {
     showRotate();
     const off = orientation.onChange(showRotate);
     this.abort.signal.addEventListener('abort', () => off());
+
+    // The board takes pointer presses without moving focus, so a field being edited (the note title)
+    // would keep its caret. Pressing the board finishes the edit, as clicking anywhere else does.
+    boardHost.addEventListener(
+      'pointerdown',
+      () => {
+        const a = document.activeElement as HTMLElement | null;
+        if (a && a.tagName === 'INPUT' && !boardHost.contains(a)) a.blur();
+      },
+      true,
+    );
 
     this.board = new Board(boardHost, this.settings, {
       onStrokesAdded: (s) => this.record({ type: 'add', strokes: s }),
@@ -502,6 +530,73 @@ export class App {
     return b;
   }
 
+  /**
+   * The sidebar's right edge can be dragged to make it wider or narrower, within limits so it never
+   * covers most of the page: 240 px to 560 px, and at most 60% of the screen. Double-click (or
+   * Home) puts it back; arrow keys move it in steps. Remembered on this device.
+   */
+  private resizeHandle() {
+    const MIN = 240;
+    const max = () => Math.max(MIN, Math.min(560, Math.floor(appViewport().width * 0.6)));
+    const handle = h('div', { class: 'sidebar-resize', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the sidebar', tabindex: '0', title: 'Drag to resize (double-click to reset)' });
+    const apply = (w: number | null) => {
+      if (w === null) {
+        this.sidebar.style.removeProperty('--sidebar-w');
+        handle.removeAttribute('aria-valuenow');
+        return;
+      }
+      const v = Math.round(Math.min(max(), Math.max(MIN, w)));
+      this.sidebar.style.setProperty('--sidebar-w', `${v}px`);
+      handle.setAttribute('aria-valuenow', String(v));
+      handle.setAttribute('aria-valuemin', String(MIN));
+      handle.setAttribute('aria-valuemax', String(max()));
+    };
+    const save = () => lsSet('lb-sidebar-width', this.sidebar.style.getPropertyValue('--sidebar-w') ? parseInt(this.sidebar.style.getPropertyValue('--sidebar-w')) : null);
+    const saved = lsGet<number | null>('lb-sidebar-width', null);
+    if (typeof saved === 'number' && Number.isFinite(saved)) apply(saved);
+    let drag: { id: number; x0: number; w0: number } | null = null;
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      // In the app's own coordinates: with the app turned 90°, the on-screen width is its height.
+      drag = { id: e.pointerId, x0: clientToApp(e.clientX, e.clientY).x, w0: appRect(this.sidebar).width };
+      this.sidebar.classList.add('resizing');
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (drag?.id === e.pointerId) apply(drag.w0 + clientToApp(e.clientX, e.clientY).x - drag.x0);
+    });
+    const end = (e: PointerEvent) => {
+      if (drag?.id !== e.pointerId) return;
+      drag = null;
+      this.sidebar.classList.remove('resizing');
+      save();
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('dblclick', () => {
+      apply(null);
+      save();
+    });
+    handle.addEventListener('keydown', (e) => {
+      const w = appRect(this.sidebar).width;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') apply(w + (e.key === 'ArrowRight' ? 24 : -24));
+      else if (e.key === 'Home') apply(null);
+      else return;
+      e.preventDefault();
+      save();
+    });
+    // A smaller window (or turning the device) keeps the sidebar within the limit.
+    window.addEventListener(
+      'resize',
+      () => {
+        const cur = parseInt(this.sidebar.style.getPropertyValue('--sidebar-w'));
+        if (cur) apply(cur);
+      },
+      { signal: this.abort.signal },
+    );
+    return handle;
+  }
+
   private toggleSidebar(force?: boolean) {
     const open = force ?? !this.root.querySelector('.app')!.classList.contains('sidebar-open');
     this.root.querySelector('.app')!.classList.toggle('sidebar-open', open);
@@ -572,8 +667,14 @@ export class App {
       this.renderToolOptions();
     };
     const swatch = (c: string) => {
-      const b = h('button', { class: 'swatch' + (c.toLowerCase() === cur.toLowerCase() ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, title: c });
+      const on = c.toLowerCase() === cur.toLowerCase();
+      const b = h('button', { class: 'swatch' + (on ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, 'aria-pressed': String(on), title: c });
       b.style.setProperty('--c', c);
+      // The chosen colour: a ring around it and a check inside, light or dark to stand out on it.
+      if (on) {
+        b.innerHTML = icons.check;
+        b.style.setProperty('--tick', isLight(c) ? '#111827' : '#ffffff');
+      }
       b.addEventListener('click', () => pick(c));
       return b;
     };

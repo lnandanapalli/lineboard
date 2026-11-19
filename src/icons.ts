@@ -14,6 +14,7 @@ export const icons = {
   multi: svg('<rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/>'),
   down: svg('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>'),
   up: svg('<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>'),
+  check: svg('<path d="M20 6 9 17l-5-5"/>'),
   history: svg('<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>'),
   upload: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>'),
   download: svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>'),

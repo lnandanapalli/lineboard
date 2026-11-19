@@ -1013,7 +1013,7 @@ export class Board {
   private hoverCursor(e: PointerEvent) {
     if (e.pointerType === 'touch') return;
     const pt = this.toLogical(e.clientX, e.clientY);
-    let cursor = 'crosshair';
+    let cursor = this.tool === 'pen' || this.tool === 'highlighter' ? this.inkCursor(this.tool) : 'crosshair';
     if (this.tool === 'text') cursor = this.textAt(pt.x, pt.y) ? 'move' : 'text';
     else if (this.tool === 'select') {
       const b = this.selectionBox();
@@ -1022,6 +1022,32 @@ export class Board {
     }
     if (this.live.style.cursor !== cursor) this.live.style.cursor = cursor;
   }
+
+  /**
+   * The pen and highlighter cursors show the tip about to draw, in its colour and size on screen:
+   * a solid dot for the pen, a see-through square marker tip for the highlighter (crosshair for
+   * anything else, or when the tip would be too large for a cursor).
+   */
+  private inkCursor(tool: 'pen' | 'highlighter'): string {
+    const hl = tool === 'highlighter';
+    const color = hl ? this.settings.highlighterColor : this.settings.penColor;
+    const width = hl ? this.settings.highlighterWidth : this.settings.penWidth;
+    if (!/^#[0-9a-f]{3,8}$/i.test(color)) return 'crosshair';
+    // Browsers ignore cursor images larger than 128 px; stay well under it.
+    const d = Math.round(Math.min(hl ? 64 : 40, Math.max(hl ? 10 : 5, width * this.scale)));
+    const size = d + 6;
+    const c = size / 2;
+    const key = `${tool}${color}${d}`;
+    if (this.cursorCache?.key === key) return this.cursorCache.css;
+    const mark = hl
+      ? `<rect x="3" y="${c - d * 0.3}" width="${d}" height="${d * 0.6}" rx="2" fill="${color}" fill-opacity="0.45" stroke="#111827" stroke-opacity="0.55" stroke-width="1"/>`
+      : `<circle cx="${c}" cy="${c}" r="${d / 2}" fill="${color}" stroke="#ffffff" stroke-width="1.5"/><circle cx="${c}" cy="${c}" r="${d / 2 + 1}" fill="none" stroke="#111827" stroke-opacity="0.45" stroke-width="1"/>`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${mark}</svg>`;
+    const css = `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${Math.round(c)} ${Math.round(c)}, crosshair`;
+    this.cursorCache = { key, css };
+    return css;
+  }
+  private cursorCache: { key: string; css: string } | null = null;
 
   private openEditor(x: number, y: number, size: number, color: string, style: TextStyle, original: Cached | null) {
     const el = document.createElement('textarea');
