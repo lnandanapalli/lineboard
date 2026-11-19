@@ -185,6 +185,12 @@ test('while a note is still loading the board takes no ink, so nothing drawn is 
 test.describe('first visit', () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
+  test('a new visitor starts in split mode, with the split explanation', async ({ page }) => {
+    await page.goto('/app');
+    await expect(page.locator('.mode-btn')).toHaveAttribute('aria-label', 'Mode: Split');
+    await expect(page.locator('.hint')).toContainText('open half of the screen');
+  });
+
   test('a one-time notice says what is stored (essential only, no tracking) and links to the details', async ({ page }) => {
     await page.goto('/home');
     const notice = page.getByRole('region', { name: 'Storage notice' });

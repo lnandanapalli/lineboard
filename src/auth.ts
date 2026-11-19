@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { h } from './util';
+import { h, withReveal } from './util';
 import { publicFooter } from './public';
 import { logo } from './brand';
 import { passkeysSupported } from './account';
@@ -33,7 +33,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   const extra = h('div', { class: 'auth-extra' });
   // Bot check (only when configured): sign-in, sign-up, email links, resets and passkeys need a token.
   const captcha = new Captcha();
-  const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', pass), agreement, captcha.el, submit);
+  const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', withReveal(pass)), agreement, captcha.el, submit);
 
   const setMsg = (t: string, kind: 'ok' | 'err' = 'ok') => {
     msg.textContent = t;
@@ -188,7 +188,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
 export function renderNewPassword(root: HTMLElement, sb: SupabaseClient, done: () => void) {
   const pass = h('input', { type: 'password', placeholder: `New password (at least ${MIN_PASSWORD} characters)`, autocomplete: 'new-password', minlength: String(MIN_PASSWORD), required: true }) as HTMLInputElement;
   const msg = h('p', { class: 'auth-msg' });
-  const form = h('form', { class: 'auth-form' }, pass, h('button', { class: 'btn primary wide', type: 'submit' }, 'Set new password'));
+  const form = h('form', { class: 'auth-form' }, h('label', {}, 'New password', withReveal(pass)), h('button', { class: 'btn primary wide', type: 'submit' }, 'Set new password'));
   const others = h('input', { type: 'checkbox', checked: true }) as HTMLInputElement;
   form.insertBefore(h('label', { class: 'set-check' }, others, h('span', {}, 'Sign out all other devices')), form.lastChild);
   form.addEventListener('submit', async (e) => {

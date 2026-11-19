@@ -77,3 +77,40 @@ test('new passwords need at least 8 characters; signing in still takes an older,
   await fillSignIn(page, 'old123');
   await attachBoard(page);
 });
+
+test('password fields have a show / hide eye, and go back to hidden once submitted', async ({ page }) => {
+  await mockSupabase(page);
+  await page.goto('/signup');
+  const pass = page.getByLabel('Password', { exact: true });
+  await pass.fill('my secret pass');
+  await expect(pass).toHaveAttribute('type', 'password');
+  const eye = page.getByRole('button', { name: 'Show password' });
+  await eye.click();
+  await expect(pass).toHaveAttribute('type', 'text');
+  await expect(pass).toBeFocused(); // pressing the eye keeps typing in the field
+  await page.getByRole('button', { name: 'Hide password' }).click();
+  await expect(pass).toHaveAttribute('type', 'password');
+  // Shown, then the form is sent: hidden again.
+  await page.getByRole('button', { name: 'Show password' }).click();
+  await page.getByLabel('Email', { exact: true }).fill('new@example.com');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(pass).toHaveAttribute('type', 'password');
+});
+
+test('a password shown in a dialog hides again when its button is pressed', async ({ page }) => {
+  await mockSupabase(page);
+  await page.goto('/login');
+  await fillSignIn(page);
+  await attachBoard(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Encryption' }).click();
+  await page.getByRole('switch', { name: 'End-to-end encryption' }).click();
+  const confirm = page.locator('dialog.confirm-dialog');
+  const pass = confirm.locator('input.dlg-input').first();
+  await pass.fill('not my password');
+  await confirm.getByRole('button', { name: 'Show password' }).click();
+  await expect(pass).toHaveAttribute('type', 'text');
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  await expect(confirm.locator('.enc-error')).toContainText('not right'); // still open after a failed check
+  await expect(pass).toHaveAttribute('type', 'password');
+});

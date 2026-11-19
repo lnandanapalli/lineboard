@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { TEST_STORAGE } from './storageState';
 import { MOCK_TOTP, mockSupabase, recoveryHash, type MockDb } from './mockSupabase';
 
 /** Signed-in devices, password changes, two-step verification (authenticator app) and passkeys. */
@@ -13,7 +14,7 @@ async function signIn(page: Page) {
 }
 
 async function otherDevice(browser: Browser, db: MockDb, userAgent = ANDROID) {
-  const context = await browser.newContext({ baseURL: 'http://localhost:4173', viewport: { width: 800, height: 1280 }, hasTouch: true, serviceWorkers: 'block', storageState: { cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'lb-storage-notice', value: 'true' }] }] }, userAgent });
+  const context = await browser.newContext({ baseURL: 'http://localhost:4173', viewport: { width: 800, height: 1280 }, hasTouch: true, serviceWorkers: 'block', storageState: TEST_STORAGE, userAgent });
   const page = await context.newPage();
   await mockSupabase(page, db);
   return page;

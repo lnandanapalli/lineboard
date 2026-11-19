@@ -1,7 +1,7 @@
 {
   "name": "Lineboard",
   "short_name": "Lineboard",
-  "description": "Handwritten notes with strip-lock palm rejection.",
+  "description": "Handwritten notes on your tablet: write above the line, rest your hand below it.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

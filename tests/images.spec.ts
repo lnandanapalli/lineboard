@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { TEST_STORAGE } from './storageState';
 import { expect, test, type Browser, type CDPSession, type Page } from '@playwright/test';
 import { PEN, drag, expectStrokes, send, setup, tp } from './helpers';
 import { USER_ID, mockSupabase, type MockDb } from './mockSupabase';
@@ -148,7 +149,7 @@ async function turnOnEncryption(page: Page, expectDone = 'Your notes are encrypt
 }
 
 async function otherDevice(browser: Browser, db: MockDb) {
-  const context = await browser.newContext({ baseURL: 'http://localhost:4173', viewport: { width: 800, height: 1280 }, hasTouch: true, serviceWorkers: 'block', storageState: { cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'lb-storage-notice', value: 'true' }] }] } });
+  const context = await browser.newContext({ baseURL: 'http://localhost:4173', viewport: { width: 800, height: 1280 }, hasTouch: true, serviceWorkers: 'block', storageState: TEST_STORAGE });
   const page = await context.newPage();
   await mockSupabase(page, db);
   return page;

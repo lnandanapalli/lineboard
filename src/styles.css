@@ -271,6 +271,17 @@ kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px sol
 .unlock-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; font-size: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .unlock-card input.mono { text-transform: uppercase; }
 
+/* Password fields: the show / hide eye inside the right edge (util.ts withReveal). */
+.reveal { position: relative; display: block; width: 100%; }
+.reveal > input { width: 100%; padding-right: 44px; }
+.reveal-btn {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%); width: 36px; height: 36px;
+  display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted, #6b7280); cursor: pointer;
+}
+.reveal-btn svg { width: 20px; height: 20px; }
+.reveal-btn:hover, .reveal-btn[aria-pressed=true] { color: var(--ink, #111827); }
+.reveal-btn:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 1px; }
+
 /* One-time notice about browser storage (see storageNotice.ts). */
 .storage-notice {
   position: fixed; left: 12px; bottom: 12px; z-index: 90; max-width: min(440px, calc(100vw - 24px));
@@ -356,7 +367,14 @@ body:has(.hint) .storage-notice { bottom: 96px; }
 .active-line { display: flex; align-items: center; background: #edf4eb; border-block: 1px solid #cbdcc6; }
 .active-line > span:first-child { padding-left: 14px; color: #537163; }
 .active-line .handwriting { margin: 5px 12px; font-size: 25px; }
-.preview-sketch { padding: 24px 45px; color: #ad9663; font-size: 28px; }
+.preview-writing { margin-bottom: 14px; }
+.preview-caret { display: inline-block; width: 2px; height: 26px; margin-left: 4px; vertical-align: -4px; background: #343e66; animation: preview-blink 1.1s steps(1) infinite; }
+@keyframes preview-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .preview-caret { animation: none; } }
+/* The line: the open page above, the locked, palm-safe part below (split mode). */
+.preview-line { position: relative; height: 0; border-top: 2px solid #7c8a9c; }
+.preview-grip { position: absolute; left: 8px; top: -13px; width: 26px; height: 24px; display: grid; place-items: center; background: #fff; border: 1px solid #cdd3cc; border-radius: 6px; font-size: 13px; color: #6b7369; }
+.preview-locked { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 92px; background: repeating-linear-gradient(#e7ebef 0px, #e7ebef 47px, #d9dee4 48px); color: #6b7369; font-size: 13px; }
 .preview-caption { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 18px; background: #fcfcfa; color: #6b7369; }
 .ink-dot { width: 8px; height: 8px; background: #537163; border-radius: 50%; }
 .how-section { padding: 64px 40px; max-width: 1200px; margin: auto; border-top: 1px solid #e3e5dc; }

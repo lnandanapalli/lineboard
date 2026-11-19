@@ -98,7 +98,7 @@ export const DEFAULT_SETTINGS: Settings = {
   touchThreshold: 45,
   penOnlyWhenPenSeen: true,
   showLines: true,
-  mode: 'strips',
+  mode: 'split',
   marginSide: 'left',
   penColor: '#111827',
   penWidth: 3.5,

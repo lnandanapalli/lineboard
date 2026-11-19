@@ -344,8 +344,12 @@ export class App {
     // Board
     const boardHost = h('div', { class: 'board-host' });
     this.hint = h('div', { class: 'hint' });
-    this.hint.innerHTML =
-      '<b>How it works:</b> tap a 🔒 in the margin to unlock one strip. Only that strip takes ink, so rest your palm anywhere else. Drag the margin to scroll. <button type="button" class="link">Got it</button>';
+    // The first-visit explanation matches the mode the page opens in (split, for new users).
+    const how =
+      this.settings.mode === 'split'
+        ? 'write in the open half of the screen and rest your palm on the locked half. Tap a 🔒 in the margin to switch halves; drag the margin to scroll.'
+        : 'tap a 🔒 in the margin to unlock one strip. Only that strip takes ink, so rest your palm anywhere else. Drag the margin to scroll.';
+    this.hint.innerHTML = `<b>How it works:</b> ${how} <button type="button" class="link">Got it</button>`;
     this.hint.querySelector('button')!.addEventListener('click', () => {
       this.hint.remove();
       lsSet('lb-hint-dismissed', true);
