@@ -83,15 +83,21 @@ export class AccountSecurity {
   // ----------------------------- confirming it's you -----------------------------
 
   /**
-   * When the user last proved who they are (password or authenticator code) on this page. Risky
-   * actions (new passkey, two-step changes, encryption) need a recent proof, so someone who picks up
-   * an unlocked device can't quietly add their own way into the account.
+   * When the user last proved who they are on this page: with the password, and with an
+   * authenticator code. Risky actions (new passkey, two-step changes, encryption, downloading or
+   * deleting the account) need recent proof, so someone who picks up an unlocked device can't
+   * quietly take the data or add their own way in. With two-step verification on they need both:
+   * a stolen password alone is not enough (see confirmItsYou).
    */
-  private confirmedAt = 0;
+  private passwordAt = 0;
+  private codeAt = 0;
   static readonly CONFIRM_WINDOW_MS = 5 * 60_000;
 
-  get recentlyConfirmed() {
-    return Date.now() - this.confirmedAt < AccountSecurity.CONFIRM_WINDOW_MS;
+  get passwordRecent() {
+    return Date.now() - this.passwordAt < AccountSecurity.CONFIRM_WINDOW_MS;
+  }
+  get codeRecent() {
+    return Date.now() - this.codeAt < AccountSecurity.CONFIRM_WINDOW_MS;
   }
 
   /**
@@ -119,13 +125,12 @@ export class AccountSecurity {
     if (access_token) {
       await fetch(`${base}/logout?scope=local`, { method: 'POST', headers: { ...headers, Authorization: `Bearer ${access_token}` } }).catch(() => {});
     }
-    this.confirmedAt = Date.now();
+    this.passwordAt = Date.now();
   }
 
   /** Prove it's you with a code from an authenticator app (two-step verification users). */
   async confirmWithCode(factorId: string, code: string) {
     await this.verifyCode(factorId, code);
-    this.confirmedAt = Date.now();
   }
 
   // ----------------------------- password -----------------------------
@@ -193,6 +198,7 @@ export class AccountSecurity {
       if (c === 'mfa_verification_failed' || c === 'invalid_credentials') throw new AccountError('That code is not right. Codes change every 30 seconds; try the current one.', c);
       fail(error, 'Could not verify the code');
     }
+    this.codeAt = Date.now(); // a fresh code is proof too (at sign-in, or when turning two-step on)
   }
 
   async cancelAuthenticator(factorId: string) {

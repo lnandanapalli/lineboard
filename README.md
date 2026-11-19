@@ -71,9 +71,14 @@ Settings → Sign-in & devices, built on Supabase Auth:
   `current_password` so the server checks it too when *Require current password* is on in the project's
   Auth settings. Accounts without a password (email-link or passkey sign-up) confirm with an emailed code
   instead. It signs out other devices by default; so does a password reset from the email link.
-- **Confirm it's you.** Adding or removing a passkey or authenticator, and turning encryption on, ask for
-  the password (or an authenticator code) if it wasn't entered in the last five minutes, so someone at an
-  unlocked device can't add their own way into the account or lock the owner out of their notes.
+- **Confirm it's you.** These ask for the password if it wasn't entered in the last five minutes:
+  - adding or removing a passkey or authenticator;
+  - turning encryption on or off;
+  - downloading your data and deleting the account.
+
+  So someone at an unlocked device can't add their own way in, take the data, or lock the owner out. With
+  two-step verification on, they need the password **and** a fresh authenticator code, so a stolen password
+  alone gets past nothing. Changing the password needs the code too.
 - **Two-step verification** with any TOTP authenticator app (`auth.mfa`). Several authenticators can be
   added as backups. The same `access_ok()` policy requires `aal2` for users who turned it on, so notes can't
   be read with the password alone even by calling the API directly. Turning it on signs out other devices.
@@ -179,7 +184,7 @@ password-reset emails work.
 Built in:
 
 - **Data isolation:** row-level security: every account reaches only its own rows and picture files, and a device that was signed out elsewhere loses access at once (`access_ok()` in the schema).
-- **Optional user protections:** end-to-end encryption, two-step verification, passkeys, a list of signed-in devices, and a fresh password or code check ("Confirm it's you") before sensitive changes.
+- **Optional user protections:** end-to-end encryption, two-step verification, passkeys, a list of signed-in devices, and a fresh password check before sensitive changes ("Confirm it's you"), plus an authenticator code when two-step verification is on.
 - **Fair-use limits, enforced by the database:**
   - 500 notebooks and 20,000 notes per account;
   - 50,000 strokes per note and 2,000,000 strokes in all;
