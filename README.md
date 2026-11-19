@@ -18,8 +18,8 @@ you unlock accepts ink. Your palm can rest anywhere else.
 - **Palm filtering inside the unlocked strip:** one stroke at a time, oversized contacts ignored (with a
   calibration pad in Settings), strokes cancelled if a contact grows into a palm, and optional pen-only input
   when an active pen is detected.
-- **Modes:** strips, multi-strip, a **free whiteboard** (write anywhere; two fingers scroll and zoom; plain,
-  lined, grid or dotted paper) and **split** (two panes, each locked or unlocked, with a movable divider).
+- **Modes:** **split** (the default for new users), strips, multi-strip, a **free whiteboard** (write anywhere; two fingers scroll and zoom; plain,
+  lined, grid or dotted paper). Split is two panes, each locked or unlocked, with a movable divider.
 - **Tools:**
   - pen, pressure-aware with active pens;
   - highlighter, stroke eraser, size slider, stroke smoothing, colours (including a custom one);
@@ -222,6 +222,7 @@ npm run dev         # dev server
 npm run typecheck
 npm test            # Playwright end-to-end tests (run `npx playwright install chromium` once)
 npm run build       # production build in dist/
+npm run screenshot  # regenerate docs/screenshot.png
 ```
 
 The tests simulate stylus and palm contacts of different sizes, and cover the signed-in flows against an

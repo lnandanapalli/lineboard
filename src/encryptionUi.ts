@@ -2,7 +2,7 @@ import { AccountError } from './account';
 import { logo } from './brand';
 import { MIN_PASSPHRASE, WrongSecretError, type KeyVault } from './crypto/vault';
 import type { SupabaseStore } from './store/supabaseStore';
-import { h, toast } from './util';
+import { h, toast, withReveal } from './util';
 
 /**
  * Screens and dialogs for end-to-end encryption: turning it on (with a recovery key), unlocking
@@ -12,7 +12,8 @@ import { h, toast } from './util';
 // ----------------------------- small building blocks -----------------------------
 
 export function field(label: string, input: HTMLInputElement, help?: string) {
-  return h('label', { class: 'enc-field' }, h('span', {}, label), input, help ? h('small', {}, help) : null);
+  // Password fields get the show / hide eye.
+  return h('label', { class: 'enc-field' }, h('span', {}, label), input.type === 'password' ? withReveal(input) : input, help ? h('small', {}, help) : null);
 }
 
 export function passInput(autocomplete: 'current-password' | 'new-password', placeholder = '') {

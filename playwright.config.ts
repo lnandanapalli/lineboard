@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { TEST_STORAGE } from './tests/storageState';
 
 export default defineConfig({
   testDir: 'tests',
@@ -14,8 +15,8 @@ export default defineConfig({
     hasTouch: true,
     // Request mocks (tests/mockSupabase.ts) can't see requests made by the app's service worker.
     serviceWorkers: 'block',
-    // The one-time storage notice is dismissed (tests/privacy.spec.ts covers it with fresh storage).
-    storageState: { cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'lb-storage-notice', value: 'true' }] }] },
+    // Notice dismissed, strips mode (see tests/storageState.ts).
+    storageState: TEST_STORAGE,
     launchOptions: process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {},
   },
   webServer: {

@@ -13,7 +13,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "playwright test"
+    "test": "playwright test",
+    "screenshot": "SCREENSHOT=1 playwright test tests/readme-screenshot.spec.ts"
   },
   "dependencies": {
     "@fontsource/patrick-hand": "^5.3.0",
