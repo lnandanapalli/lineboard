@@ -26,7 +26,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   const tabs = h('div', { class: 'auth-switch' });
   const heading = h('h1', { class: 'auth-heading' });
   const description = h('p', { class: 'tagline' });
-  const agreement = h('p', { class: 'auth-agreement' }, 'By creating an account, you agree to the ', h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' and acknowledge the ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy'), '.');
+  const agreement = h('p', { class: 'auth-agreement' }, 'By creating an account, you confirm you are at least 13 and agree to the ', h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' and acknowledge the ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy'), '.');
   const extra = h('div', { class: 'auth-extra' });
   const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', pass), agreement, submit);
 

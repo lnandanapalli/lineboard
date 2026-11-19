@@ -14,9 +14,11 @@ import { renderUnlock } from './encryptionUi';
 import { AccountSecurity } from './account';
 import { renderSecondStep } from './securityUi';
 import { h, lsGet, lsSet, toast } from './util';
+import { showStorageNotice } from './storageNotice';
 
 const root = document.getElementById('app')!;
 installRouter();
+showStorageNotice();
 const LOCAL_USER = { id: 'local', email: null };
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

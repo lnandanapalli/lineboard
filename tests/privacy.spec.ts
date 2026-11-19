@@ -155,3 +155,30 @@ test('while a note is still loading the board takes no ink, so nothing drawn is 
   await drag(cdp, b.x + 100, b.y + 30, b.x + 300, b.y + 30); // once loaded: drawn and saved
   await expect.poll(() => db.strokes.length).toBe(1);
 });
+
+test.describe('first visit', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('a one-time notice says what is stored (essential only, no tracking) and links to the details', async ({ page }) => {
+    await page.goto('/home');
+    const notice = page.getByRole('region', { name: 'Storage notice' });
+    await expect(notice).toContainText('No ads, no analytics, no tracking cookies');
+    await notice.getByRole('link', { name: 'What is stored' }).click();
+    await expect(page).toHaveURL(/\/privacy#storage$/);
+    await expect(page.locator('#storage h2')).toHaveText('Cookies and browser storage');
+    await page.getByRole('region', { name: 'Storage notice' }).getByRole('button', { name: 'OK' }).click();
+    await expect(page.getByRole('region', { name: 'Storage notice' })).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('.policy-page h1')).toHaveText('Privacy policy');
+    await expect(page.getByRole('region', { name: 'Storage notice' })).toHaveCount(0); // remembered
+  });
+});
+
+test('the privacy policy covers rights, retention, providers and children; the terms cover acceptable use', async ({ page }) => {
+  await page.goto('/privacy');
+  for (const id of ['controller', 'data', 'purposes', 'storage', 'processors', 'retention', 'rights', 'security', 'children', 'contact']) await expect(page.locator(`section#${id}`)).toBeVisible();
+  await expect(page.locator('#rights')).toContainText('Download my data');
+  await expect(page.locator('#rights')).toContainText('Delete account');
+  await page.goto('/terms');
+  for (const id of ['acceptable-use', 'limits', 'suspension', 'account']) await expect(page.locator(`section#${id}`)).toBeVisible();
+});

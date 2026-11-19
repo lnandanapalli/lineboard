@@ -14,6 +14,8 @@ export default defineConfig({
     hasTouch: true,
     // Request mocks (tests/mockSupabase.ts) can't see requests made by the app's service worker.
     serviceWorkers: 'block',
+    // The one-time storage notice is dismissed (tests/privacy.spec.ts covers it with fresh storage).
+    storageState: { cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'lb-storage-notice', value: 'true' }] }] },
     launchOptions: process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {},
   },
   webServer: {
