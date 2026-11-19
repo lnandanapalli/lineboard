@@ -46,7 +46,8 @@ function writePdf(pages: { jpeg: Uint8Array; w: number; h: number }[], title: st
     push('\nendobj\n');
   };
   // PDF text strings: only printable ASCII kept, with ( ) \ escaped.
-  const pdfText = (s: string) => s.replace(/[^\x20-\x7e]/g, '?').replace(/[\\()]/g, (c) => '\\' + c).slice(0, 200);
+  // Cut to length first, so an escape is never split in two (which would leave the string open).
+  const pdfText = (s: string) => s.slice(0, 200).replace(/[^\x20-\x7e]/g, '?').replace(/[\\()]/g, (c) => '\\' + c);
 
   push('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');
   obj(1, '<< /Type /Catalog /Pages 2 0 R >>');

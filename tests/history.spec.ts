@@ -179,7 +179,8 @@ test('signed in: versions are stored in the account; without the database update
   await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
   await page.getByLabel('Password', { exact: true }).fill(db.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  const { cdp, geo } = await setup(page);
+  // Wait for the signed-in board (loading /app again here could beat the sign-in and open device-only mode).
+  const { cdp, geo } = await attachBoard(page);
   await draw(cdp, geo, 50);
   await expect.poll(() => db.strokes.length).toBe(1);
   await page.getByRole('button', { name: 'Version history' }).click();

@@ -201,3 +201,22 @@ test('signed in, stars and the archive sync to the account; an older database sa
   await expect(page.locator('#toast')).toContainText('database update');
   await expect(noteRow(page, t2).getByRole('button', { name: `Star "${t2}"` })).toHaveAttribute('aria-pressed', 'false');
 });
+
+test('a PDF keeps a 200-character title ending in a bracket intact', async ({ page }) => {
+  await setup(page);
+  const title = 'x'.repeat(199) + ')';
+  await openSidebar(page);
+  await page.locator('.note-list li').first().locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Rename' }).click();
+  await page.locator('dialog .dlg-input').fill(title);
+  await page.locator('dialog').getByRole('button', { name: 'Rename' }).click();
+  await page.locator('.scrim').click();
+  await page.getByRole('button', { name: 'Share or export', exact: true }).click();
+  await page.getByRole('button', { name: /^Share…/ }).click();
+  await page.locator('dialog[open] select').selectOption({ label: 'PDF' });
+  const wait = page.waitForEvent('download');
+  await page.locator('dialog').getByRole('button', { name: 'Share' }).click();
+  const bytes = readFileSync((await (await wait).path())!).toString('latin1');
+  // The bracket is escaped and the string is closed: "(xxx…\))", then the next key.
+  expect(bytes).toContain(`/Title (${'x'.repeat(199)}\\)) /Producer`);
+});
