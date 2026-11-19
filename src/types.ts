@@ -138,6 +138,21 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   if (!LINE_STYLES.includes(out.shapeDash)) out.shapeDash = 'solid';
   if (!(out.shapeWidth >= 1 && out.shapeWidth <= 20)) out.shapeWidth = DEFAULT_SETTINGS.shapeWidth;
   if (out.selectMode !== 'rect') out.selectMode = 'lasso';
+  // Every number within what its control offers (a stored value may be old, edited or damaged).
+  const within = (v: unknown, min: number, max: number, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback);
+  const D = DEFAULT_SETTINGS;
+  out.stripHeight = within(out.stripHeight, 40, 220, D.stripHeight);
+  out.touchThreshold = within(out.touchThreshold, 5, 150, D.touchThreshold);
+  out.penWidth = within(out.penWidth, 1, 24, D.penWidth);
+  out.highlighterWidth = within(out.highlighterWidth, 6, 60, D.highlighterWidth);
+  out.smoothing = within(out.smoothing, 0, 1, D.smoothing);
+  out.textSize = within(out.textSize, 10, 100, D.textSize);
+  out.splitRatio = within(out.splitRatio, 0.15, 0.85, D.splitRatio);
+  const color = (v: unknown, fallback: string) => (typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v) ? v : fallback);
+  out.penColor = color(out.penColor, D.penColor);
+  out.highlighterColor = color(out.highlighterColor, D.highlighterColor);
+  for (const k of ['penOnlyWhenPenSeen', 'showLines', 'shapeLock'] as const) if (typeof out[k] !== 'boolean') out[k] = D[k];
+  if (out.marginSide !== 'right') out.marginSide = 'left';
   if (!PAPERS.includes(out.paper)) out.paper = 'plain';
   out.textStyle = cleanStyle(out.textStyle);
   return out;

@@ -95,11 +95,13 @@ export function lsGet<T>(key: string, fallback: T): T {
   }
 }
 
-export function lsSet(key: string, value: unknown) {
+/** Save to localStorage; false when it could not be kept (storage full or unavailable). */
+export function lsSet(key: string, value: unknown): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    /* storage full or unavailable */
+    return false;
   }
 }
 
@@ -120,12 +122,15 @@ export function dialog(opts: {
   choices?: { value: string; label: string }[];
   ok?: string;
   danger?: boolean;
+  /** Longest text the field takes. */
+  maxLength?: number;
   /** A checkbox under the field; its state is written back to `value` when the dialog is confirmed. */
   check?: { label: string; value: boolean; hint?: string };
 }): Promise<string | null> {
   return new Promise((resolve) => {
     const input = opts.input !== undefined ? (h('input', { type: 'text', class: 'dlg-input' }) as HTMLInputElement) : null;
     if (input) input.value = opts.input!;
+    if (input && opts.maxLength) input.maxLength = opts.maxLength;
     const select = opts.choices
       ? (h('select', { class: 'dlg-input' }, ...opts.choices.map((c) => h('option', { value: c.value }, c.label))) as HTMLSelectElement)
       : null;

@@ -321,6 +321,9 @@ create policy "own images: remove" on storage.objects for delete to authenticate
 -- Size of one row's content. NOT VALID: existing rows are left alone, new and changed rows are checked.
 alter table public.strokes drop constraint if exists strokes_points_size;
 alter table public.strokes add constraint strokes_points_size check (points is null or octet_length(points::text) <= 400000) not valid;
+-- 3 to 60,000 numbers (1 to 20,000 x, y, pressure points); the app splits longer strokes as they are drawn.
+alter table public.strokes drop constraint if exists strokes_points_count;
+alter table public.strokes add constraint strokes_points_count check (points is null or jsonb_array_length(points) between 3 and 60000) not valid;
 alter table public.strokes drop constraint if exists strokes_enc_size;
 alter table public.strokes add constraint strokes_enc_size check (enc is null or char_length(enc) <= 600000) not valid;
 alter table public.user_settings drop constraint if exists user_settings_size;

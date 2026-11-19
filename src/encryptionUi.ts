@@ -1,6 +1,7 @@
 import { AccountError } from './account';
 import { logo } from './brand';
 import { MIN_PASSPHRASE, WrongSecretError, type KeyVault } from './crypto/vault';
+import { MAX_PASSPHRASE } from './limits';
 import type { SupabaseStore } from './store/supabaseStore';
 import { FORM_SENT, h, toast, withReveal } from './util';
 
@@ -16,8 +17,12 @@ export function field(label: string, input: HTMLInputElement, help?: string) {
   return h('label', { class: 'enc-field' }, h('span', {}, label), input.type === 'password' ? withReveal(input) : input, help ? h('small', {}, help) : null);
 }
 
-export function passInput(autocomplete: 'current-password' | 'new-password', placeholder = '') {
-  return h('input', { type: 'password', class: 'dlg-input', autocomplete, placeholder, spellcheck: 'false' }) as HTMLInputElement;
+/**
+ * A password or passphrase field. A new one is limited to `max` characters; an existing one is not,
+ * so a secret chosen before the limit existed can still be typed in full.
+ */
+export function passInput(autocomplete: 'current-password' | 'new-password', placeholder = '', max = MAX_PASSPHRASE) {
+  return h('input', { type: 'password', class: 'dlg-input', autocomplete, placeholder, spellcheck: 'false', ...(autocomplete === 'new-password' ? { maxlength: String(max) } : {}) }) as HTMLInputElement;
 }
 
 export function check(text: string, checked = false) {

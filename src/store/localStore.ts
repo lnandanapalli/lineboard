@@ -2,7 +2,8 @@ import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } fro
 import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { lsGet, lsSet, uuid } from '../util';
 import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
-import type { Store } from './store';
+import { StoreError, type Store } from './store';
+import { MAX_SNAPSHOT_BYTES } from '../limits';
 
 /** Images on this device: IndexedDB, since localStorage is far too small for pictures. */
 const IMG_DB = 'lineboard-local-images';
@@ -204,6 +205,7 @@ export class LocalStore implements Store {
   }
   async saveVersion(v: VersionMeta, strokes: SnapStroke[]) {
     const data = await encodeSnapshot(strokes);
+    if (data.length > MAX_SNAPSHOT_BYTES) throw new StoreError('This note is too large to keep in its version history.', true);
     await historyTx('readwrite', (s) => void s.put({ ...v, data } satisfies VersionRecord));
   }
   async renameVersion(v: VersionMeta, name: string | null) {

@@ -217,6 +217,7 @@ Built in:
   - version history: 500 versions per note and 1 GB per account;
   - pictures: image types only, at most 15 MB each, and 5,000 files or 2 GB per account.
   - The app explains a refused save instead of retrying it.
+  - Every input and stored value has a range; see [Limits](#limits).
 - **Web server:**
   - per-client request rate limiting, with HTTP 429 for floods;
   - GET and HEAD only, with a tiny request-body limit;
@@ -275,3 +276,35 @@ Please report security issues privately as described in [SECURITY.md](SECURITY.m
 ## License
 
 [MIT](LICENSE)
+
+## Limits
+
+Every value a user can enter, add or import has a minimum and a maximum. The app enforces them so people get a
+clear message early (in `src/limits.ts` and next to each feature), and the database or file reader enforces them
+again in case anything gets past the app.
+
+| What | Minimum | Maximum | Enforced in |
+| --- | --- | --- | --- |
+| Note title | empty (shown as "Untitled") | 200 characters | app, database |
+| Notebook name | empty ("Untitled notebook") | 120 characters | app, database |
+| Version name | none (unnamed) | 120 characters | app, database |
+| Display name | empty (no name) | 60 characters, without control or invisible characters | app |
+| Text box | 1 character (an empty box is removed) | 10,000 characters | app, database, files |
+| Search query | none | 200 characters, 12 words; 50 results shown | app |
+| Email | a valid address | 254 characters | app, Supabase Auth |
+| Password | 8 characters | 72 characters (bcrypt) | app, Supabase Auth |
+| Encryption passphrase | 10 characters | 256 characters | app |
+| Stroke | 1 point | 20,000 points (longer ones continue as a new stroke) | app, database, files |
+| Pen / highlighter / text size | 1 / 6 / 10 | 24 / 60 / 100 page units | app, database (100) |
+| Strokes | — | 50,000 per note, 2,000,000 per account | database, files |
+| Notes / notebooks | 1 notebook is always kept | 20,000 notes, 500 notebooks | app, database |
+| Versions | the newest is always kept | 500 per note, 1 GB per account, 11 MB packed each | app, database |
+| Pictures | — | 15 MB each, 20 added at once, 5,000 files or 2 GB per account; 2000 px longest side | app, storage |
+| Profile picture | — | 15 MB file, stored as 256 × 256 | app, storage |
+| Import file | — | 1.5 GB; 1,000 files in a zip; 20,000 notes, 5,000,000 strokes and 1.5 GB unpacked per import | app |
+| Settings | each within its control's range | 20,000 bytes stored | app, database |
+| Sidebar width | 240 px | 560 px and 60% of the screen | app |
+| Zoom (free mode) | 1× | 4× | app |
+| Split divider | 15% | 85% of the board | app |
+| Undo | — | 300 steps | app |
+

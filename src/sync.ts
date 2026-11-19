@@ -19,6 +19,9 @@ export class SyncQueue {
   onState: (s: SyncState) => void = () => {};
   /** A change the server will never accept (e.g. a fair-use limit) was dropped: tell the user why. */
   onDropped: (message: string) => void = () => {};
+  /** The browser's storage is full: waiting changes are kept in memory only, so closing the page would lose them. */
+  onStorageFull: () => void = () => {};
+  private full = false;
 
   constructor(
     private store: Store,
@@ -73,7 +76,9 @@ export class SyncQueue {
   }
 
   private persist() {
-    lsSet(this.key, this.ops);
+    const ok = lsSet(this.key, this.ops);
+    if (!ok && !this.full) this.onStorageFull();
+    this.full = !ok;
   }
 
   private setState(s: SyncState) {

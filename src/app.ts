@@ -20,6 +20,7 @@ import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
 import { openSearch } from './searchUi';
 import { avatar, EMPTY_PROFILE, squarePicture, type Profile } from './profile';
+import { clip, MAX_IMPORT_FILE, MAX_NOTE_TITLE, MAX_NOTEBOOK_NAME, MAX_PICTURES_AT_ONCE } from './limits';
 import { LocalStore } from './store/localStore';
 import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
 
@@ -128,6 +129,7 @@ export class App {
       return this.queue.overlay(id, await this.store.loadStrokes(id));
     });
     this.queue.onDropped = (m) => toast('Not saved: ' + m, 'error');
+    this.queue.onStorageFull = () => toast('This browser’s storage is full, so changes waiting to be saved are kept only until you close the page. Reconnect, or free some space, to keep them.', 'error');
     this.queue.onState = (s) => {
       this.syncState = s;
       this.renderStatus();
@@ -251,7 +253,7 @@ export class App {
 
   private build() {
     // Toolbar
-    this.titleInput = h('input', { class: 'title-input', type: 'text', 'aria-label': 'Note title', maxlength: '120' }) as HTMLInputElement;
+    this.titleInput = h('input', { class: 'title-input', type: 'text', 'aria-label': 'Note title', maxlength: String(MAX_NOTE_TITLE) }) as HTMLInputElement;
     this.titleInput.addEventListener('change', () => void this.renameCurrent(this.titleInput.value));
     this.titleInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.titleInput.blur();
@@ -823,8 +825,12 @@ export class App {
 
   /** Add pictures to the page: save each, then place it in view and select it (to move or resize). */
   private async insertImages(files: File[]) {
-    const pics = files.filter((f) => f.type.startsWith('image/'));
+    let pics = files.filter((f) => f.type.startsWith('image/'));
     if (!pics.length) return;
+    if (pics.length > MAX_PICTURES_AT_ONCE) {
+      toast(`Adding the first ${MAX_PICTURES_AT_ONCE} pictures (at most ${MAX_PICTURES_AT_ONCE} at a time).`, 'error');
+      pics = pics.slice(0, MAX_PICTURES_AT_ONCE);
+    }
     await this.ready; // a picture pasted right after the page opened waits for the note
     if (!this.current) return toast('Open a note first.', 'error');
     let last: Stroke | null = null;
@@ -1278,9 +1284,9 @@ export class App {
     const d = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date());
     let title = `Note ${d}`;
     if (ask) {
-      const name = await dialog({ title: 'New note', input: title, ok: 'Create' });
+      const name = await dialog({ title: 'New note', input: title, ok: 'Create', maxLength: MAX_NOTE_TITLE });
       if (name === null) return;
-      title = name.trim().slice(0, 200) || title;
+      title = clip(name, MAX_NOTE_TITLE) || title;
     }
     try {
       if (!this.currentBook) return;
@@ -1294,14 +1300,14 @@ export class App {
 
   private async renameCurrent(title: string) {
     if (!this.current) return;
-    const t = title.trim() || 'Untitled';
+    const t = clip(title, MAX_NOTE_TITLE) || 'Untitled';
     await this.rename(this.current, t);
   }
 
   private async promptRename(n: NoteMeta) {
-    const t = await dialog({ title: 'Rename note', input: n.title, ok: 'Rename' });
+    const t = await dialog({ title: 'Rename note', input: n.title, ok: 'Rename', maxLength: MAX_NOTE_TITLE });
     if (t === null) return;
-    await this.rename(n, t.trim() || 'Untitled');
+    await this.rename(n, clip(t, MAX_NOTE_TITLE) || 'Untitled');
   }
 
   private async rename(n: NoteMeta, title: string) {
@@ -1388,10 +1394,10 @@ export class App {
   }
 
   private async newNotebook() {
-    const name = await dialog({ title: 'New notebook', input: `Notebook ${this.notebooks.length + 1}`, ok: 'Create' });
+    const name = await dialog({ title: 'New notebook', input: `Notebook ${this.notebooks.length + 1}`, ok: 'Create', maxLength: MAX_NOTEBOOK_NAME });
     if (name === null) return;
     try {
-      const b = await this.store.createNotebook(name.trim() || 'Untitled notebook');
+      const b = await this.store.createNotebook(clip(name, MAX_NOTEBOOK_NAME) || 'Untitled notebook');
       this.notebooks.push(b);
       this.toggleBookPanel(false);
       await this.switchNotebook(b);
@@ -1401,10 +1407,10 @@ export class App {
   }
 
   private async renameNotebook(b: Notebook) {
-    const name = await dialog({ title: 'Rename notebook', input: b.name, ok: 'Rename' });
+    const name = await dialog({ title: 'Rename notebook', input: b.name, ok: 'Rename', maxLength: MAX_NOTEBOOK_NAME });
     if (name === null) return;
     const old = b.name;
-    b.name = name.trim() || 'Untitled notebook';
+    b.name = clip(name, MAX_NOTEBOOK_NAME) || 'Untitled notebook';
     this.renderNotebooks();
     try {
       await this.store.renameNotebook(b.id, b.name);
@@ -1683,6 +1689,7 @@ export class App {
   async importFile(file: File) {
     await this.ready;
     if (!this.currentBook) return toast('Open a notebook first.', 'error');
+    if (file.size > MAX_IMPORT_FILE) return toast('Could not import: the file is too large (1.5 GB at most). Import it in smaller parts.', 'error');
     try {
       this.board.finishText();
       toast('Reading the file...');
