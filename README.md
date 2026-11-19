@@ -45,6 +45,9 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 - **Search** (Ctrl/⌘ K, or Search in the sidebar): note titles and notebook names, each result labelled. Forgiving
   like most apps' search: case and accents ignored, words in any order, word starts and small typos match, the
   closest matches first; "quotes" for an exact phrase. Archived ones only when asked for.
+- **Dark mode.** Light, dark, or the same as the device (Settings → Page & writing). In dark mode the page is dark
+  too, and ink is shown with its lightness turned around (black shows near-white, colours keep their hue);
+  notes, files, pictures and PDFs keep the colours they were drawn in.
 - **Profile.** A display name and an optional picture, shown in the sidebar as initials or the picture (the
   email stays in Settings, out of screen recordings). The account menu there holds Profile, Data controls,
   Settings and Sign out.
