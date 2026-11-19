@@ -25,7 +25,9 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
 
   const msg = h('p', { class: 'auth-msg', role: 'status' });
   const email = h('input', { type: 'email', placeholder: 'Email', autocomplete: 'email', required: true, maxlength: String(MAX_EMAIL) }) as HTMLInputElement;
-  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', maxlength: String(MAX_PASSWORD) }) as HTMLInputElement;
+  // Sign-in takes the password as typed (no length cap, so an older password is never cut short); new
+  // passwords are limited where they are chosen.
+  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' }) as HTMLInputElement;
   const submit = h('button', { class: 'btn primary wide', type: 'submit' });
   const tabs = h('div', { class: 'auth-switch' });
   const heading = h('h1', { class: 'auth-heading' });
@@ -64,8 +66,13 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     pass.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
     // New passwords: at least MIN_PASSWORD (as in the Supabase project's settings). Signing in takes
     // any length, so older, shorter passwords keep working.
-    if (mode === 'signup') pass.minLength = MIN_PASSWORD;
-    else pass.removeAttribute('minlength');
+    if (mode === 'signup') {
+      pass.minLength = MIN_PASSWORD;
+      pass.maxLength = MAX_PASSWORD;
+    } else {
+      pass.removeAttribute('minlength');
+      pass.removeAttribute('maxlength');
+    }
     submit.textContent = { signin: 'Sign in', signup: 'Create account', magic: 'Send sign-in link', reset: 'Send reset link' }[mode];
     extra.replaceChildren();
     passkeyBtn.hidden = mode !== 'signin' || !passkeysSupported();

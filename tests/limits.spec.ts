@@ -72,10 +72,13 @@ test('when the browser’s storage is full, the app says waiting changes are at 
   await expect(page.locator('#toast')).toContainText('storage is full');
 });
 
-test('sign-in fields are capped: email 254, password 72 characters', async ({ page }) => {
+test('email is capped at 254; a new password at 72, while an existing one can be typed in full', async ({ page }) => {
   await mockSupabase(page);
   await page.goto('/login');
   await expect(page.getByLabel('Email', { exact: true })).toHaveAttribute('maxlength', '254');
+  // Signing in: no cap, so a password set before the limit is never cut short.
+  await expect(page.getByLabel('Password', { exact: true })).not.toHaveAttribute('maxlength', /./);
+  await page.goto('/signup');
   await expect(page.getByLabel('Password', { exact: true })).toHaveAttribute('maxlength', '72');
 });
 
