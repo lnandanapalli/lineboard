@@ -14,6 +14,7 @@ import { isApple, withShortcut } from './keys';
 import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
 import { buildExport } from './dataExport';
+import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
 import { LocalStore } from './store/localStore';
 
@@ -40,6 +41,10 @@ export interface AppOptions {
   /** The account was deleted: leave the app (sign out locally, forget this device's copies). */
   onAccountDeleted?: () => Promise<void>;
 }
+
+/** Said when an export could not include every picture. */
+const missingNote = (n: number) =>
+  `Downloaded, but ${n === 1 ? '1 picture' : `${n} pictures`} could not be read and ${n === 1 ? 'is' : 'are'} not in the file. Check your connection and export again.`;
 
 export class App {
   private settings: Settings;
@@ -306,7 +311,7 @@ export class App {
       this.opts.signIn ? this.signInButton('toolbar') : null,
       this.status,
       this.rotateBtn,
-      this.iconBtn(icons.download, 'Export as PNG', () => void this.exportPNG()),
+      (this.exportBtn = this.iconBtn(icons.download, 'Export', () => this.openExportMenu())),
       this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
     );
 
@@ -318,6 +323,9 @@ export class App {
     const newBtn = h('button', { class: 'btn primary', type: 'button' });
     newBtn.innerHTML = `${icons.plus}<span>New note</span>`;
     newBtn.addEventListener('click', () => void this.newNote(true));
+    const importBtn = h('button', { class: 'btn import-btn', type: 'button', title: 'Import notes from a Lineboard file (.lbd) or a zip of them' });
+    importBtn.innerHTML = `${icons.upload}<span>Import</span>`;
+    importBtn.addEventListener('click', () => this.pickImport());
     this.sidebar = h(
       'aside',
       { class: 'sidebar' },
@@ -325,7 +333,7 @@ export class App {
       h('div', { class: 'section-label' }, 'Notebook'),
       this.bookButton,
       this.bookPanel,
-      newBtn,
+      h('div', { class: 'note-buttons' }, newBtn, importBtn),
       this.noteList,
       h(
         'div',
@@ -420,7 +428,10 @@ export class App {
       const files = [...(e.dataTransfer?.files ?? [])];
       if (!files.length) return;
       e.preventDefault();
-      void this.insertImages(files);
+      // A Lineboard file (or a zip of them) is imported; pictures are placed on the page.
+      const notes = files.find((f) => /\.(lbd|zip)$/i.test(f.name));
+      if (notes) void this.importFile(notes);
+      else void this.insertImages(files);
     });
   }
 
@@ -878,7 +889,8 @@ export class App {
         const del = this.iconBtn(icons.trash, 'Delete note', () => void this.deleteNote(n), 'small');
         const ren = this.iconBtn(icons.edit, 'Rename note', () => void this.promptRename(n), 'small');
         const mv = this.iconBtn(icons.move, 'Move to another notebook', () => void this.moveNote(n), 'small');
-        return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, mv, del));
+        const ex = this.iconBtn(icons.download, 'Export note', () => void this.exportNote(n), 'small');
+        return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, mv, ex, del));
       }),
     );
     this.renderNotebooks(); // keep the per-notebook note counts current
@@ -998,7 +1010,8 @@ export class App {
       });
       const ren = this.iconBtn(icons.edit, 'Rename notebook', () => void this.renameNotebook(nb), 'small');
       const del = this.iconBtn(icons.trash, 'Delete notebook', () => void this.deleteNotebook(nb), 'small');
-      return h('li', { class: nb.id === b?.id ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, del));
+      const ex = this.iconBtn(icons.download, 'Export notebook', () => void this.exportNotebook(nb), 'small');
+      return h('li', { class: nb.id === b?.id ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, ex, del));
     });
     const add = h('button', { class: 'btn book-new', type: 'button' });
     add.innerHTML = `${icons.plus}<span>New notebook</span>`;
@@ -1116,6 +1129,108 @@ export class App {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 
+  // ----------------------------- Lineboard files (.lbd) -----------------------------
+
+  private exportBtn!: HTMLButtonElement;
+
+  /** The toolbar's export button: this note as a picture, or as a Lineboard file. */
+  private openExportMenu() {
+    if (this.exportBtn.getAttribute('aria-expanded') === 'true') {
+      closeOpenMenu();
+      return;
+    }
+    let close = () => {};
+    const item = (label: string, sub: string, fn: () => void) => {
+      const b = h('button', { class: 'export-item', type: 'button' }, h('b', {}, label), h('small', {}, sub));
+      b.addEventListener('click', () => {
+        close();
+        fn();
+      });
+      return b;
+    };
+    const current = this.current;
+    ({ close } = popover(
+      this.exportBtn,
+      h(
+        'div',
+        { class: 'export-menu' },
+        item('Picture (.png)', 'This page as an image', () => void this.exportPNG()),
+        item(`Lineboard file (${LBD_EXT})`, 'This note, to keep or import elsewhere', () => current && void this.exportNote(current)),
+      ),
+      { label: 'Export' },
+    ));
+  }
+
+  /** Make an .lbd from notebooks of notes and download it. */
+  private async exportLbd(groups: { notebook: Notebook; notes: NoteMeta[] }[], name: string) {
+    try {
+      this.board.finishText();
+      const count = groups.reduce((n, g) => n + g.notes.length, 0);
+      if (!count) return toast('There are no notes to export.', 'error');
+      toast(count > 1 ? `Exporting ${count} notes...` : 'Exporting...');
+      const { blob, missingPictures } = await buildLbd(this.store, groups, (id, saved) => this.queue.overlay(id, saved));
+      this.download(blob, fileName(name));
+      if (missingPictures) toast(missingNote(missingPictures), 'error');
+    } catch (e) {
+      toast('Export failed: ' + (e as Error).message, 'error');
+    }
+  }
+
+  private async exportNote(n: NoteMeta) {
+    const book = this.notebooks.find((b) => b.id === n.notebook_id) ?? this.currentBook;
+    if (book) await this.exportLbd([{ notebook: book, notes: [n] }], n.title || 'Untitled');
+  }
+
+  private async exportNotebook(nb: Notebook) {
+    await this.exportLbd([{ notebook: nb, notes: this.notes.filter((n) => n.notebook_id === nb.id) }], nb.name);
+  }
+
+  /** Every notebook and note in one file. Signed in, it asks who you are first (like Download my data). */
+  private async exportAll() {
+    const account = this.opts.account;
+    if (account && !(await confirmItsYou(account, this.user.email, 'Exporting all your notes gives a copy of everything in them.'))) return;
+    await this.exportLbd(
+      this.notebooks.map((notebook) => ({ notebook, notes: this.notes.filter((n) => n.notebook_id === notebook.id) })),
+      `Lineboard notes ${new Date().toISOString().slice(0, 10)}`,
+    );
+  }
+
+  /** Choose a Lineboard file (.lbd) or a zip of them to import. */
+  private pickImport() {
+    const input = h('input', { type: 'file', accept: `${LBD_EXT},.zip,application/zip`, hidden: true }) as HTMLInputElement;
+    input.addEventListener('change', () => {
+      const f = input.files?.[0];
+      input.remove();
+      if (f) void this.importFile(f);
+    });
+    document.body.append(input);
+    input.click();
+  }
+
+  /** Import the notes in a file as new notes (nothing existing is changed), then open the first one. */
+  async importFile(file: File) {
+    await this.ready;
+    if (!this.currentBook) return toast('Open a notebook first.', 'error');
+    try {
+      this.board.finishText();
+      toast('Reading the file...');
+      const doc = await readNotesFile(file);
+      const total = doc.notebooks.reduce((n, b) => n + b.notes.length, 0);
+      toast(total > 1 ? `Importing ${total} notes...` : 'Importing...');
+      const res = await importDocument(this.store, doc, this.currentBook, this.notebooks);
+      [this.notebooks, this.notes] = await Promise.all([this.store.listNotebooks(), this.store.listNotes()]);
+      const first = this.notes.find((n) => n.id === res.notes[0]?.id);
+      const book = this.notebooks.find((b) => b.id === first?.notebook_id);
+      if (book && first) await this.switchNotebook(book, first);
+      this.renderNoteList();
+      const what = res.notes.length === 1 ? `“${res.notes[0].title}”` : `${res.notes.length} notes`;
+      const extra = res.notebooks.length ? ` into ${res.notebooks.length === 1 ? 'a new notebook' : `${res.notebooks.length} new notebooks`}` : '';
+      toast(`Imported ${what}${extra}.` + (res.skipped ? ` ${res.skipped} damaged item${res.skipped === 1 ? ' was' : 's were'} left out.` : ''));
+    } catch (e) {
+      toast('Could not import: ' + (e as Error).message, 'error');
+    }
+  }
+
   /** "Download my data": every notebook, note, stroke, picture and setting, as a zip. */
   private async exportData() {
     // Everything in the account in one file: ask for the password (or a code) first, so someone
@@ -1126,9 +1241,10 @@ export class App {
       this.board.finishText();
       toast('Preparing your data...');
       // Include changes still waiting to be saved (and leave out strokes waiting to be deleted).
-      const blob = await buildExport(this.store, this.user, this.settings, (noteId, saved) => this.queue.overlay(noteId, saved));
+      const { blob, missingPictures } = await buildExport(this.store, this.user, this.settings, (noteId, saved) => this.queue.overlay(noteId, saved));
       this.download(blob, `lineboard-data-${new Date().toISOString().slice(0, 10)}.zip`);
-      toast('Your data is downloading.');
+      if (missingPictures) toast(missingNote(missingPictures), 'error');
+      else toast('Your data is downloading.');
     } catch (e) {
       toast('Could not prepare your data: ' + (e as Error).message, 'error');
     }
@@ -1211,6 +1327,8 @@ export class App {
       account: this.opts.account,
       signInButton: this.opts.signIn ? () => this.signInButton('settings') : undefined,
       exportData: () => this.exportData(),
+      exportAll: () => this.exportAll(),
+      importNotes: () => this.pickImport(),
       deleteAccount: this.opts.account ? () => this.deleteAccount() : undefined,
       deleteLocalData: this.store.mode === 'local' ? () => this.deleteLocalData() : undefined,
     });

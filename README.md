@@ -39,7 +39,10 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
   encrypted too.
 - **Select:** lasso or rectangle (anything touched is picked), then move, resize, duplicate or delete.
 - **Organise and export:** notebooks and notes, PNG export, manual orientation lock.
-- **Your data:** download everything as a zip, delete your account (Settings → Account).
+- **Lineboard files (`.lbd`).** Export a note, a notebook or all notes, and import them back by file, by a zip of
+  several, or by dropping one on the board. Pictures travel inside the file. See [the format](docs/file-format.md).
+- **Your data:** download everything (your account details, plus all notes as an `.lbd`), or delete your account
+  (Settings → Account).
 - **Accounts and sync** with Supabase, with background saving that survives reloads and offline periods.
 - **Account security.** See and sign out signed-in devices, change the password (which signs out other
   devices, as does a password reset), two-step verification with an authenticator app, and passkey sign-in.
