@@ -8,8 +8,8 @@ import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
 import { LINE_STYLE_NAMES, LINE_STYLES, LINE_WIDTHS, SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
 import { IMAGE_TYPES, prepareImage } from './images';
-import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
-import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
+import { withDefaults, type AppUser, type BoardMode, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
+import { actionMenu, closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
 import { appViewport, attachOrientation, clientToApp, detachOrientation, orientation } from './orientation';
 import { attachNameTips } from './nameTip';
@@ -17,6 +17,7 @@ import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
 import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
+import { canvasToPdf } from './pdf';
 import { LocalStore } from './store/localStore';
 import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
 
@@ -201,8 +202,9 @@ export class App {
     await this.loadLibrary();
     const lastNote = this.notes.find((n) => n.id === lsGet<string | null>(this.lsKey('last-note'), null));
     const lastBookId = lastNote?.notebook_id ?? lsGet<string | null>(this.lsKey('last-notebook'), null);
-    const book = this.notebooks.find((b) => b.id === lastBookId) ?? this.notebooks[0];
-    if (book) await this.switchNotebook(book, lastNote);
+    const active = this.activeBooks();
+    const book = active.find((b) => b.id === lastBookId) ?? active[0];
+    if (book) await this.switchNotebook(book, lastNote && !lastNote.archived_at ? lastNote : undefined);
     // Versions left to save from an earlier visit (a closed tab, a reload).
     void this.history.catchUp(this.current?.id ?? null, (id) => this.notes.some((n) => n.id === id));
   }
@@ -214,6 +216,11 @@ export class App {
       if (!books.length) books = [await this.store.ensureDefaultNotebook()];
       this.notebooks = books;
       this.notes = await this.store.listNotes();
+      // Every notebook archived (on another device): bring one back, there must be somewhere to write.
+      if (!books.some((b) => !b.archived_at)) {
+        await this.store.setNotebookFlags(books[0].id, { archived_at: null }).catch(() => {});
+        books[0].archived_at = null;
+      }
       const known = new Set(books.map((b) => b.id));
       const orphans = this.notes.filter((n) => !n.notebook_id || !known.has(n.notebook_id));
       if (orphans.length) {
@@ -341,7 +348,7 @@ export class App {
       this.status,
       this.rotateBtn,
       (this.historyBtn = this.iconBtn(icons.history, 'Version history', () => void this.openHistory())),
-      (this.exportBtn = this.iconBtn(icons.download, 'Export', () => this.openExportMenu())),
+      (this.exportBtn = this.iconBtn(icons.download, 'Share or export', () => this.openExportMenu())),
       this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
     ));
 
@@ -990,27 +997,124 @@ export class App {
   /** Notes in the current notebook, most recently changed first. */
   private visibleNotes(): NoteMeta[] {
     const id = this.currentBook?.id;
-    return this.notes.filter((n) => n.notebook_id === id).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    return this.notes.filter((n) => n.notebook_id === id && !n.archived_at).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  }
+
+  /** Notebooks not archived: starred first, then in the order they were made. */
+  private activeBooks(): Notebook[] {
+    return this.notebooks.filter((b) => !b.archived_at).sort((a, b) => Number(!!b.starred) - Number(!!a.starred) || a.created_at.localeCompare(b.created_at));
+  }
+
+  /** Starred notes from every notebook that is not archived, most recently changed first. */
+  private starredNotes(): NoteMeta[] {
+    const active = new Set(this.activeBooks().map((b) => b.id));
+    return this.notes.filter((n) => n.starred && !n.archived_at && n.notebook_id && active.has(n.notebook_id)).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
 
   private renderNoteList() {
     const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const books = new Map(this.notebooks.map((b) => [b.id, b.name]));
+    const row = (n: NoteMeta, starredList: boolean) => {
+      const active = n.id === this.current?.id;
+      // In "Starred", a note from another notebook says which one it is in.
+      const sub = starredList && n.notebook_id !== this.currentBook?.id ? (books.get(n.notebook_id ?? '') ?? '') : fmt.format(new Date(n.updated_at));
+      const open = h('button', { class: 'note-open', type: 'button' }, h('span', { class: 'note-title' }, n.title || 'Untitled'), h('span', { class: 'note-date' }, sub));
+      open.addEventListener('click', () => {
+        void this.openFromList(n);
+        if (window.innerWidth < 900) this.toggleSidebar(false);
+      });
+      const more = this.iconBtn(icons.more, `More for "${n.title || 'Untitled'}"`, () => this.noteMenu(n, more), 'small more-btn');
+      more.setAttribute('aria-haspopup', 'menu');
+      more.setAttribute('aria-expanded', 'false');
+      return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, this.starButton('note', n), more));
+    };
+    // A starred note shows once, under "Starred", not again in its notebook's list.
+    const starred = this.starredNotes();
+    const notes = this.visibleNotes().filter((n) => !n.starred);
     this.noteList.replaceChildren(
-      ...this.visibleNotes().map((n) => {
-        const active = n.id === this.current?.id;
-        const open = h('button', { class: 'note-open', type: 'button' }, h('span', { class: 'note-title' }, n.title || 'Untitled'), h('span', { class: 'note-date' }, fmt.format(new Date(n.updated_at))));
-        open.addEventListener('click', () => {
-          void this.openNote(n);
-          if (window.innerWidth < 900) this.toggleSidebar(false);
-        });
-        const del = this.iconBtn(icons.trash, 'Delete note', () => void this.deleteNote(n), 'small');
-        const ren = this.iconBtn(icons.edit, 'Rename note', () => void this.promptRename(n), 'small');
-        const mv = this.iconBtn(icons.move, 'Move to another notebook', () => void this.moveNote(n), 'small');
-        const ex = this.iconBtn(icons.download, 'Export note', () => void this.exportNote(n), 'small');
-        return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, mv, ex, del));
-      }),
+      ...(starred.length ? [h('li', { class: 'list-label', role: 'presentation' }, 'Starred'), ...starred.map((n) => row(n, true)), h('li', { class: 'list-label', role: 'presentation' }, 'Notes')] : []),
+      ...notes.map((n) => row(n, false)),
     );
     this.renderNotebooks(); // keep the per-notebook note counts current
+  }
+
+  /** A star toggle for a note or notebook row. */
+  private starButton(kind: 'note' | 'notebook', item: NoteMeta | Notebook) {
+    const name = 'title' in item ? item.title || 'Untitled' : item.name;
+    const b = this.iconBtn(item.starred ? icons.starFilled : icons.star, item.starred ? `Unstar "${name}"` : `Star "${name}"`, () => void this.setFlags(kind, item, { starred: !item.starred }), 'small star-btn' + (item.starred ? ' on' : ''));
+    b.setAttribute('aria-pressed', String(!!item.starred));
+    return b;
+  }
+
+  /** Open a note from the list (a starred one may be in another notebook). */
+  private async openFromList(n: NoteMeta) {
+    const book = this.notebooks.find((b) => b.id === n.notebook_id);
+    if (book && book.id !== this.currentBook?.id) await this.switchNotebook(book, n);
+    else await this.openNote(n);
+  }
+
+  private noteMenu(n: NoteMeta, anchor: HTMLElement) {
+    actionMenu(anchor, `Actions for "${n.title || 'Untitled'}"`, [
+      { label: 'Rename', icon: icons.edit, run: () => void this.promptRename(n) },
+      { label: 'Move to notebook', icon: icons.move, run: () => void this.moveNote(n) },
+      { label: 'Share', icon: icons.share, run: () => void this.shareNote(n) },
+      { label: 'Export (.lbd)', icon: icons.download, run: () => void this.exportNote(n) },
+      { label: 'Archive', icon: icons.archive, run: () => void this.archive('note', n) },
+      { label: 'Delete', icon: icons.trash, danger: true, run: () => void this.deleteNote(n) },
+    ]);
+  }
+
+  private notebookMenu(nb: Notebook, anchor: HTMLElement) {
+    actionMenu(anchor, `Actions for "${nb.name}"`, [
+      { label: 'Rename', icon: icons.edit, run: () => void this.renameNotebook(nb) },
+      { label: 'Share', icon: icons.share, run: () => void this.shareNotebook(nb) },
+      { label: 'Export (.lbd)', icon: icons.download, run: () => void this.exportNotebook(nb) },
+      { label: 'Archive', icon: icons.archive, run: () => void this.archive('notebook', nb) },
+      { label: 'Delete', icon: icons.trash, danger: true, run: () => void this.deleteNotebook(nb) },
+    ]);
+  }
+
+  // ----------------------------- stars and the archive -----------------------------
+
+  /** Star, unstar, archive or restore a note or notebook; shown at once, put back if saving fails. */
+  private async setFlags(kind: 'note' | 'notebook', item: NoteMeta | Notebook, flags: Flags) {
+    const before: Flags = { starred: item.starred, archived_at: item.archived_at ?? null };
+    Object.assign(item, flags);
+    this.renderNoteList();
+    try {
+      await (kind === 'note' ? this.store.setNoteFlags(item.id, flags) : this.store.setNotebookFlags(item.id, flags));
+      return true;
+    } catch (e) {
+      Object.assign(item, before);
+      this.renderNoteList();
+      toast((e as Error).message, 'error');
+      return false;
+    }
+  }
+
+  /** Archive: out of the sidebar and search, kept in Settings > Data controls until restored. */
+  private async archive(kind: 'note' | 'notebook', item: NoteMeta | Notebook) {
+    if (kind === 'notebook' && this.activeBooks().length <= 1) return toast('Keep at least one notebook: make another one first, then archive this.', 'error');
+    if (!(await this.setFlags(kind, item, { archived_at: new Date().toISOString() }))) return;
+    const name = 'title' in item ? item.title || 'Untitled' : item.name;
+    if (kind === 'note' && this.current?.id === item.id) {
+      this.current = null;
+      const next = this.visibleNotes()[0];
+      if (next) await this.openNote(next);
+      else await this.newNote();
+    }
+    if (kind === 'notebook' && this.currentBook?.id === item.id) {
+      this.current = null;
+      await this.switchNotebook(this.activeBooks()[0]);
+    }
+    this.renderNoteList();
+    toast(`Archived "${name}". Find it in Settings > Data controls.`);
+  }
+
+  private async unarchive(kind: 'note' | 'notebook', id: string) {
+    const item = kind === 'note' ? this.notes.find((n) => n.id === id) : this.notebooks.find((b) => b.id === id);
+    if (!item) return;
+    if (await this.setFlags(kind, item, { archived_at: null })) toast(`Restored "${'title' in item ? item.title || 'Untitled' : item.name}".`);
   }
 
   /** The note whose strokes are on the board (null while one is loading). */
@@ -1128,7 +1232,8 @@ export class App {
     this.bookButton.querySelector('.book-name')!.textContent = b?.name ?? '';
     const counts = new Map<string, number>();
     for (const n of this.notes) if (n.notebook_id) counts.set(n.notebook_id, (counts.get(n.notebook_id) ?? 0) + 1);
-    const items = this.notebooks.map((nb) => {
+    for (const n of this.notes) if (n.archived_at && n.notebook_id) counts.set(n.notebook_id, (counts.get(n.notebook_id) ?? 1) - 1);
+    const items = this.activeBooks().map((nb) => {
       const open = h(
         'button',
         { class: 'book-open', type: 'button' },
@@ -1139,10 +1244,10 @@ export class App {
         this.toggleBookPanel(false);
         if (nb.id !== this.currentBook?.id) void this.switchNotebook(nb);
       });
-      const ren = this.iconBtn(icons.edit, 'Rename notebook', () => void this.renameNotebook(nb), 'small');
-      const del = this.iconBtn(icons.trash, 'Delete notebook', () => void this.deleteNotebook(nb), 'small');
-      const ex = this.iconBtn(icons.download, 'Export notebook', () => void this.exportNotebook(nb), 'small');
-      return h('li', { class: nb.id === b?.id ? 'active' : '' }, open, h('div', { class: 'note-actions' }, ren, ex, del));
+      const more = this.iconBtn(icons.more, `More for "${nb.name}"`, () => this.notebookMenu(nb, more), 'small more-btn');
+      more.setAttribute('aria-haspopup', 'menu');
+      more.setAttribute('aria-expanded', 'false');
+      return h('li', { class: nb.id === b?.id ? 'active' : '' }, open, h('div', { class: 'note-actions' }, this.starButton('notebook', nb), more));
     });
     const add = h('button', { class: 'btn book-new', type: 'button' });
     add.innerHTML = `${icons.plus}<span>New notebook</span>`;
@@ -1211,18 +1316,18 @@ export class App {
       const gone = new Set(inside.map((n) => n.id));
       this.notes = this.notes.filter((n) => !gone.has(n.id));
       this.notebooks = this.notebooks.filter((x) => x.id !== b.id);
-      if (!this.notebooks.length) this.notebooks = [await this.store.ensureDefaultNotebook()];
+      if (!this.activeBooks().length) this.notebooks = [...this.notebooks, await this.store.createNotebook('My Notebook')];
       if (this.currentBook?.id === b.id) {
         this.current = null;
-        await this.switchNotebook(this.notebooks[0]);
-      } else this.renderNotebooks();
+        await this.switchNotebook(this.activeBooks()[0]);
+      } else this.renderNoteList();
     } catch (e) {
       toast('Delete failed: ' + (e as Error).message, 'error');
     }
   }
 
   private async moveNote(n: NoteMeta) {
-    const others = this.notebooks.filter((b) => b.id !== n.notebook_id);
+    const others = this.activeBooks().filter((b) => b.id !== n.notebook_id);
     if (!others.length) return toast('Create another notebook first, then move notes into it.');
     const target = await dialog({
       title: 'Move note',
@@ -1334,10 +1439,11 @@ export class App {
       h(
         'div',
         { class: 'export-menu' },
+        item('Share…', 'As a PDF, picture or Lineboard file, from your device', () => current && void this.shareNote(current)),
         item('Picture (.png)', 'This page as an image', () => void this.exportPNG()),
         item(`Lineboard file (${LBD_EXT})`, 'This note, to keep or import elsewhere', () => current && void this.exportNote(current)),
       ),
-      { label: 'Export' },
+      { label: 'Share or export' },
     ));
   }
 
@@ -1356,13 +1462,83 @@ export class App {
     }
   }
 
+  // ----------------------------- sharing (as a file) -----------------------------
+
+  /**
+   * Share a file through the device's share menu (messages, mail, drive...) where the browser can;
+   * otherwise download it to send it any other way. Lineboard never hosts what is shared.
+   */
+  private async sendFile(file: File) {
+    const data = { files: [file], title: file.name };
+    if (navigator.canShare?.(data)) {
+      try {
+        await navigator.share(data);
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') toast('Could not share: ' + (e as Error).message, 'error');
+      }
+      return;
+    }
+    this.download(file, file.name);
+    toast(`Downloaded “${file.name}”. Send it however you like; Lineboard files can be imported with Notes > Import.`);
+  }
+
+  /** Share a note: the open one as a PDF, picture or Lineboard file; another one as a Lineboard file. */
+  private async shareNote(n: NoteMeta) {
+    const open = n.id === this.current?.id && this.loadedNote === n.id;
+    const kind = open
+      ? await dialog({
+          title: `Share “${n.title || 'Untitled'}”`,
+          message: 'As a PDF or picture anyone can open, or as a Lineboard file they can import and keep editing. It is sent from your device; nothing is uploaded for sharing.',
+          choices: [
+            { value: 'pdf', label: 'PDF' },
+            { value: 'png', label: 'Picture (.png)' },
+            { value: 'lbd', label: `Lineboard file (${LBD_EXT})` },
+          ],
+          ok: 'Share',
+        })
+      : 'lbd';
+    if (!kind) return;
+    try {
+      this.board.finishText();
+      const name = n.title || 'Untitled';
+      if (kind === 'lbd') {
+        const book = this.notebooks.find((b) => b.id === n.notebook_id) ?? this.currentBook;
+        if (!book) return;
+        const { blob, missingPictures } = await buildLbd(this.store, [{ notebook: book, notes: [n] }], (id, saved) => this.queue.overlay(id, saved));
+        await this.sendFile(new File([blob], fileName(name), { type: blob.type }));
+        if (missingPictures) toast(missingNote(missingPictures), 'error');
+      } else if (kind === 'png') {
+        await this.sendFile(new File([await this.board.exportPNG()], fileName(name, '.png'), { type: 'image/png' }));
+      } else {
+        const pdf = await canvasToPdf(await this.board.renderPage(), name);
+        await this.sendFile(new File([pdf], fileName(name, '.pdf'), { type: 'application/pdf' }));
+      }
+    } catch (e) {
+      toast('Could not share: ' + (e as Error).message, 'error');
+    }
+  }
+
+  /** Share a notebook: its notes (not archived ones) as one Lineboard file. */
+  private async shareNotebook(nb: Notebook) {
+    const notes = this.notes.filter((n) => n.notebook_id === nb.id && !n.archived_at);
+    if (!notes.length) return toast('This notebook has no notes to share.', 'error');
+    try {
+      this.board.finishText();
+      const { blob, missingPictures } = await buildLbd(this.store, [{ notebook: nb, notes }], (id, saved) => this.queue.overlay(id, saved));
+      await this.sendFile(new File([blob], fileName(nb.name), { type: blob.type }));
+      if (missingPictures) toast(missingNote(missingPictures), 'error');
+    } catch (e) {
+      toast('Could not share: ' + (e as Error).message, 'error');
+    }
+  }
+
   private async exportNote(n: NoteMeta) {
     const book = this.notebooks.find((b) => b.id === n.notebook_id) ?? this.currentBook;
     if (book) await this.exportLbd([{ notebook: book, notes: [n] }], n.title || 'Untitled');
   }
 
   private async exportNotebook(nb: Notebook) {
-    await this.exportLbd([{ notebook: nb, notes: this.notes.filter((n) => n.notebook_id === nb.id) }], nb.name);
+    await this.exportLbd([{ notebook: nb, notes: this.notes.filter((n) => n.notebook_id === nb.id && !n.archived_at) }], nb.name);
   }
 
   /** Every notebook and note in one file. Signed in, it asks who you are first (like Download my data). */
@@ -1512,6 +1688,24 @@ export class App {
       importNotes: () => this.pickImport(),
       deleteAccount: this.opts.account ? () => this.deleteAccount() : undefined,
       deleteLocalData: this.store.mode === 'local' ? () => this.deleteLocalData() : undefined,
+      archived: () => {
+        const books = this.notebooks.filter((b) => b.archived_at);
+        const live = new Map(this.notebooks.filter((b) => !b.archived_at).map((b) => [b.id, b.name]));
+        return {
+          notebooks: books.map((b) => ({ id: b.id, name: b.name, notes: this.notes.filter((n) => n.notebook_id === b.id).length })),
+          notes: this.notes.filter((n) => n.archived_at && live.has(n.notebook_id ?? '')).map((n) => ({ id: n.id, title: n.title, notebook: live.get(n.notebook_id!)! })),
+        };
+      },
+      unarchive: (kind, id) => this.unarchive(kind, id),
+      deleteArchived: async (kind, id) => {
+        if (kind === 'note') {
+          const n = this.notes.find((x) => x.id === id);
+          if (n) await this.deleteNote(n);
+        } else {
+          const b = this.notebooks.find((x) => x.id === id);
+          if (b) await this.deleteNotebook(b);
+        }
+      },
     });
   }
 

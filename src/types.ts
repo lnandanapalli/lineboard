@@ -43,13 +43,22 @@ export interface NoteMeta {
   notebook_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Pinned to the top of the sidebar ("Starred"). */
+  starred?: boolean;
+  /** Archived: hidden from the sidebar and search, kept in Settings > Data controls. */
+  archived_at?: string | null;
 }
+
+/** Flags a note or notebook can have, changed without touching its content or date. */
+export type Flags = { starred?: boolean; archived_at?: string | null };
 
 export interface Notebook {
   id: string;
   name: string;
   created_at: string;
   updated_at: string;
+  starred?: boolean;
+  archived_at?: string | null;
 }
 
 export const DEFAULT_NOTEBOOK_NAME = 'My Notebook';

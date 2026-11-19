@@ -235,6 +235,7 @@ test('"Export all" keeps the history and importing it brings the versions back; 
 
   const wait = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
   await page.getByRole('button', { name: 'Export all notes (.lbd)' }).click();
   const file = readFileSync((await (await wait).path())!);
   await page.locator('.settings-close').click();
@@ -246,8 +247,8 @@ test('"Export all" keeps the history and importing it brings the versions back; 
 
   // A single note, shared: its content only.
   const one = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export', exact: true }).click();
-  await page.getByRole('button', { name: /Lineboard file/ }).click();
+  await page.getByRole('button', { name: 'Share or export', exact: true }).click();
+  await page.getByRole('button', { name: /^Lineboard file/ }).click();
   const single = JSON.parse(unzip(readFileSync((await (await one).path())!)).get('notes/0001.json')!.toString());
   expect(single.history).toBeUndefined();
 

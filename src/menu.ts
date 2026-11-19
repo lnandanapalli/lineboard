@@ -214,3 +214,40 @@ export const closeOpenMenu = () => {
   openMenu?.close();
   return had;
 };
+
+export interface ActionItem {
+  label: string;
+  icon?: string;
+  danger?: boolean;
+  run: () => void;
+}
+
+/** A small menu of actions under a button (a note's or notebook's "⋯"). */
+export function actionMenu(anchor: HTMLElement, label: string, items: ActionItem[]) {
+  if (anchor.getAttribute('aria-expanded') === 'true') {
+    closeOpenMenu();
+    return;
+  }
+  let close = () => {};
+  const list = h('div', { class: 'action-menu', role: 'menu', 'aria-label': label });
+  for (const it of items) {
+    const b = h('button', { class: 'action-item' + (it.danger ? ' danger' : ''), type: 'button', role: 'menuitem' }) as HTMLButtonElement;
+    b.innerHTML = `${it.icon ?? ''}<span></span>`;
+    b.querySelector('span')!.textContent = it.label;
+    b.addEventListener('click', () => {
+      close();
+      it.run();
+    });
+    list.append(b);
+  }
+  list.addEventListener('keydown', (e) => {
+    const all = [...list.querySelectorAll<HTMLButtonElement>('.action-item')];
+    const i = all.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      all[(i + (e.key === 'ArrowDown' ? 1 : -1) + all.length) % all.length]?.focus();
+    }
+  });
+  ({ close } = popover(anchor, list, { label }));
+}

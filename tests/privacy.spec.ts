@@ -36,9 +36,10 @@ function readExport(files: Map<string, Buffer>) {
   return { account, manifest, notes, lbd };
 }
 
+/** Settings > Data controls: download, export, import, delete. */
 async function openAccountSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.locator('.settings-tab', { hasText: 'Account' }).click();
+  await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
 }
 
 /** Click "Download my data" (signed in: confirm with the password) and read the zip. */

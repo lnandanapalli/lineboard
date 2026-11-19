@@ -71,7 +71,8 @@ test('a note can be moved to another notebook', async ({ page }) => {
   await page.locator('.title-input').fill('Move me');
   await page.locator('.title-input').press('Enter');
 
-  await page.locator('.note-list li', { hasText: 'Move me' }).getByRole('button', { name: 'Move to another notebook' }).click();
+  await page.locator('.note-list li', { hasText: 'Move me' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Move to notebook' }).click();
   await page.locator('dialog[open] select').selectOption({ label: 'Physics' });
   await answerDialog(page, 'Move');
 
@@ -92,14 +93,16 @@ test('deleting a notebook deletes its notes; deleting the last one leaves a fres
 
   await openSidebar(page);
   await notebookButton(page).click();
-  await page.locator('.book-list li', { hasText: 'Scratch' }).getByRole('button', { name: 'Delete notebook' }).click();
+  await page.locator('.book-list li', { hasText: 'Scratch' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
   await expect(page.locator('dialog[open] p')).toContainText('its 1 note');
   await answerDialog(page, 'Delete notebook');
   await expect(notebookButton(page)).toContainText('My Notebook');
   await expectStrokes(page, 0);
 
   await openNotebookList(page);
-  await page.locator('.book-list li', { hasText: 'My Notebook' }).getByRole('button', { name: 'Delete notebook' }).click();
+  await page.locator('.book-list li', { hasText: 'My Notebook' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
   await answerDialog(page, 'Delete notebook');
   await expect(notebookButton(page)).toContainText('My Notebook');
   await expect(noteTitles(page)).toHaveCount(1);

@@ -41,6 +41,13 @@ create table if not exists public.strokes (
 create index if not exists strokes_note_created_idx on public.strokes (note_id, created_at, id);
 create index if not exists strokes_user_idx on public.strokes (user_id);
 
+-- Stars and the archive: a starred note or notebook is pinned to the top of the sidebar; an archived
+-- one is hidden from the sidebar and search until restored (Settings > Data controls).
+alter table public.notes     add column if not exists starred boolean not null default false;
+alter table public.notes     add column if not exists archived_at timestamptz;
+alter table public.notebooks add column if not exists starred boolean not null default false;
+alter table public.notebooks add column if not exists archived_at timestamptz;
+
 -- ------------- End-to-end encryption (optional, per user) -------------
 -- When a user turns encryption on, the app encrypts titles, names and ink on the device. Encrypted
 -- rows keep the ciphertext in *_enc columns and leave the plaintext columns empty (or null).

@@ -129,9 +129,9 @@ test('export a note as .lbd and import it back: everything returns, as a new not
   await richNote(page, 'Lecture 1');
   const before = (await localState(page)).notes.find((n) => n.title === 'Lecture 1')!;
   // The toolbar's export menu offers a picture or a Lineboard file.
-  await page.getByRole('button', { name: 'Export', exact: true }).click();
+  await page.getByRole('button', { name: 'Share or export', exact: true }).click();
   await expect(page.locator('.export-menu')).toContainText('Picture (.png)');
-  const file = await downloaded(page, () => page.getByRole('button', { name: /Lineboard file/ }).click());
+  const file = await downloaded(page, () => page.getByRole('button', { name: /^Lineboard file/ }).click());
   expect(file.name).toBe('Lecture 1.lbd');
   const parts = unzip(file.bytes);
   const manifest = JSON.parse(parts.get('lineboard.json')!.toString());
@@ -178,10 +178,14 @@ test('export a notebook, delete it, and import it: the notebook comes back with 
   await openSidebar(page);
   if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
   const row = page.locator('.book-list li', { hasText: 'Physics' });
-  const file = await downloaded(page, () => row.getByRole('button', { name: 'Export notebook' }).click());
+  const file = await downloaded(page, async () => {
+    await row.locator('.more-btn').click();
+    await page.getByRole('menuitem', { name: 'Export (.lbd)' }).click();
+  });
   expect(file.name).toBe('Physics.lbd');
   if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
-  await page.locator('.book-list li', { hasText: 'Physics' }).getByRole('button', { name: 'Delete notebook' }).click();
+  await page.locator('.book-list li', { hasText: 'Physics' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
   await page.locator('dialog[open]').getByRole('button', { name: 'Delete notebook' }).click();
   await expect.poll(async () => (await localState(page)).books.map((b) => b.name)).toEqual(['My Notebook']);
 
@@ -277,7 +281,7 @@ test('with an account: import uploads the pictures, and "Export all notes" asks 
   await expect.poll(() => db.strokes.filter((s) => s.tool === 'image').length).toBe(1);
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.locator('.settings-tab', { hasText: 'Account' }).click();
+  await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
   await page.getByRole('button', { name: 'Export all notes (.lbd)' }).click();
   const ask = page.locator('dialog.confirm-dialog');
   await expect(ask).toContainText('Exporting all your notes');
@@ -303,7 +307,10 @@ test('a picture that cannot be read is reported, and kept in the file as a marke
   await page.route('**/storage/v1/object/images/**', (r) => (r.request().method() === 'GET' ? r.fulfill({ status: 500, body: '{}' }) : r.fallback()));
   await openSidebar(page);
   const row = page.locator('.note-list li').first();
-  const file = await downloaded(page, () => row.getByRole('button', { name: 'Export note' }).click());
+  const file = await downloaded(page, async () => {
+    await row.locator('.more-btn').click();
+    await page.getByRole('menuitem', { name: 'Export (.lbd)' }).click();
+  });
   await expect(page.locator('#toast')).toContainText('1 picture could not be read');
   const parts = unzip(file.bytes);
   expect(JSON.parse(parts.get('lineboard.json')!.toString()).missing_pictures).toBe(1);
