@@ -19,6 +19,8 @@ export interface MockDb {
   versions?: Row[];
   /** Set to make the database look as if schema.sql predates version history. */
   noHistory?: boolean;
+  /** The auth user's user_metadata (display name, picture version). */
+  meta?: Record<string, unknown>;
   /** Set to make the database look as if schema.sql predates stars and the archive. */
   noFlags?: boolean;
   settings: Row | null;
@@ -122,7 +124,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     role: 'authenticated',
     email: 'friend@example.com',
     app_metadata: {},
-    user_metadata: {},
+    user_metadata: db.meta ?? {},
     created_at: '2026-01-01T00:00:00Z',
     factors: db.factors,
   });
@@ -196,6 +198,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
           db.password = b.password;
           db.passwordChanges++;
         }
+        if (b.data) db.meta = { ...(db.meta ?? {}), ...b.data };
         return json(route, 200, user());
       }
       return json(route, 200, user());

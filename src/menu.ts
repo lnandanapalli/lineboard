@@ -175,9 +175,15 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: { label
   const panel = h('div', { class: 'popover', role: 'dialog', 'aria-label': opts.label }, content);
   popupHost().append(panel);
   const r = appRect(anchor);
-  panel.style.top = `${r.bottom + 6}px`;
   panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, appViewport().width - panel.offsetWidth - 8))}px`;
-  fitBelow(panel, r.bottom + 6);
+  // Below the button, or above it when it sits low on the screen (the sidebar's account menu).
+  const vh = appViewport().height;
+  if (r.bottom + 6 + panel.offsetHeight > vh - 8 && r.top - 6 - panel.offsetHeight >= 8) {
+    panel.style.top = `${r.top - 6 - panel.offsetHeight}px`;
+  } else {
+    panel.style.top = `${r.bottom + 6}px`;
+    fitBelow(panel, r.bottom + 6);
+  }
   anchor.setAttribute('aria-expanded', 'true');
   const onOutside = (e: PointerEvent) => {
     if (!panel.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();

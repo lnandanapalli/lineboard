@@ -45,6 +45,9 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 - **Search** (Ctrl/⌘ K, or Search in the sidebar): note titles and notebook names, each result labelled. Forgiving
   like most apps' search: case and accents ignored, words in any order, word starts and small typos match, the
   closest matches first; "quotes" for an exact phrase. Archived ones only when asked for.
+- **Profile.** A display name and an optional picture, shown in the sidebar as initials or the picture (the
+  email stays in Settings, out of screen recordings). The account menu there holds Profile, Data controls,
+  Settings and Sign out.
 - **Share as a file.** Send the open note as a PDF, a picture or a Lineboard file through the device's share
   menu (or as a download where there is none). Nothing is uploaded for sharing: Lineboard hosts no public pages.
 - **Version history.** Versions are saved as you write (after a pause, and when you leave a note). Browse them

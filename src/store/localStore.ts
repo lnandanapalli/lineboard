@@ -1,6 +1,7 @@
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { lsGet, lsSet, uuid } from '../util';
+import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
 import type { Store } from './store';
 
 /** Images on this device: IndexedDB, since localStorage is far too small for pictures. */
@@ -161,6 +162,30 @@ export class LocalStore implements Store {
     return b;
   }
 
+  async loadProfile(): Promise<Profile> {
+    const p = lsGet<Partial<Profile>>('lb-local-profile', {});
+    return { ...EMPTY_PROFILE, name: cleanName(p.name), picture: typeof p.picture === 'string' ? p.picture : null, pictureType: p.pictureType ?? null };
+  }
+  async saveProfile(change: { name?: string; picture?: Blob | null }): Promise<Profile> {
+    const p = await this.loadProfile();
+    if (change.name !== undefined) p.name = cleanName(change.name);
+    if (change.picture === null) {
+      await imageTx('readwrite', (s) => s.delete('profile-picture')).catch(() => {});
+      p.picture = null;
+      p.pictureType = null;
+    } else if (change.picture) {
+      await this.putImage('profile-picture', change.picture);
+      p.picture = uuid();
+      p.pictureType = change.picture.type;
+    }
+    lsSet('lb-local-profile', p);
+    return p;
+  }
+  async loadProfilePicture(p: Profile): Promise<Blob | null> {
+    if (!p.picture) return null;
+    return this.getImage('profile-picture').catch(() => null);
+  }
+
   async setNoteFlags(id: string, flags: Flags) {
     this.saveNotes(this.notes().map((m) => (m.id === id ? { ...m, ...flags } : m)));
   }
@@ -212,7 +237,7 @@ export class LocalStore implements Store {
         /* ignore */
       }
     }
-    for (const k of ['lb-local-notes', 'lb-local-notebooks', 'lb-local-settings']) {
+    for (const k of ['lb-local-notes', 'lb-local-notebooks', 'lb-local-settings', 'lb-local-profile']) {
       try {
         localStorage.removeItem(k);
       } catch {

@@ -116,7 +116,7 @@ async function richNote(page: Page, title: string) {
   await page.getByRole('toolbar', { name: 'Text format' }).getByRole('radio', { name: 'Serif' }).click();
   await page.keyboard.type('Hello file');
   await page.keyboard.press('Escape');
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'p.png', mimeType: 'image/png', buffer: PNG });
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'p.png', mimeType: 'image/png', buffer: PNG });
   await expect.poll(async () => (await localState(page)).notes.find((n) => n.title === title)?.strokes.length).toBe(4);
   return { cdp, geo };
 }
@@ -301,7 +301,7 @@ test('a picture that cannot be read is reported, and kept in the file as a marke
   await page.getByLabel('Password', { exact: true }).fill('secret123');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await attachBoard(page);
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'p.png', mimeType: 'image/png', buffer: PNG });
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'p.png', mimeType: 'image/png', buffer: PNG });
   await expect.poll(() => db.strokes.length).toBe(1);
   // From now on the storage server fails every download.
   await page.route('**/storage/v1/object/images/**', (r) => (r.request().method() === 'GET' ? r.fulfill({ status: 500, body: '{}' }) : r.fallback()));
