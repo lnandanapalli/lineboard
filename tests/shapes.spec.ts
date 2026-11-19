@@ -117,3 +117,18 @@ test('S picks the shape tool, which uses the pen colour and size', async ({ page
   await drag(cdp, geo.areaX + 100, stripY(geo, 0) - 20, geo.areaX + 300, stripY(geo, 0) + 20);
   await expectStrokes(page, 1);
 });
+
+test('on a short screen the palette scrolls so every shape and the switch can be reached', async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  await setup(page);
+  await page.locator('.shape-btn').click();
+  const panel = page.locator('.popover');
+  const pb = (await panel.boundingBox())!;
+  expect(pb.y + pb.height).toBeLessThanOrEqual(390);
+  const lock = page.getByRole('switch', { name: 'Keep proportions' });
+  await lock.scrollIntoViewIfNeeded();
+  await lock.click();
+  await expect(lock).toHaveAttribute('aria-checked', 'true');
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Arrow line', exact: true }).click();
+  await expect(page.locator('.shape-btn')).toHaveAttribute('aria-label', 'Shapes: Arrow line');
+});
