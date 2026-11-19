@@ -35,7 +35,7 @@ test('insert a picture, draw on it, move and resize it; the eraser leaves it alo
   await expectStrokes(page, 1);
   let img = (await strokes(page))[0];
   expect(img.tool).toBe('image');
-  await expect(page.locator('.select-btn')).toHaveClass(/active/); // selected, ready to move
+  await expect(page.locator('.select-tool')).toHaveClass(/active/); // selected, ready to move
   await expect(page.locator('.select-bar')).toBeVisible();
 
   // Draw across the picture with the pen: ink goes on top of it.
@@ -237,4 +237,50 @@ test('a device that has not noticed encryption was turned on elsewhere does not 
   // This device learns that encryption is on and asks to unlock instead of sending the file.
   await expect(page.getByRole('heading', { name: 'Your notes are encrypted.' })).toBeVisible({ timeout: 15_000 });
   for (const f of db.images?.values() ?? []) expect(f.body.subarray(0, 4).toString()).toBe('LBE1');
+});
+
+test('while a picture is being added, a placeholder shows where it will go', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await signIn(page);
+  // Hold the upload until the test lets it go.
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  await page.route('**/storage/v1/object/images/**', async (route) => {
+    if (route.request().method() !== 'GET') await held;
+    return route.fallback();
+  });
+  await insertPicture(page);
+  const area = page.locator('.canvas-area');
+  await expect(area).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('.status')).toHaveText('Saving...');
+  // The live layer shows the grey placeholder box in the middle of the view.
+  const grey = () =>
+    page.evaluate(() => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[2];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && d[i] > 200 && d[i] < 250 && Math.abs(d[i] - d[i + 2]) < 20) n++;
+      return n;
+    });
+  await expect.poll(grey).toBeGreaterThan(500);
+  expect(db.strokes.length).toBe(0);
+  release();
+  // Once saved, the picture takes its place.
+  await expect(area).not.toHaveAttribute('aria-busy');
+  await expect(page.locator('.status')).toHaveText('Saved');
+  await expect.poll(() => db.strokes.length).toBe(1);
+  await expect.poll(grey).toBeLessThan(100);
+});
+
+test('pictures added together land where their placeholders were, not on top of each other', async ({ page }) => {
+  await freeBoard(page);
+  await page.locator('input[type=file][accept^="image/"]').setInputFiles([
+    { name: 'a.png', mimeType: 'image/png', buffer: PNG },
+    { name: 'b.png', mimeType: 'image/png', buffer: PNG },
+  ]);
+  await expectStrokes(page, 2);
+  const [a, b] = (await strokes(page)).map((s) => s.points);
+  // The second sits down-right of the first, by the placeholder's step.
+  expect(b[0] - a[0]).toBeGreaterThan(10);
+  expect(b[1] - a[1]).toBeGreaterThan(10);
 });

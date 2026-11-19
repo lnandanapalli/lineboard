@@ -470,6 +470,17 @@ html[data-rotation="270"] dialog[open] { rotate: 270deg; }
 html[data-rotation="90"] .modal, html[data-rotation="270"] .modal { width: min(600px, 94vh); max-height: 90vw; }
 html[data-rotation="90"] .modal.small, html[data-rotation="270"] .modal.small { width: min(400px, 92vh); }
 html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-modal { width: min(880px, 96vh); height: min(640px, 92vw); max-height: 92vw; }
+/* Split tool buttons: the icon picks the tool, the arrow beside it opens its menu. */
+.split-btn { display: inline-flex; align-items: stretch; height: 40px; flex: none; border-radius: 9px; }
+.split-btn.active { background: var(--accent-soft); color: var(--accent); }
+.split-main, .split-arrow { display: grid; place-items: center; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; }
+.split-main { width: 36px; border-radius: 9px 0 0 9px; }
+.split-main svg { width: 20px; height: 20px; }
+.split-arrow { width: 22px; border-radius: 0 9px 9px 0; color: var(--muted); }
+.split-btn.active .split-arrow { color: var(--accent); }
+.split-arrow svg { width: 16px; height: 16px; transition: transform 0.15s; }
+.split-arrow[aria-expanded=true] svg { transform: rotate(180deg); }
+@media (hover: hover) { .split-main:hover, .split-arrow:hover { background: rgba(0,0,0,0.05); } }
 .dropdown-btn.tool-dropdown { border-color: transparent; border-radius: 9px; padding: 0 4px 0 8px; }
 .dropdown-btn.tool-dropdown .dropdown-label { display: none; }
 .dropdown-btn.tool-dropdown.active { background: var(--accent-soft); color: var(--accent); }
@@ -485,10 +496,15 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 .shape-cell svg { width: 26px; height: 26px; }
 .shape-cell:hover { background: var(--bg); }
 .shape-cell[aria-checked=true] { background: var(--accent-soft); color: var(--accent); }
+.line-options { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.line-choices { display: flex; gap: 6px; }
+.line-choice {
+  flex: 1; height: 36px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; cursor: pointer; color: var(--ink);
+}
+.line-choice:hover { background: var(--bg); }
+.line-choice[aria-checked=true] { background: var(--accent-soft); color: var(--accent); }
 .shape-foot { display: flex; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
-.shape-foot > div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.shape-foot b { font-size: 14px; font-weight: 600; }
-.shape-foot small { font-size: 12px; color: var(--muted); line-height: 1.35; }
+.shape-foot b { flex: 1; font-size: 14px; font-weight: 600; }
 
 /* ----- Text boxes being typed (see Board.openEditor) ----- */
 .text-editor {

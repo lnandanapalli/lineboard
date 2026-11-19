@@ -28,6 +28,7 @@ export const SHAPES = [
   'arrowRight',
   'line',
   'arrow',
+  'arrow2',
 ] as const;
 export type ShapeKind = (typeof SHAPES)[number];
 
@@ -50,7 +51,21 @@ export const SHAPE_NAMES: Record<ShapeKind, string> = {
   arrowRight: 'Right arrow',
   line: 'Line',
   arrow: 'Arrow line',
+  arrow2: 'Double arrow line',
 };
+
+/** How a shape's outline is drawn. */
+export const LINE_STYLES = ['solid', 'dashed', 'dotted'] as const;
+export type LineStyle = (typeof LINE_STYLES)[number];
+export const LINE_STYLE_NAMES: Record<LineStyle, string> = { solid: 'Solid', dashed: 'Dashed', dotted: 'Dotted' };
+
+/** Outline thicknesses offered in the palette (page units). */
+export const LINE_WIDTHS = [
+  { width: 2, name: 'Thin' },
+  { width: 3.5, name: 'Medium' },
+  { width: 6, name: 'Bold' },
+  { width: 10, name: 'Extra bold' },
+] as const;
 
 const P = 0.5; // constant pressure: shapes have an even width
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -90,7 +105,7 @@ const CURVES: Partial<Record<ShapeKind, (t: number) => Pt>> = {
 };
 
 /** Equal sides for shapes whose box should be square (any that isn't a line). */
-const isLine = (k: ShapeKind) => k === 'line' || k === 'arrow';
+const isLine = (k: ShapeKind) => k === 'line' || k === 'arrow' || k === 'arrow2';
 
 /**
  * The strokes (each a flat [x, y, p, ...] list) for a shape dragged from (x0, y0) to (x1, y1).
@@ -124,6 +139,7 @@ export function shapeStrokes(kind: ShapeKind, x0: number, y0: number, x1: number
 
   if (kind === 'line') return [flat([[x0, y0], [ex, ey]])];
   if (kind === 'arrow') return [arrowLine(x0, y0, ex, ey)];
+  if (kind === 'arrow2') return [arrowLine(x0, y0, ex, ey, true)];
 
   const poly = POLYGONS[kind];
   if (poly) return [closedPolygon(poly)];
@@ -188,8 +204,8 @@ export function shapeStrokes(kind: ShapeKind, x0: number, y0: number, x1: number
   return [];
 }
 
-/** A line with an arrowhead at its end (one stroke that retraces the head). */
-function arrowLine(x0: number, y0: number, ex: number, ey: number): number[] {
+/** A line with an arrowhead at its end, or at both ends (one stroke that retraces the heads). */
+function arrowLine(x0: number, y0: number, ex: number, ey: number, both = false): number[] {
   const dx = ex - x0, dy = ey - y0;
   const len = Math.hypot(dx, dy) || 1;
   const head = Math.min(28, Math.max(10, len * 0.25));
@@ -197,7 +213,12 @@ function arrowLine(x0: number, y0: number, ex: number, ey: number): number[] {
   const a = (28 * Math.PI) / 180;
   const bx = (s: number) => ex - head * (ux * Math.cos(a) - s * uy * Math.sin(a));
   const by = (s: number) => ey - head * (uy * Math.cos(a) + s * ux * Math.sin(a));
-  const pts: Pt[] = [[x0, y0], [ex, ey], [ex, ey], [bx(1), by(1)], [bx(1), by(1)], [ex, ey], [ex, ey], [bx(-1), by(-1)]];
+  const end: Pt[] = [[ex, ey], [ex, ey], [bx(1), by(1)], [bx(1), by(1)], [ex, ey], [ex, ey], [bx(-1), by(-1)]];
+  if (!both) return [[x0, y0] as Pt, ...end].flatMap(([x, y]) => [r1(x), r1(y), P]);
+  // The start's head mirrors the end's: barbs at x0 + (ex - barb), drawn first, then the line.
+  const sx = (s: number) => x0 + (ex - bx(s)), sy = (s: number) => y0 + (ey - by(s));
+  const start: Pt[] = [[sx(1), sy(1)], [x0, y0], [x0, y0], [sx(-1), sy(-1)], [sx(-1), sy(-1)], [x0, y0], [x0, y0]];
+  const pts: Pt[] = [...start, ...end];
   return pts.flatMap(([x, y]) => [r1(x), r1(y), P]);
 }
 
@@ -234,4 +255,5 @@ export const SHAPE_ICONS: Record<ShapeKind, string> = {
   arrowRight: svg('<path d="M20.5 12 13 19v-4H3.5V9H13V5Z"/>'),
   line: svg('<path d="M5 19 19 5"/>'),
   arrow: svg('<path d="M5 19 19 5"/><path d="M11 5h8v8"/>'),
+  arrow2: svg('<path d="M5 19 19 5"/><path d="M11 5h8v8M5 11v8h8"/>'),
 };

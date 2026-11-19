@@ -1,5 +1,6 @@
 import { expect, test, type CDPSession, type Page } from '@playwright/test';
-import { drag, expectStrokes, setup, stripY } from './helpers';
+import { PEN, attachBoard, drag, expectStrokes, send, setup, stripY, tp } from './helpers';
+import { mockSupabase } from './mockSupabase';
 
 /** Shapes come from a palette and are saved as pen strokes that trace the outline. No keyboard needed. */
 
@@ -38,7 +39,7 @@ test('the palette offers every shape, and each one draws', async ({ page }) => {
   const { draw } = await freeBoard(page);
   await page.locator('.shape-btn').click();
   const cells = page.locator('.shape-grid [role=radio]');
-  await expect(cells).toHaveCount(18);
+  await expect(cells).toHaveCount(19);
   const names = await cells.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')!));
   await page.keyboard.press('Escape');
   let n = 0;
@@ -54,7 +55,7 @@ test('the palette offers every shape, and each one draws', async ({ page }) => {
 test('rectangles have exact corners; nearly-square boxes snap to squares without a keyboard', async ({ page }) => {
   const { draw } = await freeBoard(page);
   await pickShape(page, 'Rectangle');
-  await expect(page.locator('.shape-btn')).toHaveClass(/active/);
+  await expect(page.locator('.shape-tool')).toHaveClass(/active/);
   await draw(100, 100, 300, 200);
   await expectStrokes(page, 1);
   let s = (await all(page)).at(-1)!;
@@ -109,13 +110,33 @@ test('a crossed box is one undo step, and a tap draws nothing', async ({ page })
   await expectStrokes(page, 0);
 });
 
-test('S picks the shape tool, which uses the pen colour and size', async ({ page }) => {
+test('S picks the shape tool; the toolbar size sets the outline thickness, in step with the palette', async ({ page }) => {
   const { cdp, geo } = await setup(page);
   await page.keyboard.press('s');
-  await expect(page.locator('.shape-btn')).toHaveClass(/active/);
-  await expect(page.locator('.size-btn')).toHaveAttribute('aria-label', /^Pen size/);
+  await expect(page.locator('.shape-tool')).toHaveClass(/active/);
+  const sizeBtn = page.locator('.size-btn');
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Shape outline size: 3.5');
+  // The toolbar's size picker changes the shape thickness (not the pen's)...
+  await sizeBtn.click();
+  await page.locator('.size-presets').getByRole('button', { name: 'Extra bold' }).click();
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Shape outline size: 10');
+  await page.keyboard.press('Escape');
   await drag(cdp, geo.areaX + 100, stripY(geo, 0) - 20, geo.areaX + 300, stripY(geo, 0) + 20);
   await expectStrokes(page, 1);
+  const last = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
+    return (JSON.parse(localStorage[k]) as { width: number }[]).at(-1)!.width;
+  });
+  expect(last).toBe(10);
+  // ...the palette shows the same choice, and picking one there updates the toolbar.
+  await page.locator('.shape-btn').click();
+  await expect(page.getByRole('radiogroup', { name: 'Thickness' }).getByRole('radio', { name: 'Extra bold' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('radiogroup', { name: 'Thickness' }).getByRole('radio', { name: 'Thin' }).click();
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Shape outline size: 2');
+  // The pen keeps its own size.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('p');
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Pen size: 3.5');
 });
 
 test('on a short screen the palette scrolls so every shape and the switch can be reached', async ({ page }) => {
@@ -130,5 +151,158 @@ test('on a short screen the palette scrolls so every shape and the switch can be
   await lock.click();
   await expect(lock).toHaveAttribute('aria-checked', 'true');
   await page.locator('.shape-grid').getByRole('radio', { name: 'Arrow line', exact: true }).click();
-  await expect(page.locator('.shape-btn')).toHaveAttribute('aria-label', 'Shapes: Arrow line');
+  await expect(page.locator('.shape-tool .split-main')).toHaveAttribute('aria-label', 'Shapes: Arrow line');
+});
+
+test('shapes can be dashed or dotted and thin to extra bold; the choice is saved with the shape', async ({ page }) => {
+  const { draw } = await freeBoard(page);
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radiogroup', { name: 'Line style' }).getByRole('radio', { name: 'Dashed' }).click();
+  await page.getByRole('radiogroup', { name: 'Thickness' }).getByRole('radio', { name: 'Bold', exact: true }).click();
+  await expect(page.getByRole('radio', { name: 'Dashed' })).toHaveAttribute('aria-checked', 'true');
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Line', exact: true }).click();
+  await draw(100, 300, 900, 300);
+  await expectStrokes(page, 1);
+  let s = (await all(page)).at(-1)! as { width: number; dash?: string };
+  expect(s).toMatchObject({ width: 6, dash: 'dashed' });
+
+  // The line really has gaps: on the ink canvas, the row through it is part ink, part blank.
+  const gaps = () =>
+    page.evaluate(() => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[1];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      let best = { ink: 0, blank: 0 };
+      for (let y = 0; y < c.height; y++) {
+        let ink = 0;
+        for (let x = Math.round(c.width * 0.25); x < Math.round(c.width * 0.75); x++) if (d[(y * c.width + x) * 4 + 3] > 128) ink++;
+        if (ink > best.ink) best = { ink, blank: Math.round(c.width * 0.5) - ink };
+      }
+      return best;
+    });
+  await expect.poll(async () => (await gaps()).ink).toBeGreaterThan(50);
+  const g = await gaps();
+  expect(g.blank).toBeGreaterThan(50);
+
+  // Dotted, extra bold.
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Dotted' }).click();
+  await page.getByRole('radio', { name: 'Extra bold' }).click();
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Double arrow line', exact: true }).click();
+  await draw(100, 500, 900, 500);
+  await expectStrokes(page, 2);
+  s = (await all(page)).at(-1)! as { width: number; dash?: string };
+  expect(s).toMatchObject({ width: 10, dash: 'dotted' });
+
+  // Solid again: no dash saved. The choices are remembered after a reload.
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Solid' }).click();
+  await page.keyboard.press('Escape');
+  await draw(100, 700, 400, 800);
+  await expectStrokes(page, 3);
+  expect((await all(page)).at(-1)).not.toHaveProperty('dash');
+  await page.reload();
+  await page.locator('.shape-btn').click();
+  await expect(page.getByRole('radio', { name: 'Solid' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: 'Extra bold' })).toHaveAttribute('aria-checked', 'true');
+});
+
+test('an account keeps the line style: saved with the stroke and read back on another load', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  const { cdp, geo } = await attachBoard(page);
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Dotted' }).click();
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Line', exact: true }).click();
+  await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 400, stripY(geo, 0));
+  await expect.poll(() => db.strokes.length).toBe(1);
+  expect(db.strokes[0].dash).toBe('dotted');
+  // Loaded back from the server, it is still drawn dotted: the row through it switches between
+  // ink and blank many times (a solid line would switch twice).
+  await page.reload();
+  await page.locator('.canvas-area canvas.live').waitFor();
+  const switches = () =>
+    page.evaluate(() => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[1];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      let best = 0, bestInk = 0;
+      for (let y = 0; y < c.height; y++) {
+        let ink = 0, sw = 0, prev = false;
+        for (let x = 0; x < c.width; x++) {
+          const on = d[(y * c.width + x) * 4 + 3] > 128;
+          if (on) ink++;
+          if (on !== prev) sw++;
+          prev = on;
+        }
+        if (ink > bestInk) [bestInk, best] = [ink, sw];
+      }
+      return best;
+    });
+  await expect.poll(switches).toBeGreaterThan(20);
+});
+
+test('resizing a dashed shape previews it at the new size while dragging', async ({ page }) => {
+  const { cdp, draw } = await freeBoard(page);
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Dashed' }).click();
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Rectangle', exact: true }).click();
+  await draw(200, 200, 400, 350);
+  await expectStrokes(page, 1);
+  // Select it with a box, then hold the resize handle and drag it out without letting go.
+  await page.locator('.select-btn').click();
+  await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
+  await draw(150, 150, 450, 400);
+  await expect(page.locator('.select-bar')).toBeVisible();
+  const area = (await page.locator('.canvas-area').boundingBox())!;
+  const k = area.width / 1000;
+  const at = (x: number, y: number) => [area.x + x * k, area.y + y * k] as const;
+  const [hx, hy] = at(407, 357);
+  await send(cdp, 'touchStart', [tp(hx, hy, PEN, 1)]);
+  for (let i = 1; i <= 8; i++) {
+    const [x, y] = at(407 + i * 40, 357 + i * 30);
+    await send(cdp, 'touchMove', [tp(x, y, PEN, 1)]);
+  }
+  // The preview (live layer) has the shape's ink well beyond its old right edge.
+  const inkRight = () =>
+    page.evaluate((edge) => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[2];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      const x0 = Math.round(c.width * edge);
+      let n = 0;
+      for (let y = 0; y < c.height; y++)
+        for (let x = x0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          if (d[i + 3] > 128 && d[i + 2] < 100) n++; // dark ink, not the blue selection box
+        }
+      return n;
+    }, 0.55);
+  await expect.poll(inkRight).toBeGreaterThan(200);
+  await send(cdp, 'touchEnd', []);
+});
+
+test('the Select and Shapes icons pick the tool with the last choice; only the arrow opens the menu', async ({ page }) => {
+  const { draw } = await freeBoard(page);
+  // Choose the star once from the palette, then switch to the pen.
+  await pickShape(page, 'Star');
+  await page.keyboard.press('p');
+  await expect(page.locator('.shape-tool')).not.toHaveClass(/active/);
+  // Pressing the star icon itself goes straight back to drawing stars, with no palette.
+  await page.getByRole('button', { name: 'Shapes: Star' }).click();
+  await expect(page.locator('.shape-tool')).toHaveClass(/active/);
+  await expect(page.locator('.shape-palette')).toHaveCount(0);
+  await draw(300, 300, 500, 500);
+  await expectStrokes(page, 1);
+
+  // Same for Select: pick Rectangle select from the menu once, leave, then press the icon.
+  await page.locator('.select-btn').click();
+  await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
+  await page.keyboard.press('p');
+  await page.getByRole('button', { name: 'Select: Rectangle select' }).click();
+  await expect(page.locator('.select-tool')).toHaveClass(/active/);
+  await expect(page.locator('.dropdown-menu')).toHaveCount(0);
+  // A dragged box selects the star.
+  await draw(250, 250, 550, 550);
+  await expect(page.locator('.select-bar')).toBeVisible();
 });

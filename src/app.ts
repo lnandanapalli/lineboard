@@ -5,7 +5,7 @@ import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import { SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
+import { LINE_STYLE_NAMES, LINE_STYLES, LINE_WIDTHS, SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
 import { IMAGE_TYPES, prepareImage } from './images';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
@@ -20,6 +20,8 @@ const SIZES = {
   pen: { min: 1, max: 24, step: 0.5, presets: [2, 3.5, 6] },
   highlighter: { min: 6, max: 60, step: 1, presets: [14, 22, 32] },
   text: { min: 10, max: 100, step: 1, presets: [20, 28, 44] },
+  // Same range the settings accept; the presets match the palette's thickness choices.
+  shape: { min: 1, max: 20, step: 0.5, presets: [2, 3.5, 6, 10] },
 };
 
 type Action = { type: 'add' | 'remove'; strokes: Stroke[] } | { type: 'replace'; from: Stroke[]; to: Stroke[] };
@@ -61,6 +63,8 @@ export class App {
   private redoBtn!: HTMLButtonElement;
   private modeMenu!: Dropdown<BoardMode>;
   private shapeBtn!: HTMLButtonElement;
+  private shapeMain!: HTMLButtonElement;
+  private shapeTool!: HTMLElement;
   private selectMenu!: Dropdown<'lasso' | 'rect'>;
   /** The last strip mode, so F (free on/off) returns to it. */
   private lastStripMode: BoardMode = 'strips';
@@ -84,9 +88,13 @@ export class App {
     this.root = root;
     this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
-    this.queue.onState = (s) => this.renderStatus(s);
+    this.queue.onState = (s) => {
+      this.syncState = s;
+      this.renderStatus();
+    };
     this.build();
-    this.renderStatus(this.queue.pending ? 'saving' : 'saved');
+    this.syncState = this.queue.pending ? 'saving' : 'saved';
+    this.renderStatus();
     window.addEventListener(
       'beforeunload',
       (e) => {
@@ -212,9 +220,11 @@ export class App {
     // Select: a free-hand loop or a dragged rectangle.
     this.selectMenu = dropdown<'lasso' | 'rect'>({
       name: 'Select',
-      className: 'tool-dropdown select-btn',
+      className: 'select-btn',
       value: this.settings.selectMode,
       reselect: true,
+      // The icon picks the Select tool as last used; the arrow chooses lasso or rectangle.
+      split: { className: 'select-tool', onMain: () => this.setTool('select'), title: (t) => withShortcut(t, 'V') },
       onSelect: (m) => {
         this.settings.selectMode = m;
         this.settingsChanged();
@@ -226,10 +236,14 @@ export class App {
       ],
     });
     tools.append(this.selectMenu.el);
-    // Shapes: a palette of shapes, opened from one button.
-    this.shapeBtn = h('button', { class: 'dropdown-btn tool-dropdown shape-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+    // Shapes: the icon draws the last shape picked; the arrow opens the palette.
+    this.shapeMain = h('button', { class: 'split-main', type: 'button' }) as HTMLButtonElement;
+    this.shapeMain.addEventListener('click', () => this.setTool('shape'));
+    this.shapeBtn = h('button', { class: 'split-arrow shape-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-label': 'Shape options', title: 'Shape options' }) as HTMLButtonElement;
+    this.shapeBtn.innerHTML = icons.chevron;
     this.shapeBtn.addEventListener('click', () => this.openShapePalette());
-    tools.append(this.shapeBtn);
+    this.shapeTool = h('div', { class: 'split-btn shape-tool', role: 'group', 'aria-label': 'Shapes' }, this.shapeMain, this.shapeBtn);
+    tools.append(this.shapeTool);
     // Insert a picture (also: paste, or drop a file on the page).
     const filePick = h('input', { type: 'file', accept: IMAGE_TYPES, multiple: true, hidden: true, 'aria-hidden': 'true' }) as HTMLInputElement;
     filePick.addEventListener('change', () => {
@@ -494,10 +508,10 @@ export class App {
 
   private renderToolOptions() {
     for (const [t, b] of this.toolBtns) b.classList.toggle('active', t === this.tool);
-    this.shapeBtn.classList.toggle('active', this.tool === 'shape');
-    this.shapeBtn.innerHTML = `${SHAPE_ICONS[this.settings.shape]}${icons.chevron}`;
-    this.shapeBtn.setAttribute('aria-label', `Shapes: ${SHAPE_NAMES[this.settings.shape]}`);
-    this.shapeBtn.title = withShortcut(`Shapes: ${SHAPE_NAMES[this.settings.shape]}`, 'S');
+    this.shapeTool.classList.toggle('active', this.tool === 'shape');
+    this.shapeMain.innerHTML = SHAPE_ICONS[this.settings.shape];
+    this.shapeMain.setAttribute('aria-label', `Shapes: ${SHAPE_NAMES[this.settings.shape]}`);
+    this.shapeMain.title = withShortcut(`Shapes: ${SHAPE_NAMES[this.settings.shape]}`, 'S');
     this.selectMenu.el.classList.toggle('active', this.tool === 'select');
     this.selectMenu.set(this.settings.selectMode);
     const isHL = this.tool === 'highlighter';
@@ -530,20 +544,21 @@ export class App {
     this.sizeBtn.style.display = hide ? 'none' : '';
   }
 
-  /** The size of the pen or highlighter (whichever is in use). */
-  private get sizeTool(): 'pen' | 'highlighter' | 'text' {
-    return this.tool === 'highlighter' || this.tool === 'text' ? this.tool : 'pen';
+  /** The size of the tool in use: pen, highlighter, text, or shape outline thickness. */
+  private get sizeTool(): 'pen' | 'highlighter' | 'text' | 'shape' {
+    return this.tool === 'highlighter' || this.tool === 'text' || this.tool === 'shape' ? this.tool : 'pen';
   }
   private get size() {
-    return { pen: this.settings.penWidth, highlighter: this.settings.highlighterWidth, text: this.settings.textSize }[this.sizeTool];
+    return { pen: this.settings.penWidth, highlighter: this.settings.highlighterWidth, text: this.settings.textSize, shape: this.settings.shapeWidth }[this.sizeTool];
   }
   private set size(w: number) {
     if (this.sizeTool === 'highlighter') this.settings.highlighterWidth = w;
     else if (this.sizeTool === 'text') this.settings.textSize = w;
+    else if (this.sizeTool === 'shape') this.settings.shapeWidth = w;
     else this.settings.penWidth = w;
   }
   private get sizeName() {
-    return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text' }[this.sizeTool];
+    return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text', shape: 'Shape outline' }[this.sizeTool];
   }
 
   /** Toolbar button: a dot drawn at the current size (capped so it fits). */
@@ -617,7 +632,8 @@ export class App {
       'div',
       { class: 'size-presets' },
       ...cfg.presets.map((w, i) => {
-        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, ['Thin', 'Medium', 'Thick'][i]);
+        const names = tool === 'shape' ? LINE_WIDTHS.map((x) => x.name) : ['Thin', 'Medium', 'Thick'];
+        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, names[i]);
         b.addEventListener('click', () => set(w));
         return b;
       }),
@@ -633,15 +649,24 @@ export class App {
     await this.ready; // a picture pasted right after the page opened waits for the note
     if (!this.current) return toast('Open a note first.', 'error');
     let last: Stroke | null = null;
-    for (const file of pics) {
+    // A placeholder for each picture shows at once, where it will land, until it is saved.
+    const slots = pics.map(() => this.board.addPending());
+    this.picturesInFlight += pics.length;
+    this.renderStatus();
+    for (const [i, file] of pics.entries()) {
       try {
         const img = await prepareImage(file);
+        const bitmap = await createImageBitmap(img.blob);
+        this.board.sizePending(slots[i], bitmap.width, bitmap.height);
         const id = uuid();
         await this.store.putImage(id, img.blob);
-        const bitmap = await createImageBitmap(img.blob);
-        last = this.board.insertImage(id, img.type, bitmap);
+        last = this.board.insertImage(id, img.type, bitmap, slots[i]);
       } catch (e) {
         toast('Could not add the picture: ' + (e as Error).message, 'error');
+      } finally {
+        this.board.removePending(slots[i]);
+        this.picturesInFlight--;
+        this.renderStatus();
       }
     }
     if (last) {
@@ -684,10 +709,52 @@ export class App {
     const foot = h(
       'div',
       { class: 'shape-foot' },
-      h('div', {}, h('b', {}, 'Keep proportions'), h('small', {}, 'Squares, circles, even stars; lines at 45°. Off: nearly-square shapes still snap.')),
+      h('b', {}, 'Keep proportions'),
       lock,
     );
-    ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, foot), { label: 'Shapes' }));
+    ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, this.lineOptions(), foot), { label: 'Shapes' }));
+  }
+
+  /** Line style (solid, dashed, dotted) and thickness for shapes: two rows of icon choices. */
+  private lineOptions() {
+    const line = (attrs: string) =>
+      `<svg viewBox="0 0 32 16" width="32" height="16" aria-hidden="true"><path d="M3 8h26" fill="none" stroke="currentColor" stroke-linecap="round" ${attrs}/></svg>`;
+    const group = <T>(label: string, items: { value: T; name: string; icon: string }[], get: () => T, set: (v: T) => void) => {
+      const row = h('div', { class: 'line-choices', role: 'radiogroup', 'aria-label': label });
+      const paint = () => row.querySelectorAll<HTMLButtonElement>('button').forEach((b, i) => b.setAttribute('aria-checked', String(items[i].value === get())));
+      for (const it of items) {
+        const b = h('button', { class: 'line-choice', type: 'button', role: 'radio', 'aria-label': it.name, title: it.name });
+        b.innerHTML = it.icon;
+        b.addEventListener('click', () => {
+          set(it.value);
+          this.settingsChanged();
+          paint();
+        });
+        row.append(b);
+      }
+      paint();
+      return row;
+    };
+    const dashAttr = { solid: '', dashed: 'stroke-dasharray="6 5"', dotted: 'stroke-dasharray="0 5"' };
+    return h(
+      'div',
+      { class: 'line-options' },
+      group(
+        'Line style',
+        LINE_STYLES.map((v) => ({ value: v, name: LINE_STYLE_NAMES[v], icon: line(`stroke-width="2.4" ${dashAttr[v]}`) })),
+        () => this.settings.shapeDash,
+        (v) => (this.settings.shapeDash = v),
+      ),
+      group(
+        'Thickness',
+        LINE_WIDTHS.map((w) => ({ value: w.width as number, name: w.name, icon: line(`stroke-width="${Math.min(7, 1 + w.width * 0.6).toFixed(1)}"`) })),
+        () => this.settings.shapeWidth,
+        (v) => {
+          this.settings.shapeWidth = v;
+          this.renderSizeButton(); // the toolbar's size button shows the same thickness
+        },
+      ),
+    );
   }
 
   private settingsChanged() {
@@ -751,7 +818,12 @@ export class App {
     this.redoBtn.disabled = !this.redoStack.length;
   }
 
-  private renderStatus(s: SyncState) {
+  /** Pictures still being prepared and uploaded: the status says "Saving..." until they are done. */
+  private picturesInFlight = 0;
+  private syncState: SyncState = 'saved';
+
+  private renderStatus() {
+    const s: SyncState = this.picturesInFlight && this.syncState === 'saved' ? 'saving' : this.syncState;
     const local = this.store.mode === 'local';
     const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: 'Offline, will retry' }[s];
     // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.

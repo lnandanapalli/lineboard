@@ -29,7 +29,8 @@ export interface MenuOption<T extends string> {
 }
 
 export interface Dropdown<T extends string> {
-  el: HTMLButtonElement;
+  /** What goes in the toolbar: the button, or for a split button the wrapper holding both parts. */
+  el: HTMLElement;
   set(value: T): void;
   close(): void;
 }
@@ -45,17 +46,34 @@ export function dropdown<T extends string>(opts: {
   className?: string;
   /** Call onSelect even when the current option is picked again (e.g. to switch to that tool). */
   reselect?: boolean;
+  /**
+   * A split button: pressing the icon calls onMain with the current choice (e.g. picks the tool),
+   * only the arrow next to it opens the menu.
+   */
+  split?: { onMain: (value: T) => void; title?: (label: string) => string; className?: string };
 }): Dropdown<T> {
   let value = opts.value;
   const btn = h('button', {
-    class: 'dropdown-btn ' + (opts.className ?? ''),
+    class: (opts.split ? 'split-arrow ' : 'dropdown-btn ') + (opts.className ?? ''),
     type: 'button',
     'aria-haspopup': 'menu',
     'aria-expanded': 'false',
   }) as HTMLButtonElement;
+  const main = opts.split ? (h('button', { class: 'split-main', type: 'button' }) as HTMLButtonElement) : null;
+  if (main) main.addEventListener('click', () => opts.split!.onMain(value));
+  const el = main ? h('div', { class: 'split-btn ' + (opts.split!.className ?? ''), role: 'group', 'aria-label': opts.name }, main, btn) : btn;
 
   const render = () => {
     const o = opts.options.find((x) => x.value === value) ?? opts.options[0];
+    if (main) {
+      main.innerHTML = o.icon ?? '';
+      main.setAttribute('aria-label', `${opts.name}: ${o.label}`);
+      main.title = opts.split!.title?.(`${opts.name}: ${o.label}`) ?? `${opts.name}: ${o.label}`;
+      btn.innerHTML = icons.chevron;
+      btn.setAttribute('aria-label', `${opts.name} options`);
+      btn.title = `${opts.name} options`;
+      return;
+    }
     btn.innerHTML = `${o.icon ?? ''}<span class="dropdown-label"></span>${icons.chevron}`;
     btn.querySelector('.dropdown-label')!.textContent = o.label;
     btn.setAttribute('aria-label', `${opts.name}: ${o.label}`);
@@ -64,7 +82,7 @@ export function dropdown<T extends string>(opts: {
 
   let menu: HTMLElement | null = null;
   const onOutside = (e: PointerEvent) => {
-    if (menu && !menu.contains(e.target as Node) && !btn.contains(e.target as Node)) close();
+    if (menu && !menu.contains(e.target as Node) && !el.contains(e.target as Node)) close();
   };
   const onKey = (e: KeyboardEvent) => {
     if (!menu) return;
@@ -115,7 +133,7 @@ export function dropdown<T extends string>(opts: {
       menu.append(item);
     }
     popupHost().append(menu);
-    const r = appRect(btn);
+    const r = appRect(el);
     const w = menu.offsetWidth;
     menu.style.top = `${r.bottom + 6}px`;
     menu.style.left = `${Math.max(8, Math.min(r.left, appViewport().width - w - 8))}px`;
@@ -137,7 +155,7 @@ export function dropdown<T extends string>(opts: {
   });
   render();
   return {
-    el: btn,
+    el,
     set(v: T) {
       value = v;
       render();
