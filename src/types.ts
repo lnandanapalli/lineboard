@@ -1,4 +1,5 @@
 import { LINE_STYLES, SHAPES, type LineStyle, type ShapeKind } from './shapes';
+import { cleanStyle, type TextStyle } from './textStyle';
 
 export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text' | 'select';
 
@@ -30,6 +31,8 @@ export interface Stroke {
   text?: string;
   /** Pen strokes (shapes): drawn dashed or dotted instead of solid. */
   dash?: 'dashed' | 'dotted';
+  /** Text boxes: font family, bold / italic / underline, alignment (absent: plain sans, left). */
+  font?: TextStyle;
   created_at?: string;
 }
 
@@ -79,6 +82,8 @@ export interface Settings {
   selectMode: 'lasso' | 'rect';
   /** Font size for new text boxes (page units). */
   textSize: number;
+  /** Font, emphasis and alignment for new text boxes (the last ones used). */
+  textStyle: TextStyle;
   /** Split mode: where the divider sits, as a fraction of the board's height. */
   splitRatio: number;
   /** The free whiteboard's paper. */
@@ -106,6 +111,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shapeWidth: 3.5,
   selectMode: 'lasso',
   textSize: 28,
+  textStyle: {},
   splitRatio: 0.5,
   paper: 'plain',
 };
@@ -124,6 +130,7 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   if (!(out.shapeWidth >= 1 && out.shapeWidth <= 20)) out.shapeWidth = DEFAULT_SETTINGS.shapeWidth;
   if (out.selectMode !== 'rect') out.selectMode = 'lasso';
   if (!PAPERS.includes(out.paper)) out.paper = 'plain';
+  out.textStyle = cleanStyle(out.textStyle);
   return out;
 }
 

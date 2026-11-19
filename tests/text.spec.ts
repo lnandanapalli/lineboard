@@ -130,3 +130,105 @@ test('text longer than the database allows is capped instead of being refused', 
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await texts(page))[0]?.length).toBe(10000);
 });
+
+// ---------------- formatting ----------------
+
+type T = { text?: string; width: number; color: string; font?: Record<string, unknown> };
+const textBoxes = (page: Page) =>
+  page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'));
+    return k ? (JSON.parse(localStorage[k]) as (T & { tool: string })[]).filter((s) => s.tool === 'text') : [];
+  });
+const bar = (page: Page) => page.getByRole('toolbar', { name: 'Text format' });
+
+test('the format bar sets font, size, bold / italic / underline, alignment and colour; the next box starts the same', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  await tap(cdp, geo.areaX + 120, stripY(geo, 0));
+  await expect(bar(page)).toBeVisible();
+  await page.keyboard.type('Styled');
+  await bar(page).getByRole('radio', { name: 'Serif' }).click();
+  await bar(page).getByRole('button', { name: 'Larger text' }).click(); // 28 -> 36
+  await bar(page).getByRole('button', { name: 'Bold' }).click();
+  await bar(page).getByRole('button', { name: 'Underline' }).click();
+  await bar(page).getByRole('radio', { name: 'Align centre' }).click();
+  await bar(page).getByRole('radio', { name: 'Text colour #dc2626' }).click();
+  // Pressing the bar keeps typing in the box; the shortcut toggles italic.
+  await expect(page.locator('textarea.text-editor')).toBeFocused();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+i' : 'Control+i');
+  await expect(bar(page).getByRole('button', { name: 'Italic' })).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Escape');
+  await expect(bar(page)).toHaveCount(0);
+  await expect.poll(async () => (await textBoxes(page))[0]).toMatchObject({
+    text: 'Styled!',
+    width: 36,
+    color: '#dc2626',
+    font: { family: 'serif', bold: true, italic: true, underline: true, align: 'center' },
+  });
+
+  // A new text box starts with the same choices.
+  await tap(cdp, geo.areaX + 500, stripY(geo, 0));
+  await expect(bar(page).getByRole('radio', { name: 'Serif' })).toHaveAttribute('aria-checked', 'true');
+  await expect(bar(page).locator('.tb-size')).toHaveText('36');
+  await page.keyboard.type('Next');
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await textBoxes(page))[1]?.font).toMatchObject({ family: 'serif', bold: true });
+});
+
+test('selected text boxes can be reformatted together, in one undo step', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  for (const dx of [100, 400]) {
+    await tap(cdp, geo.areaX + dx, stripY(geo, 0));
+    await page.keyboard.type('Box');
+    await page.keyboard.press('Escape');
+  }
+  await expect.poll(async () => (await textBoxes(page)).length).toBe(2);
+  // Box-select both: the format bar appears above the Duplicate / Delete bar.
+  await page.locator('.select-btn').click();
+  await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
+  const y = stripY(geo, 0);
+  await send(cdp, 'touchStart', [tp(geo.areaX + 60, y - 30, PEN, 1)]);
+  for (let i = 1; i <= 8; i++) await send(cdp, 'touchMove', [tp(geo.areaX + 60 + i * 60, y + 20, PEN, 1)]);
+  await send(cdp, 'touchEnd', []);
+  await expect(page.locator('.select-bar')).toBeVisible();
+  await expect(bar(page)).toBeVisible();
+  await bar(page).getByRole('radio', { name: 'Handwriting' }).click();
+  await bar(page).getByRole('button', { name: 'Larger text' }).click();
+  await expect.poll(async () => (await textBoxes(page)).map((s) => [s.font?.family, s.width])).toEqual([['hand', 36], ['hand', 36]]);
+  await page.getByRole('button', { name: /^Undo/ }).click();
+  await expect.poll(async () => (await textBoxes(page)).map((s) => [s.font?.family, s.width])).toEqual([['hand', 28], ['hand', 28]]);
+  await page.getByRole('button', { name: /^Undo/ }).click();
+  await expect.poll(async () => (await textBoxes(page)).map((s) => [s.font?.family ?? 'sans', s.width])).toEqual([['sans', 28], ['sans', 28]]);
+});
+
+test('an account keeps text formatting: saved with the box and read back after a reload', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  const { attachBoard } = await import('./helpers');
+  let { cdp, geo } = await attachBoard(page);
+  await page.keyboard.press('t');
+  await expect(page.getByRole('button', { name: 'Text', exact: true })).toHaveClass(/active/);
+  await tap(cdp, geo.areaX + 120, stripY(geo, 0));
+  await page.keyboard.type('Mono');
+  await bar(page).getByRole('radio', { name: 'Mono' }).click();
+  await bar(page).getByRole('radio', { name: 'Align right' }).click();
+  await page.keyboard.press('Escape');
+  await expect.poll(() => db.strokes[0]?.font).toEqual({ family: 'mono', align: 'right' });
+
+  await page.reload();
+  ({ cdp, geo } = await attachBoard(page));
+  await expect(page.getByLabel('Lock strip 2', { exact: true })).toBeAttached();
+  await tapMargin(cdp, geo, 0);
+  await expect(page.getByLabel('Lock strip 1', { exact: true })).toBeAttached();
+  await page.keyboard.press('t');
+  await expect(page.getByRole('button', { name: 'Text', exact: true })).toHaveClass(/active/);
+  await tap(cdp, geo.areaX + 125, stripY(geo, 0));
+  await expect(page.locator('textarea.text-editor')).toHaveValue('Mono');
+  await expect(bar(page).getByRole('radio', { name: 'Mono' })).toHaveAttribute('aria-checked', 'true');
+  await expect(bar(page).getByRole('radio', { name: 'Align right' })).toHaveAttribute('aria-checked', 'true');
+});

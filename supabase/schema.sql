@@ -61,6 +61,8 @@ alter table public.strokes add constraint strokes_payload_present check (
 alter table public.strokes add column if not exists text text check (char_length(text) <= 10000);
 -- Dashed and dotted shapes (null: solid). Inside the ciphertext when encrypted.
 alter table public.strokes add column if not exists dash text check (dash in ('dashed', 'dotted'));
+-- Text box style: font family, bold / italic / underline, alignment (null: plain). Inside the ciphertext when encrypted.
+alter table public.strokes add column if not exists font jsonb check (jsonb_typeof(font) = 'object' and octet_length(font::text) <= 200);
 alter table public.strokes drop constraint if exists strokes_tool_check;
 alter table public.strokes drop constraint if exists strokes_tool_valid;
 alter table public.strokes add constraint strokes_tool_valid check (tool in ('pen', 'highlighter', 'text', 'image'));

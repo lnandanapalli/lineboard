@@ -513,6 +513,26 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
   min-width: 1em;
 }
 
+/* ----- Text format bar (above a text box being typed, or selected text boxes) ----- */
+.text-bar {
+  position: absolute; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px;
+  max-width: calc(100% - 16px); background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.16); touch-action: manipulation; user-select: none;
+}
+.tb-group { display: flex; align-items: center; gap: 2px; }
+.tb-group + .tb-group { padding-left: 4px; border-left: 1px solid var(--line); }
+.tb-btn {
+  min-width: 32px; height: 32px; padding: 0 6px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  background: transparent; color: var(--ink); cursor: pointer; font-size: 15px;
+}
+.tb-btn:disabled { opacity: 0.35; cursor: default; }
+.tb-btn[aria-pressed=true], .tb-btn[aria-checked=true] { background: var(--accent-soft); color: var(--accent); }
+@media (hover: hover) { .tb-btn:not(:disabled):hover { background: var(--bg); } }
+.tb-font { font-size: 16px; }
+.tb-size { min-width: 26px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.tb-swatch { min-width: 26px; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 2px var(--panel); }
+.tb-swatch[aria-checked=true] { background: var(--c); outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* ----- Split mode margin: pane locks and the divider grip ----- */
 .split-pane { border-bottom: 0; }
 .split-grip {

@@ -1,3 +1,4 @@
+import { HL_COLORS, PEN_COLORS } from './colors';
 import { Board, PAGE_W, TEXT_FONT } from './board';
 import { SettingsPanel } from './settings';
 import type { AccountSecurity } from './account';
@@ -13,8 +14,8 @@ import { isApple, withShortcut } from './keys';
 import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
 
-const PEN_COLORS = ['#111827', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c'];
-const HL_COLORS = ['#fde047', '#86efac', '#f9a8d4', '#93c5fd'];
+
+
 /** Size ranges (page units; the page is 1000 wide) and quick presets for each tool. */
 const SIZES = {
   pen: { min: 1, max: 24, step: 0.5, presets: [2, 3.5, 6] },
@@ -359,6 +360,14 @@ export class App {
       onStrokesAdded: (s) => this.record({ type: 'add', strokes: s }),
       onStrokesRemoved: (s) => this.record({ type: 'remove', strokes: s }),
       onStrokesReplaced: (from, to) => this.record({ type: 'replace', from, to }),
+      // The format bar's last choices become the style for the next text box.
+      onTextFormat: ({ style, size, color }) => {
+        this.settings.textStyle = style;
+        this.settings.textSize = size;
+        this.settings.penColor = color;
+        this.settingsChanged();
+        this.renderToolOptions();
+      },
       onContact: (size, type, accepted) => this.settingsPanel?.showContact(size, type, accepted),
       onUnlockChange: () => {},
       loadImage: (id, type) => this.store.getImage(id, type),
