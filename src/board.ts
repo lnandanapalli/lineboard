@@ -2,6 +2,8 @@ import type { Settings, Stroke, Tool } from './types';
 import { uuid } from './util';
 import { appRect, clientToApp, deltaToApp } from './orientation';
 import { shapeStrokes } from './shapes';
+import { cleanStyle, fontCss, isPlain, type TextStyle } from './textStyle';
+import { createTextBar, type TextFormatPatch } from './textBar';
 
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
@@ -21,6 +23,8 @@ export interface BoardCallbacks {
   onStrokesRemoved(strokes: Stroke[]): void;
   /** A text box was edited: `before` is replaced by `after`. */
   onStrokesReplaced(before: Stroke[], after: Stroke[]): void;
+  /** The text format bar changed the style, size or colour: remember it for the next text box. */
+  onTextFormat?(f: { style: TextStyle; size: number; color: string }): void;
   /** Reports every contact that touches the drawing area (used for calibration readout). */
   onContact(size: number, pointerType: string, accepted: boolean): void;
   onUnlockChange(unlocked: number[]): void;
@@ -136,9 +140,9 @@ export const TEXT_LINE = 1.25;
 export const MAX_TEXT = 10000;
 let measureCtx: CanvasRenderingContext2D | null = null;
 /** Width and height (page units) of a text box. */
-function textBox(text: string, size: number) {
+function textBox(text: string, size: number, style?: TextStyle) {
   measureCtx ??= document.createElement('canvas').getContext('2d')!;
-  measureCtx.font = `${size}px ${TEXT_FONT}`;
+  measureCtx.font = fontCss(style, size);
   const lines = text.split('\n');
   let w = 0;
   for (const l of lines) w = Math.max(w, measureCtx.measureText(l).width);
@@ -205,7 +209,9 @@ export class Board {
   private selection = new Set<Cached>();
   private selectBar: HTMLElement | null = null;
   /** Text box being typed (new, or editing an existing one). */
-  private editor: { el: HTMLTextAreaElement; x: number; y: number; size: number; color: string; original: Cached | null } | null = null;
+  private editor: { el: HTMLTextAreaElement; x: number; y: number; size: number; color: string; style: TextStyle; original: Cached | null } | null = null;
+  /** Text formatting controls, shown while typing or when only text boxes are selected. */
+  private textBar: ReturnType<typeof createTextBar> | null = null;
 
   private dirty = { bg: false, ink: false, live: false, margin: false };
   private rafId = 0;
@@ -384,7 +390,10 @@ export class Board {
       return c;
     }
     if (s.tool === 'text') {
-      const b = textBox(s.text ?? '', s.width);
+      // A bundled font (handwriting) may still be loading: measure again once it is in.
+      const font = fontCss(s.font, s.width);
+      if (s.font?.family && typeof document.fonts?.check === 'function' && !document.fonts.check(font)) void document.fonts.load(font).then(() => this.remeasureText(), () => {});
+      const b = textBox(s.text ?? '', s.width, s.font);
       const c: Cached = { s, minX: s.points[0], minY: s.points[1], maxX: s.points[0] + b.w, maxY: s.points[1] + b.h, variable: false, path: null };
       this.strokes.push(c);
       this.byId.set(s.id, c);
@@ -551,7 +560,7 @@ export class Board {
     // (Pointer events, which do the drawing, still arrive.)
     const block = (e: TouchEvent) => {
       // Let the text box (caret, selection) and the selection's buttons take taps.
-      if ((e.target as Element | null)?.closest?.('textarea, .select-bar')) return;
+      if ((e.target as Element | null)?.closest?.('textarea, .select-bar, .text-bar')) return;
       if (e.cancelable) e.preventDefault();
     };
     this.el.addEventListener('touchstart', block, { passive: false });
@@ -647,9 +656,9 @@ export class Board {
       e.preventDefault();
       this.commitText();
       const hit = [...this.strokes].reverse().find((c) => c.s.tool === 'text' && this.strokeHit(c, pt.x, pt.y, 2));
-      if (hit) this.openEditor(hit.s.points[0], hit.s.points[1], hit.s.width, hit.s.color, hit);
+      if (hit) this.openEditor(hit.s.points[0], hit.s.points[1], hit.s.width, hit.s.color, cleanStyle(hit.s.font), hit);
       // The tap marks where the first line is, so the caret sits under the pen.
-      else this.openEditor(pt.x, pt.y - this.settings.textSize * 0.6, this.settings.textSize, this.settings.penColor, null);
+      else this.openEditor(pt.x, pt.y - this.settings.textSize * 0.6, this.settings.textSize, this.settings.penColor, cleanStyle(this.settings.textStyle), null);
       return;
     }
 
@@ -906,7 +915,7 @@ export class Board {
 
   // ----------------------------- text boxes -----------------------------
 
-  private openEditor(x: number, y: number, size: number, color: string, original: Cached | null) {
+  private openEditor(x: number, y: number, size: number, color: string, style: TextStyle, original: Cached | null) {
     const el = document.createElement('textarea');
     el.className = 'text-editor';
     el.setAttribute('aria-label', 'Text');
@@ -915,11 +924,19 @@ export class Board {
     el.maxLength = MAX_TEXT;
     el.value = original?.s.text ?? '';
     this.area.append(el);
-    this.editor = { el, x, y, size, color, original };
+    this.editor = { el, x, y, size, color, style, original };
     if (original) this.invalidate('ink'); // hide the original while it is being edited
     el.addEventListener('input', () => this.positionEditor());
     el.addEventListener('keydown', (e) => {
       e.stopPropagation(); // typing must not trigger tool shortcuts
+      // The usual shortcuts for bold, italic and underline.
+      const k = e.key.toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
+        e.preventDefault();
+        const st = this.editor?.style ?? {};
+        this.formatText(k === 'b' ? { bold: !st.bold } : k === 'i' ? { italic: !st.italic } : { underline: !st.underline });
+        return;
+      }
       if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
         e.preventDefault();
         this.commitText();
@@ -941,17 +958,97 @@ export class Board {
     const ed = this.editor;
     if (!ed) return;
     const s = this.scale;
-    const b = textBox(ed.el.value || ' ', ed.size);
+    const st = ed.style;
+    const b = textBox(ed.el.value || ' ', ed.size, st);
+    // The text itself is exactly as wide as on the page, so alignment matches; the room to type
+    // into goes on the side the text grows towards.
+    const room = ed.size;
+    const padL = st.align === 'right' ? room : st.align === 'center' ? room / 2 : 0;
     Object.assign(ed.el.style, {
-      left: `${(ed.x - this.scrollX) * s}px`,
+      boxSizing: 'content-box',
+      left: `${(ed.x - padL - this.scrollX) * s}px`,
       top: `${(ed.y - this.scrollY) * s}px`,
-      fontSize: `${ed.size * s}px`,
+      paddingLeft: `${padL * s}px`,
+      paddingRight: `${(room - padL) * s}px`,
+      font: fontCss(st, ed.size * s),
       lineHeight: String(TEXT_LINE),
-      fontFamily: TEXT_FONT,
+      textAlign: st.align ?? 'left',
+      textDecoration: st.underline ? 'underline' : 'none',
       color: ed.color,
-      width: `${(b.w + ed.size) * s}px`,
+      width: `${b.w * s}px`,
       height: `${b.h * s}px`,
     });
+    this.showTextBar({ minX: ed.x, minY: ed.y, maxX: ed.x + b.w }, { style: st, size: ed.size, color: ed.color }, 0);
+  }
+
+  /** The format bar above a text box (or above the select bar, for selected text boxes). */
+  private showTextBar(box: { minX: number; minY: number; maxX: number }, f: { style: TextStyle; size: number; color: string }, above: number) {
+    if (!this.textBar) {
+      this.textBar = createTextBar((patch) => this.formatText(patch));
+      this.area.append(this.textBar.el);
+    }
+    this.textBar.update(f);
+    const el = this.textBar.el;
+    const s = this.scale;
+    const w = el.offsetWidth;
+    const centre = ((box.minX + box.maxX) / 2 - this.scrollX) * s;
+    const top = (box.minY - this.scrollY) * s - above - el.offsetHeight - 10;
+    el.style.left = `${Math.max(8, Math.min(centre - w / 2, this.viewW - w - 8))}px`;
+    // No room above (top of the view): put it below the box instead.
+    el.style.top = `${top >= 8 ? top : (box.minY - this.scrollY) * s + 8 + (this.editor ? this.editor.el.offsetHeight : 0) + 8}px`;
+  }
+  private hideTextBar() {
+    this.textBar?.el.remove();
+    this.textBar = null;
+  }
+
+  /** Selected boxes that are all text (and at least one): the format bar applies to them. */
+  private selectedText(): Cached[] | null {
+    if (!this.selection.size) return null;
+    const list = [...this.selection];
+    return list.every((c) => c.s.tool === 'text') ? list : null;
+  }
+
+  /**
+   * Apply a format change from the bar (or a shortcut): to the text box being typed, or else to the
+   * selected text boxes (one undo step). Either way it becomes the style for new text boxes.
+   */
+  formatText(patch: TextFormatPatch) {
+    const { size, color, ...stylePatch } = patch;
+    const ed = this.editor;
+    if (ed) {
+      ed.style = cleanStyle({ ...ed.style, ...stylePatch });
+      if (size != null) ed.size = size;
+      if (color) ed.color = color;
+      this.positionEditor();
+      if (document.activeElement !== ed.el) ed.el.focus({ preventScroll: true });
+      this.cb.onTextFormat?.({ style: ed.style, size: ed.size, color: ed.color });
+      return;
+    }
+    const sel = this.selectedText();
+    if (!sel) return;
+    const before = sel.map((c) => c.s);
+    const after = before.map((s): Stroke => {
+      const font = cleanStyle({ ...s.font, ...stylePatch });
+      const { font: _old, ...rest } = s;
+      return { ...rest, ...(isPlain(font) ? {} : { font }), width: size ?? s.width, color: color ?? s.color };
+    });
+    this.replaceCached(before, after);
+    this.cb.onStrokesReplaced(before, after);
+    const first = after[0];
+    this.cb.onTextFormat?.({ style: cleanStyle(first.font), size: first.width, color: first.color });
+  }
+
+  /** Text boxes measured before their font had loaded: size them again. */
+  private remeasureText() {
+    for (const c of this.strokes) {
+      if (c.s.tool !== 'text') continue;
+      const b = textBox(c.s.text ?? '', c.s.width, c.s.font);
+      c.maxX = c.minX + b.w;
+      c.maxY = c.minY + b.h;
+    }
+    this.positionEditor();
+    this.invalidate('ink', 'live');
   }
 
   /** Save a text box that is still being typed (e.g. the page is about to close). */
@@ -965,7 +1062,8 @@ export class Board {
     if (!ed) return;
     this.editor = null;
     ed.el.remove();
-    this.invalidate('ink');
+    this.hideTextBar();
+    this.invalidate('ink', 'live');
   }
 
   /** Save what was typed: a new text box, an edit (replace), or a removal when emptied. */
@@ -977,7 +1075,9 @@ export class Board {
     const text = ed.el.value.replace(/\s+$/, '').slice(0, MAX_TEXT);
     this.closeEditor();
     const old = ed.original;
-    if (old && text === old.s.text) return;
+    const style = cleanStyle(ed.style);
+    const same = (a: TextStyle, b: TextStyle) => JSON.stringify(cleanStyle(a)) === JSON.stringify(cleanStyle(b));
+    if (old && text === old.s.text && ed.size === old.s.width && ed.color === old.s.color && same(style, old.s.font ?? {})) return;
     if (old) {
       this.strokes = this.strokes.filter((c) => c !== old);
       this.byId.delete(old.s.id);
@@ -994,6 +1094,7 @@ export class Board {
       width: ed.size,
       points: [Math.round(ed.x * 10) / 10, Math.round(ed.y * 10) / 10, 0],
       text,
+      ...(isPlain(style) ? {} : { font: style }),
       created_at: old?.s.created_at ?? new Date().toISOString(),
     };
     this.cache(stroke);
@@ -1236,6 +1337,7 @@ export class Board {
     if (!box || this.active?.kind === 'move' || this.active?.kind === 'scale') {
       this.selectBar?.remove();
       this.selectBar = null;
+      if (!this.editor) this.hideTextBar();
       return;
     }
     if (!this.selectBar) {
@@ -1258,6 +1360,12 @@ export class Board {
     const top = (box.minY - this.scrollY) * s;
     this.selectBar.style.left = `${Math.max(8, Math.min(left, this.viewW - 8))}px`;
     this.selectBar.style.top = `${Math.max(8, top - 46)}px`;
+    // Only text boxes selected: their format bar sits above the Duplicate / Delete bar.
+    const text = this.editor ? null : this.selectedText();
+    if (text) {
+      const first = text[0].s;
+      this.showTextBar(box, { style: cleanStyle(first.font), size: first.width, color: first.color }, 46);
+    } else if (!this.editor) this.hideTextBar();
   }
 
   /** A shape outline as a pen stroke, in the palette's colour, thickness and line style. */
@@ -1512,12 +1620,27 @@ export class Board {
     if (s.tool === 'text') {
       ctx.save();
       ctx.fillStyle = s.color;
-      ctx.font = `${s.width}px ${TEXT_FONT}`;
+      ctx.strokeStyle = s.color;
+      ctx.font = fontCss(s.font, s.width);
       ctx.textBaseline = 'top';
       const lines = (s.text ?? '').split('\n');
       // Centre each line in its line box, matching the textarea's layout.
       const pad = (s.width * (TEXT_LINE - 1)) / 2;
-      lines.forEach((l, i) => ctx.fillText(l, s.points[0], s.points[1] + pad + i * s.width * TEXT_LINE));
+      const boxW = c.maxX - c.minX;
+      const k = s.font?.align === 'right' ? 1 : s.font?.align === 'center' ? 0.5 : 0;
+      lines.forEach((l, i) => {
+        const lw = ctx.measureText(l).width;
+        const x = s.points[0] + (boxW - lw) * k;
+        const y = s.points[1] + pad + i * s.width * TEXT_LINE;
+        ctx.fillText(l, x, y);
+        if (s.font?.underline && lw > 0) {
+          ctx.lineWidth = Math.max(1 / this.scale, s.width / 15);
+          ctx.beginPath();
+          ctx.moveTo(x, y + s.width * 0.98);
+          ctx.lineTo(x + lw, y + s.width * 0.98);
+          ctx.stroke();
+        }
+      });
       ctx.restore();
       return;
     }

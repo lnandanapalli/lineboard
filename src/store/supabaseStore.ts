@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { cleanStyle, isPlain } from '../textStyle';
 import { isSealedBytes, open, openBytes, seal, sealBytes } from '../crypto/cipher';
 import type { KeyVault } from '../crypto/vault';
 import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
@@ -26,9 +27,14 @@ function check(error: PgErr | null) {
 /** Shown when a title or name cannot be decrypted on this device. */
 export const LOCKED_TITLE = 'Encrypted';
 
-type StrokeRow = Omit<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text' | 'dash'> &
-  Partial<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>> & { enc?: string | null; text?: string | null; dash?: Stroke['dash'] | null };
-type StrokePayload = Pick<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text' | 'dash'>;
+type StrokeRow = Omit<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text' | 'dash' | 'font'> &
+  Partial<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>> & { enc?: string | null; text?: string | null; dash?: Stroke['dash'] | null; font?: unknown };
+type StrokePayload = Pick<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text' | 'dash' | 'font'>;
+/** Only a text box's non-default style is kept; null/absent means plain. */
+const fontOf = (raw: unknown) => {
+  const f = cleanStyle(raw);
+  return Object.keys(f).length ? { font: f } : {};
+};
 type NoteRow = NoteMeta & { title_enc?: string | null };
 type BookRow = Notebook & { name_enc?: string | null };
 
@@ -77,13 +83,15 @@ export class SupabaseStore implements Store {
     return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '');
   }
   private strokeCols() {
-    return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '') + (this.textCol ? ',text' : '') + (this.dashCol ? ',dash' : '');
+    return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '') + (this.textCol ? ',text' : '') + (this.dashCol ? ',dash' : '') + (this.fontCol ? ',font' : '');
   }
 
   /** Whether the database has the strokes.text column (text boxes); older schemas don't. */
   private textCol = false;
   /** Likewise strokes.dash (dashed and dotted shapes). Without it, shapes are saved solid. */
   private dashCol = false;
+  /** Likewise strokes.font (text box font, emphasis, alignment). Without it, text is saved plain. */
+  private fontCol = false;
   private textProbe: Promise<boolean> | null = null;
   supportsText(): Promise<boolean> {
     this.textProbe ??= (async () => {
@@ -96,6 +104,8 @@ export class SupabaseStore implements Store {
       }
       const { error: de } = await this.sb.from('strokes').select('dash').limit(1);
       this.dashCol = !de || (de.code !== '42703' && !/dash/.test(de.message ?? ''));
+      const { error: fe } = await this.sb.from('strokes').select('font').limit(1);
+      this.fontCol = !fe || (fe.code !== '42703' && !/font/.test(fe.message ?? ''));
       return this.textCol;
     })();
     return this.textProbe;
@@ -156,12 +166,12 @@ export class SupabaseStore implements Store {
   }
   /** Null when the stroke is encrypted and cannot be read here. */
   private async decodeStroke(r: StrokeRow): Promise<Stroke | null> {
-    if (!r.enc) return { id: r.id, note_id: r.note_id, tool: r.tool!, color: r.color!, width: r.width!, points: r.points!, ...(r.text != null ? { text: r.text } : {}), ...(r.dash ? { dash: r.dash } : {}), created_at: r.created_at };
+    if (!r.enc) return { id: r.id, note_id: r.note_id, tool: r.tool!, color: r.color!, width: r.width!, points: r.points!, ...(r.text != null ? { text: r.text } : {}), ...(r.dash ? { dash: r.dash } : {}), ...fontOf(r.font), created_at: r.created_at };
     const key = this.vault?.key;
     if (!key) return null;
     try {
       const p = await open<StrokePayload>(key, ctx.stroke(r.id), r.enc);
-      return { id: r.id, note_id: r.note_id, tool: p.tool, color: p.color, width: p.width, points: p.points, ...(p.text != null ? { text: p.text } : {}), ...(p.dash ? { dash: p.dash } : {}), created_at: r.created_at };
+      return { id: r.id, note_id: r.note_id, tool: p.tool, color: p.color, width: p.width, points: p.points, ...(p.text != null ? { text: p.text } : {}), ...(p.dash ? { dash: p.dash } : {}), ...fontOf(p.font), created_at: r.created_at };
     } catch (e) {
       console.warn(e);
       return null;
@@ -178,10 +188,12 @@ export class SupabaseStore implements Store {
     const base = { id: s.id, note_id: s.note_id, user_id: this.userId, created_at: s.created_at };
     const text = s.tool === 'text' || s.tool === 'image' ? (s.text ?? '') : null;
     const dash = s.dash ?? null;
-    if (!key) return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}), ...(this.textCol ? { text } : {}), ...(this.dashCol ? { dash } : {}) };
-    const payload: StrokePayload = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(text != null ? { text } : {}), ...(dash ? { dash } : {}) };
+    const font = s.tool === 'text' && !isPlain(s.font) ? cleanStyle(s.font) : null;
+    if (!key)
+      return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}), ...(this.textCol ? { text } : {}), ...(this.dashCol ? { dash } : {}), ...(this.fontCol ? { font } : {}) };
+    const payload: StrokePayload = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(text != null ? { text } : {}), ...(dash ? { dash } : {}), ...(font ? { font } : {}) };
     const enc = await seal(key, ctx.stroke(s.id), payload);
-    return { ...base, tool: null, color: null, width: null, points: null, enc, ...(this.textCol ? { text: null } : {}), ...(this.dashCol ? { dash: null } : {}) };
+    return { ...base, tool: null, color: null, width: null, points: null, enc, ...(this.textCol ? { text: null } : {}), ...(this.dashCol ? { dash: null } : {}), ...(this.fontCol ? { font: null } : {}) };
   }
 
   // ----------------------------- notebooks -----------------------------
