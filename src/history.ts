@@ -125,21 +125,14 @@ export function diff(before: SnapStroke[], after: SnapStroke[]): { added: Set<nu
 
 /**
  * The plan to turn the note's current strokes into a version's: which current strokes to delete,
- * and which snapshot strokes to add. Strokes already equal stay as they are.
+ * and which snapshot strokes to add. Strokes are drawn in order (later ones on top) and added ones go
+ * on top, so only the strokes the two share from the start stay; from the first difference on, the
+ * rest is replaced, which keeps the version's layering exactly.
  */
 export function restorePlan(current: Stroke[], target: SnapStroke[]): { remove: Stroke[]; add: SnapStroke[] } {
-  const pool = new Map<string, Stroke[]>();
-  for (const s of current) {
-    const k = signature(toSnap(s));
-    pool.set(k, [...(pool.get(k) ?? []), s]);
-  }
-  const add: SnapStroke[] = [];
-  for (const t of target) {
-    const list = pool.get(signature(t));
-    if (list?.length) list.shift();
-    else add.push(t);
-  }
-  return { remove: [...pool.values()].flat(), add };
+  let i = 0;
+  while (i < current.length && i < target.length && signature(toSnap(current[i])) === signature(target[i])) i++;
+  return { remove: current.slice(i), add: target.slice(i) };
 }
 
 const HOUR = 3_600_000;

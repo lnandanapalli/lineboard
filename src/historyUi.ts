@@ -147,9 +147,12 @@ export class VersionRecorder {
    * version, unless `force` (a restore always adds its version, a name always gets one).
    */
   save(noteId: string, opts: { strokes?: SnapStroke[]; kind?: VersionKind; name?: string | null; restoredFrom?: string | null; force?: boolean } = {}): Promise<VersionMeta | null> {
+    // With strokes given, the snapshot is of now: changes after this call are not in it, even if the
+    // save waits behind another one.
+    const calledAt = this.changes.get(noteId) ?? 0;
     const run = async (): Promise<VersionMeta | null> => {
       if (!(await this.enabled)) return null;
-      const startedAt = this.changes.get(noteId) ?? 0;
+      const startedAt = opts.strokes ? calledAt : (this.changes.get(noteId) ?? 0);
       let snap = opts.strokes;
       if (!snap) {
         const live = await this.strokesOf(noteId);
@@ -483,7 +486,9 @@ export class HistoryPanel {
         if (older.length > 5) toast(`Copying history... ${i + 1} of ${older.length}`);
         await this.host.store.saveVersion({ ...o, id: uuid(), note_id: copy.id }, await this.snap(o));
       }
-      if (older.length) await this.host.recorder.remember(copy.id, strokes);
+      // The newest version copied is what the copy's history ends with; the note as it is now joins it
+      // when it differs from that.
+      if (older.length) await this.host.recorder.remember(copy.id, await this.snap(older[older.length - 1]));
       if (!v && (await this.currentIsNew())) await this.host.recorder.save(copy.id, { strokes });
     }
     this.close();

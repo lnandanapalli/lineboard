@@ -21,11 +21,14 @@ const GUEST_APP_KEYS = ['lb-settings-local', 'lb-queue-local', 'lb-last-note-loc
 export const isGuestActive = () => lsGet<boolean>(GUEST_ACTIVE, false);
 export const setGuestActive = (on: boolean) => (on ? lsSet(GUEST_ACTIVE, true) : lsDel(GUEST_ACTIVE));
 
-/** Notes on this device that have ink in them (empty notes are not worth moving). */
+/**
+ * Notes on this device worth moving: those with ink, or with a version history (a note erased to
+ * empty can still hold named versions). Untouched empty notes are left behind.
+ */
 export async function guestNotesWithInk(local: LocalStore): Promise<NoteMeta[]> {
   const out: NoteMeta[] = [];
   for (const n of await local.listNotes()) {
-    if ((await local.loadStrokes(n.id)).length) out.push(n);
+    if ((await local.loadStrokes(n.id)).length || (await local.listVersions(n.id).catch(() => [])).length) out.push(n);
   }
   return out;
 }

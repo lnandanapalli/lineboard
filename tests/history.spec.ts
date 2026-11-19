@@ -315,19 +315,23 @@ test('with encryption on, versions and their names are stored encrypted (old one
   await expect(page.locator('#toast.show.error')).toHaveCount(0);
 });
 
-test('signing in from guest mode brings the history along', async ({ page }) => {
+test('signing in from guest mode brings the history along, even for a note erased to empty', async ({ page }) => {
   const db = await mockSupabase(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Try it without an account' }).click();
   const { cdp, geo } = await attachBoard(page);
   await draw(cdp, geo, 50);
   await nameCurrent(page, 'Guest draft');
+  // Erase it all: the note has no ink left, only its history.
+  await page.keyboard.press('e');
+  await drag(cdp, geo.areaX + 40, stripY(geo, 0), geo.areaX + 170, stripY(geo, 0));
+  await expect.poll(async () => (await notes(page))[0].strokes.length).toBe(0);
   await page.locator('.toolbar .signin-save').click();
   await page.getByPlaceholder('Email').fill('friend@example.com');
   await page.getByPlaceholder('Password').fill('secret123');
   await page.locator('form.auth-form button[type=submit]').click();
   await attachBoard(page);
-  await expect.poll(() => (db.versions ?? []).map((v) => v.name)).toEqual(['Guest draft']);
+  await expect.poll(() => (db.versions ?? []).filter((v) => v.name).map((v) => v.name)).toEqual(['Guest draft']);
   expect(db.versions![0].note_id).toBe(db.notes[0].id);
 });
 
@@ -343,9 +347,15 @@ test('diff and restore plan compare strokes by what they are', () => {
   // A duplicate counts as a stroke of its own.
   expect([...diff([a], [a, a]).added]).toEqual([1]);
   const current = [a, b].map((s, i) => ({ ...s, id: 'id' + i, note_id: 'n' }));
-  const plan = restorePlan(current, [b, c]);
-  expect(plan.remove.map((s) => s.id)).toEqual(['id0']);
+  // Shared from the start: kept. From the first difference on: replaced.
+  const plan = restorePlan(current, [a, c]);
+  expect(plan.remove.map((s) => s.id)).toEqual(['id1']);
   expect(plan.add).toEqual([c]);
+  // Layering is kept: restoring [red, blue] over [blue] must not leave red on top.
+  const red = pen(10), blue = pen(20);
+  const p2 = restorePlan([{ ...blue, id: 'b', note_id: 'n' }], [red, blue]);
+  expect(p2.remove.map((s) => s.id)).toEqual(['b']);
+  expect(p2.add).toEqual([red, blue]);
 });
 
 test('old unnamed versions thin out; named ones and the newest are kept', () => {
