@@ -513,6 +513,9 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
   min-width: 1em;
 }
 
+.text-frame { position: absolute; z-index: 2; cursor: move; touch-action: none; border-radius: 6px; }
+@media (hover: hover) { .text-frame:hover { background: rgba(37, 99, 235, 0.07); } }
+
 /* ----- Text format bar (above a text box being typed, or selected text boxes) ----- */
 .text-bar {
   position: absolute; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px;

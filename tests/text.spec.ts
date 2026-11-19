@@ -232,3 +232,130 @@ test('an account keeps text formatting: saved with the box and read back after a
   await expect(bar(page).getByRole('radio', { name: 'Mono' })).toHaveAttribute('aria-checked', 'true');
   await expect(bar(page).getByRole('radio', { name: 'Align right' })).toHaveAttribute('aria-checked', 'true');
 });
+
+for (const align of ['Align left', 'Align centre', 'Align right']) {
+test(`the box being typed in never clips leaning letters (${align}): it shows as much as the saved text`, async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  const x = geo.areaX + 300, y = stripY(geo, 0);
+  await tap(cdp, x, y);
+  await bar(page).getByRole('radio', { name: 'Handwriting' }).click();
+  await bar(page).getByRole('button', { name: 'Italic' }).click();
+  await bar(page).getByRole('button', { name: 'Larger text' }).click();
+  await bar(page).getByRole('radio', { name: align }).click();
+  await page.keyboard.type('Hello wolf');
+  await page.waitForTimeout(300); // the handwriting font is in
+  // The rightmost and leftmost dark (ink) pixels in a band around the text.
+  const clip = { x: geo.areaX, y: y - 40, width: 700, height: 80 };
+  const inkSpan = async () => {
+    const png = (await page.screenshot({ clip })).toString('base64');
+    return page.evaluate(async (src) => {
+      const img = new Image();
+      img.src = 'data:image/png;base64,' + src;
+      await img.decode();
+      const c = document.createElement('canvas');
+      [c.width, c.height] = [img.width, img.height];
+      const g = c.getContext('2d')!;
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      let min = Infinity, max = -Infinity;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] < 90 && d[i + 1] < 90 && d[i + 2] < 110) { // dark ink, not the blue outline
+          const px = (i / 4) % c.width;
+          min = Math.min(min, px);
+          max = Math.max(max, px);
+        }
+      }
+      return [min, max];
+    }, png);
+  };
+  const typing = await inkSpan();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('textarea.text-editor')).toHaveCount(0);
+  const saved = await inkSpan();
+  expect(Math.abs(typing[1] - saved[1])).toBeLessThanOrEqual(3);
+  expect(Math.abs(typing[0] - saved[0])).toBeLessThanOrEqual(3);
+});
+}
+
+// ---------------- moving text boxes ----------------
+
+const firstBox = async (page: Page) => (await page.evaluate(() => {
+  const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
+  return (JSON.parse(localStorage[k]) as { tool: string; text?: string; points: number[] }[]).filter((s) => s.tool === 'text');
+}))[0];
+
+test('with the Text tool, a text box shows the move cursor; dragging moves it and a tap still edits it', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  const x = geo.areaX + 150, y = stripY(geo, 0);
+  await tap(cdp, x, y);
+  await page.keyboard.type('Move me');
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await firstBox(page))?.text).toBe('Move me');
+  const live = page.locator('.canvas-area canvas.live');
+  // Hover: over the box the cursor says "move"; elsewhere it says "type here".
+  await page.mouse.move(x + 10, y);
+  await expect(live).toHaveCSS('cursor', 'move');
+  await page.mouse.move(x + 400, y);
+  await expect(live).toHaveCSS('cursor', 'text');
+
+  // Drag it: it moves, with no editor opened and nothing left selected.
+  const before = (await firstBox(page)).points;
+  await send(cdp, 'touchStart', [tp(x + 10, y, PEN, 1)]);
+  for (let i = 1; i <= 6; i++) await send(cdp, 'touchMove', [tp(x + 10 + i * 20, y, PEN, 1)]);
+  await send(cdp, 'touchEnd', []);
+  await expect.poll(async () => (await firstBox(page)).points[0]).toBeGreaterThan(before[0] + 50);
+  await expect(page.locator('textarea.text-editor')).toHaveCount(0);
+  await expect(page.locator('.select-bar')).toHaveCount(0);
+  await page.getByRole('button', { name: /^Undo/ }).click();
+  await expect.poll(async () => (await firstBox(page)).points[0]).toBe(before[0]);
+
+  // A tap opens it for editing.
+  await tap(cdp, x + 10, y);
+  await expect(page.locator('textarea.text-editor')).toHaveValue('Move me');
+});
+
+test('while typing, the frame around the box shows the move cursor and drags the box without leaving the text', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  await tap(cdp, geo.areaX + 150, stripY(geo, 0));
+  await page.keyboard.type('Draft');
+  const editor = page.locator('textarea.text-editor');
+  const frame = page.locator('.text-frame');
+  await expect(frame).toHaveCSS('cursor', 'move');
+  const fb = (await frame.boundingBox())!;
+  const eb = (await editor.boundingBox())!;
+  // Press the band above the text and drag right and down.
+  const sx = eb.x + eb.width / 2, sy = fb.y + 3;
+  await send(cdp, 'touchStart', [tp(sx, sy, PEN, 1)]);
+  for (let i = 1; i <= 6; i++) await send(cdp, 'touchMove', [tp(sx + i * 15, sy + i * 5, PEN, 1)]);
+  await send(cdp, 'touchEnd', []);
+  await expect.poll(async () => (await editor.boundingBox())!.x).toBeGreaterThan(eb.x + 60);
+  // Still typing in the same box.
+  await expect(editor).toBeFocused();
+  await page.keyboard.type(' moved');
+  await page.keyboard.press('Escape');
+  const box = await firstBox(page);
+  expect(box.text).toBe('Draft moved');
+});
+
+test('with the Select tool, the selection shows the move cursor and its corner the resize cursor', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  await tap(cdp, geo.areaX + 150, stripY(geo, 0));
+  await page.keyboard.type('Pick me');
+  await page.keyboard.press('Escape');
+  await page.locator('.select-btn').click();
+  await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
+  const y = stripY(geo, 0);
+  await send(cdp, 'touchStart', [tp(geo.areaX + 120, y - 30, PEN, 1)]);
+  for (let i = 1; i <= 6; i++) await send(cdp, 'touchMove', [tp(geo.areaX + 120 + i * 40, y + 25, PEN, 1)]);
+  await send(cdp, 'touchEnd', []);
+  await expect(page.locator('.select-bar')).toBeVisible();
+  const live = page.locator('.canvas-area canvas.live');
+  await page.mouse.move(geo.areaX + 170, y);
+  await expect(live).toHaveCSS('cursor', 'move');
+  await page.mouse.move(geo.areaX + 600, y + 200);
+  await expect(live).toHaveCSS('cursor', 'crosshair');
+});

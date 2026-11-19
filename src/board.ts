@@ -62,6 +62,8 @@ interface ActiveInput {
   /** Select tool, rectangle mode: the box being dragged out. */
   rect?: { x0: number; y0: number; x1: number; y1: number };
   move?: { x0: number; y0: number; dx: number; dy: number };
+  /** Text tool, pressed on a text box: a drag moves it, a tap opens it for editing. */
+  textPress?: Cached;
   /** Select tool: resizing the selection from its corner handle, about its top-left corner. */
   scale?: { ax: number; ay: number; bx: number; by: number; f: number };
 }
@@ -209,7 +211,7 @@ export class Board {
   private selection = new Set<Cached>();
   private selectBar: HTMLElement | null = null;
   /** Text box being typed (new, or editing an existing one). */
-  private editor: { el: HTMLTextAreaElement; x: number; y: number; size: number; color: string; style: TextStyle; original: Cached | null } | null = null;
+  private editor: { el: HTMLTextAreaElement; frame: HTMLElement; x: number; y: number; size: number; color: string; style: TextStyle; original: Cached | null } | null = null;
   /** Text formatting controls, shown while typing or when only text boxes are selected. */
   private textBar: ReturnType<typeof createTextBar> | null = null;
 
@@ -243,6 +245,8 @@ export class Board {
 
     this.applyMarginSide();
     this.bindInput();
+    // Text measured while its font was still loading is measured again once it arrives.
+    document.fonts?.addEventListener?.('loadingdone', () => this.remeasureText());
     new ResizeObserver(() => this.resize()).observe(this.area);
     this.resize();
   }
@@ -655,10 +659,21 @@ export class Board {
     if (this.tool === 'text') {
       e.preventDefault();
       this.commitText();
-      const hit = [...this.strokes].reverse().find((c) => c.s.tool === 'text' && this.strokeHit(c, pt.x, pt.y, 2));
-      if (hit) this.openEditor(hit.s.points[0], hit.s.points[1], hit.s.width, hit.s.color, cleanStyle(hit.s.font), hit);
+      const hit = this.textAt(pt.x, pt.y);
+      if (hit) {
+        // On a text box: dragging moves it, a tap (see finish) opens it for editing.
+        try {
+          this.live.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+        this.selection = new Set([hit]);
+        this.active = { pointerId: e.pointerId, pointerType: e.pointerType, kind: 'move', start: performance.now(), points: [], erased: [], raw: null, move: { x0: pt.x, y0: pt.y, dx: 0, dy: 0 }, textPress: hit };
+        this.invalidate('ink', 'live');
+        return;
+      }
       // The tap marks where the first line is, so the caret sits under the pen.
-      else this.openEditor(pt.x, pt.y - this.settings.textSize * 0.6, this.settings.textSize, this.settings.penColor, cleanStyle(this.settings.textStyle), null);
+      this.openEditor(pt.x, pt.y - this.settings.textSize * 0.6, this.settings.textSize, this.settings.penColor, cleanStyle(this.settings.textStyle), null);
       return;
     }
 
@@ -725,6 +740,7 @@ export class Board {
       }
     }
     const a = this.active;
+    if (!a) this.hoverCursor(e);
     if (!a || a.pointerId !== e.pointerId) {
       if (!a && this.tool === 'eraser' && e.pointerType === 'mouse') {
         this.eraserCursor = this.toLogical(e.clientX, e.clientY);
@@ -915,6 +931,25 @@ export class Board {
 
   // ----------------------------- text boxes -----------------------------
 
+  /** The topmost text box under a point. */
+  private textAt(x: number, y: number): Cached | undefined {
+    return [...this.strokes].reverse().find((c) => c.s.tool === 'text' && this.strokeHit(c, x, y, 2));
+  }
+
+  /** The pointer's cursor while hovering: it shows what a press there would do. */
+  private hoverCursor(e: PointerEvent) {
+    if (e.pointerType === 'touch') return;
+    const pt = this.toLogical(e.clientX, e.clientY);
+    let cursor = 'crosshair';
+    if (this.tool === 'text') cursor = this.textAt(pt.x, pt.y) ? 'move' : 'text';
+    else if (this.tool === 'select') {
+      const b = this.selectionBox();
+      if (b && this.onHandle(pt.x, pt.y)) cursor = 'nwse-resize';
+      else if (b && pt.x >= b.minX && pt.x <= b.maxX && pt.y >= b.minY && pt.y <= b.maxY) cursor = 'move';
+    }
+    if (this.live.style.cursor !== cursor) this.live.style.cursor = cursor;
+  }
+
   private openEditor(x: number, y: number, size: number, color: string, style: TextStyle, original: Cached | null) {
     const el = document.createElement('textarea');
     el.className = 'text-editor';
@@ -923,8 +958,17 @@ export class Board {
     el.wrap = 'off';
     el.maxLength = MAX_TEXT;
     el.value = original?.s.text ?? '';
-    this.area.append(el);
-    this.editor = { el, x, y, size, color, style, original };
+    // A frame around the box: dragging it moves the box without leaving the text.
+    const frame = document.createElement('div');
+    frame.className = 'text-frame';
+    frame.title = 'Drag to move';
+    // Interactive to the browser too, so a finger near the edge is not snapped onto the text instead.
+    frame.setAttribute('role', 'button');
+    frame.setAttribute('aria-label', 'Move text box');
+    frame.addEventListener('click', (e) => e.preventDefault());
+    this.bindFrameDrag(frame);
+    this.area.append(frame, el);
+    this.editor = { el, frame, x, y, size, color, style, original };
     if (original) this.invalidate('ink'); // hide the original while it is being edited
     el.addEventListener('input', () => this.positionEditor());
     el.addEventListener('keydown', (e) => {
@@ -960,16 +1004,20 @@ export class Board {
     const s = this.scale;
     const st = ed.style;
     const b = textBox(ed.el.value || ' ', ed.size, st);
-    // The text itself is exactly as wide as on the page, so alignment matches; the room to type
-    // into goes on the side the text grows towards.
+    // The text itself is exactly as wide as on the page, so alignment matches. Around it: a margin
+    // on both sides, because italic and handwritten letters lean past their measured width (and the
+    // box clips whatever is outside it), plus room to type into on the side the text grows towards.
     const room = ed.size;
-    const padL = st.align === 'right' ? room : st.align === 'center' ? room / 2 : 0;
+    const edge = ed.size * 0.4;
+    const k = st.align === 'right' ? 1 : st.align === 'center' ? 0.5 : 0;
+    const padL = edge + room * k;
+    const padR = edge + room * (1 - k);
     Object.assign(ed.el.style, {
       boxSizing: 'content-box',
       left: `${(ed.x - padL - this.scrollX) * s}px`,
       top: `${(ed.y - this.scrollY) * s}px`,
       paddingLeft: `${padL * s}px`,
-      paddingRight: `${(room - padL) * s}px`,
+      paddingRight: `${padR * s}px`,
       font: fontCss(st, ed.size * s),
       lineHeight: String(TEXT_LINE),
       textAlign: st.align ?? 'left',
@@ -978,11 +1026,51 @@ export class Board {
       width: `${b.w * s}px`,
       height: `${b.h * s}px`,
     });
-    this.showTextBar({ minX: ed.x, minY: ed.y, maxX: ed.x + b.w }, { style: st, size: ed.size, color: ed.color }, 0);
+    // The frame: a band just outside the box (the box sits on top, so only the band takes presses).
+    const band = 16; // finger-sized
+    Object.assign(ed.frame.style, {
+      left: `${(ed.x - padL - this.scrollX) * s - band}px`,
+      top: `${(ed.y - this.scrollY) * s - band}px`,
+      width: `${(b.w + padL + padR) * s + band * 2}px`,
+      height: `${b.h * s + band * 2}px`,
+    });
+    this.showTextBar({ minX: ed.x, minY: ed.y, maxX: ed.x + b.w, maxY: ed.y + b.h }, { style: st, size: ed.size, color: ed.color }, 0);
   }
 
-  /** The format bar above a text box (or above the select bar, for selected text boxes). */
-  private showTextBar(box: { minX: number; minY: number; maxX: number }, f: { style: TextStyle; size: number; color: string }, above: number) {
+  /** Drag the frame of the box being typed to move it (the caret stays in the text). */
+  private bindFrameDrag(frame: HTMLElement) {
+    let drag: { id: number; x0: number; y0: number; ex: number; ey: number } | null = null;
+    frame.addEventListener('pointerdown', (e) => {
+      const ed = this.editor;
+      if (!ed || drag) return;
+      e.preventDefault(); // keep focus (and the keyboard) in the text
+      e.stopPropagation();
+      frame.setPointerCapture(e.pointerId);
+      const p = this.toLogical(e.clientX, e.clientY);
+      drag = { id: e.pointerId, x0: p.x, y0: p.y, ex: ed.x, ey: ed.y };
+    });
+    frame.addEventListener('pointermove', (e) => {
+      const ed = this.editor;
+      if (!ed || !drag || drag.id !== e.pointerId) return;
+      const p = this.toLogical(e.clientX, e.clientY);
+      ed.x = Math.round((drag.ex + p.x - drag.x0) * 10) / 10;
+      ed.y = Math.round((drag.ey + p.y - drag.y0) * 10) / 10;
+      this.positionEditor();
+    });
+    const end = (e: PointerEvent) => {
+      if (drag?.id !== e.pointerId) return;
+      drag = null;
+      if (this.editor && document.activeElement !== this.editor.el) this.editor.el.focus({ preventScroll: true });
+    };
+    frame.addEventListener('pointerup', end);
+    frame.addEventListener('pointercancel', end);
+  }
+
+  /**
+   * The format bar above a text box (or above the select bar, for selected text boxes); below them
+   * when there is no room above, never over the text itself. `gap` is what sits in between.
+   */
+  private showTextBar(box: { minX: number; minY: number; maxX: number; maxY: number }, f: { style: TextStyle; size: number; color: string }, gap: number) {
     if (!this.textBar) {
       this.textBar = createTextBar((patch) => this.formatText(patch));
       this.area.append(this.textBar.el);
@@ -992,10 +1080,10 @@ export class Board {
     const s = this.scale;
     const w = el.offsetWidth;
     const centre = ((box.minX + box.maxX) / 2 - this.scrollX) * s;
-    const top = (box.minY - this.scrollY) * s - above - el.offsetHeight - 10;
+    const top = (box.minY - this.scrollY) * s - gap - el.offsetHeight - 10;
     el.style.left = `${Math.max(8, Math.min(centre - w / 2, this.viewW - w - 8))}px`;
     // No room above (top of the view): put it below the box instead.
-    el.style.top = `${top >= 8 ? top : (box.minY - this.scrollY) * s + 8 + (this.editor ? this.editor.el.offsetHeight : 0) + 8}px`;
+    el.style.top = `${top >= 8 ? top : (box.maxY - this.scrollY) * s + 22 + gap}px`; // clear of the drag frame
   }
   private hideTextBar() {
     this.textBar?.el.remove();
@@ -1062,6 +1150,7 @@ export class Board {
     if (!ed) return;
     this.editor = null;
     ed.el.remove();
+    ed.frame.remove();
     this.hideTextBar();
     this.invalidate('ink', 'live');
   }
@@ -1077,7 +1166,8 @@ export class Board {
     const old = ed.original;
     const style = cleanStyle(ed.style);
     const same = (a: TextStyle, b: TextStyle) => JSON.stringify(cleanStyle(a)) === JSON.stringify(cleanStyle(b));
-    if (old && text === old.s.text && ed.size === old.s.width && ed.color === old.s.color && same(style, old.s.font ?? {})) return;
+    const samePlace = old && Math.abs(old.s.points[0] - ed.x) < 0.05 && Math.abs(old.s.points[1] - ed.y) < 0.05;
+    if (old && samePlace && text === old.s.text && ed.size === old.s.width && ed.color === old.s.color && same(style, old.s.font ?? {})) return;
     if (old) {
       this.strokes = this.strokes.filter((c) => c !== old);
       this.byId.delete(old.s.id);
@@ -1333,7 +1423,7 @@ export class Board {
   }
 
   /** The Delete / Duplicate bar floats above the selection. */
-  private positionSelectBar(box: { minX: number; minY: number; maxX: number } | null) {
+  private positionSelectBar(box: { minX: number; minY: number; maxX: number; maxY: number } | null) {
     if (!box || this.active?.kind === 'move' || this.active?.kind === 'scale') {
       this.selectBar?.remove();
       this.selectBar = null;
@@ -1359,12 +1449,14 @@ export class Board {
     const left = ((box.minX + box.maxX) / 2 - this.scrollX) * s;
     const top = (box.minY - this.scrollY) * s;
     this.selectBar.style.left = `${Math.max(8, Math.min(left, this.viewW - 8))}px`;
-    this.selectBar.style.top = `${Math.max(8, top - 46)}px`;
+    // Above the selection, or below it when there is no room above (never over what is selected).
+    const room = top - 46 >= 8;
+    this.selectBar.style.top = `${room ? top - 46 : (box.maxY - this.scrollY) * s + 10}px`;
     // Only text boxes selected: their format bar sits above the Duplicate / Delete bar.
     const text = this.editor ? null : this.selectedText();
     if (text) {
       const first = text[0].s;
-      this.showTextBar(box, { style: cleanStyle(first.font), size: first.width, color: first.color }, 46);
+      this.showTextBar(box, { style: cleanStyle(first.font), size: first.width, color: first.color }, room ? 46 : 42);
     } else if (!this.editor) this.hideTextBar();
   }
 
@@ -1402,6 +1494,16 @@ export class Board {
     if (a.rect) {
       const { x0, y0, x1, y1 } = a.rect;
       return this.finishLasso([x0, y0, x1, y0, x1, y1, x0, y1]); // same "mostly inside" rule; a tap picks one
+    }
+    if (a.textPress) {
+      const moved = Math.hypot(a.move!.dx, a.move!.dy) >= 3 / this.scale;
+      if (moved) this.finishMove(a.move!.dx, a.move!.dy);
+      // The box stays the text tool's: no selection is left behind.
+      const box = moved ? [...this.selection][0] : a.textPress;
+      this.selection.clear();
+      this.invalidate('ink', 'live');
+      if (!moved && box) this.openEditor(box.s.points[0], box.s.points[1], box.s.width, box.s.color, cleanStyle(box.s.font), box);
+      return;
     }
     if (a.move) return this.finishMove(a.move.dx, a.move.dy);
     if (a.scale) return this.finishScale(a.scale.f, a.scale.ax, a.scale.ay);

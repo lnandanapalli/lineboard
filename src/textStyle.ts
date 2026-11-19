@@ -2,8 +2,7 @@
  * How a text box is set: font family, bold / italic / underline and alignment. Only what differs
  * from the plain default (sans, regular, left) is stored, so older text boxes need nothing.
  */
-import '@fontsource/caveat/400.css';
-import '@fontsource/caveat/700.css';
+import '@fontsource/patrick-hand/400.css';
 
 export const FONT_FAMILIES = ['sans', 'serif', 'mono', 'hand'] as const;
 export type FontFamily = (typeof FONT_FAMILIES)[number];
@@ -25,7 +24,8 @@ export const FAMILY_CSS: Record<FontFamily, string> = {
   sans: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   serif: "Georgia, 'Times New Roman', Times, serif",
   mono: "ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace",
-  hand: "Caveat, 'Segoe Print', 'Comic Sans MS', cursive",
+  // Upright and neat, like careful handwriting; Italic slants it like any other font.
+  hand: "'Patrick Hand', 'Segoe Print', 'Comic Sans MS', cursive",
 };
 
 /** The canvas / CSS `font` shorthand for a style at a size (px). */
