@@ -152,6 +152,7 @@ button { font: inherit; color: inherit; }
 .btn svg { width: 18px; height: 18px; }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
 .btn.wide { width: 100%; }
 .btn:disabled { opacity: 0.6; }
 .link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
@@ -269,6 +270,19 @@ kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px sol
 .unlock-card .auth-form label.set-check { display: flex; }
 .unlock-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; font-size: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .unlock-card input.mono { text-transform: uppercase; }
+
+/* One-time notice about browser storage (see storageNotice.ts). */
+.storage-notice {
+  position: fixed; left: 12px; bottom: 12px; z-index: 90; max-width: min(440px, calc(100vw - 24px));
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 12px;
+  background: var(--panel, #fff); color: var(--ink, #111827); border: 1px solid var(--line, #e5e7eb); box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+  font-size: 13px; line-height: 1.45;
+}
+/* Stack above the app's first-visit hint instead of covering it. */
+body:has(.hint) .storage-notice { bottom: 96px; }
+.storage-notice p { margin: 0; }
+.storage-notice a { color: var(--accent, #2563eb); }
+.storage-notice .btn { flex: none; height: 34px; padding: 0 16px; }
 
 #toast {
   position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none;

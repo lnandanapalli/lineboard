@@ -13,6 +13,9 @@ import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
 import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
+import { buildExport } from './dataExport';
+import { confirmItsYou } from './securityUi';
+import { LocalStore } from './store/localStore';
 
 
 
@@ -34,6 +37,8 @@ export interface AppOptions {
   signIn?: () => void;
   /** Account security (password, two-step verification, passkeys, devices). */
   account?: AccountSecurity;
+  /** The account was deleted: leave the app (sign out locally, forget this device's copies). */
+  onAccountDeleted?: () => Promise<void>;
 }
 
 export class App {
@@ -89,6 +94,7 @@ export class App {
     this.root = root;
     this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
+    this.queue.onDropped = (m) => toast('Not saved: ' + m, 'error');
     this.queue.onState = (s) => {
       this.syncState = s;
       this.renderStatus();
@@ -884,6 +890,7 @@ export class App {
     this.renderUndo();
     this.renderNoteList();
     this.board.setStrokes(n.id, []);
+    this.board.setLoading(true);
     try {
       const loaded = await this.store.loadStrokes(n.id);
       if (token !== this.loadToken) return;
@@ -893,6 +900,8 @@ export class App {
       // Offline: show whatever is still waiting to be saved for this note.
       this.board.setStrokes(n.id, this.queue.overlay(n.id, []));
       toast('Could not load this note: ' + (e as Error).message, 'error');
+    } finally {
+      if (token === this.loadToken) this.board.setLoading(false);
     }
   }
 
@@ -1083,6 +1092,83 @@ export class App {
     }
   }
 
+  /** Save a file the browser downloads. */
+  private download(blob: Blob, name: string) {
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+
+  /** "Download my data": every notebook, note, stroke, picture and setting, as a zip. */
+  private async exportData() {
+    // Everything in the account in one file: ask for the password (or a code) first, so someone
+    // who picks up a signed-in device cannot just take it all.
+    const account = this.opts.account;
+    if (account && !(await confirmItsYou(account, this.user.email, 'Downloading your data gives a copy of everything in your account.'))) return;
+    try {
+      this.board.finishText();
+      toast('Preparing your data...');
+      // Include changes still waiting to be saved (and leave out strokes waiting to be deleted).
+      const blob = await buildExport(this.store, this.user, this.settings, (noteId, saved) => this.queue.overlay(noteId, saved));
+      this.download(blob, `lineboard-data-${new Date().toISOString().slice(0, 10)}.zip`);
+      toast('Your data is downloading.');
+    } catch (e) {
+      toast('Could not prepare your data: ' + (e as Error).message, 'error');
+    }
+  }
+
+  /** Delete the account and everything in it, after a typed confirmation and a fresh sign-in check. */
+  private async deleteAccount() {
+    const account = this.opts.account;
+    if (!account) return;
+    const typed = await dialog({
+      title: 'Delete your account?',
+      message:
+        'This permanently deletes your account and everything in it: all notebooks, notes, pictures, settings, encryption keys, passkeys and signed-in devices. It cannot be undone. Download your data first if you want a copy. Type DELETE to confirm.',
+      input: '',
+      ok: 'Delete account',
+      danger: true,
+    });
+    if (typed === null) return;
+    if (typed.trim() !== 'DELETE') return toast('Type DELETE (in capitals) to delete your account.', 'error');
+    if (!(await confirmItsYou(account, this.user.email, 'Deleting your account is permanent.'))) return;
+    try {
+      toast('Deleting your account...');
+      await account.deleteAccount(this.user.id);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+      return;
+    }
+    this.settingsPanel.close();
+    await this.opts.onAccountDeleted?.();
+  }
+
+  /** Guest / local mode: remove every note, picture and setting kept in this browser. */
+  private async deleteLocalData() {
+    const ok = await dialog({
+      title: 'Delete everything on this device?',
+      message: 'All notebooks, notes and pictures saved in this browser are deleted. This cannot be undone. Download your data first if you want a copy.',
+      ok: 'Delete everything',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      if (this.store instanceof LocalStore) await this.store.clearAll();
+    } catch (e) {
+      toast('Could not delete everything: ' + (e as Error).message, 'error');
+      return;
+    }
+    try {
+      for (const k of Object.keys(localStorage)) if (k.startsWith('lb-')) localStorage.removeItem(k);
+    } catch {
+      /* storage unavailable */
+    }
+    location.reload();
+  }
+
   private async exportPNG() {
     try {
       const blob = await this.board.exportPNG();
@@ -1110,6 +1196,9 @@ export class App {
       signOut: this.opts.signOut,
       account: this.opts.account,
       signInButton: this.opts.signIn ? () => this.signInButton('settings') : undefined,
+      exportData: () => this.exportData(),
+      deleteAccount: this.opts.account ? () => this.deleteAccount() : undefined,
+      deleteLocalData: this.store.mode === 'local' ? () => this.deleteLocalData() : undefined,
     });
   }
 

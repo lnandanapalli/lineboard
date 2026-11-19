@@ -15,7 +15,7 @@ async function signIn(page: Page) {
 
 /** A second device: a fresh browser context sharing the same mock database. */
 async function otherDevice(browser: Browser, db: MockDb) {
-  const context = await browser.newContext({ baseURL: 'http://localhost:4173', viewport: { width: 800, height: 1280 }, hasTouch: true, serviceWorkers: 'block' });
+  const context = await browser.newContext({ baseURL: 'http://localhost:4173', viewport: { width: 800, height: 1280 }, hasTouch: true, serviceWorkers: 'block', storageState: { cookies: [], origins: [{ origin: 'http://localhost:4173', localStorage: [{ name: 'lb-storage-notice', value: 'true' }] }] } });
   const page = await context.newPage();
   await mockSupabase(page, db);
   return page;

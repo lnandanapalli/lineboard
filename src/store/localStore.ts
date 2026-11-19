@@ -134,8 +134,20 @@ export class LocalStore implements Store {
   }
 
   /** Remove every note, stroke, image and setting kept on this device. */
-  clearAll() {
-    void imageTx('readwrite', (s) => s.clear()).catch(() => {});
+  async clearAll() {
+    // Wait until the pictures are really gone (the transaction has committed): a reload straight
+    // after could otherwise abort it and leave the files behind.
+    const db = await imageDb();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('images', 'readwrite');
+        tx.objectStore('images').clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('Could not remove the pictures'));
+      });
+    } finally {
+      db.close();
+    }
     for (const m of this.notes()) {
       try {
         localStorage.removeItem(this.strokesKey(m.id));

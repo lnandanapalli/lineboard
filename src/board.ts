@@ -176,6 +176,8 @@ export class Board {
   private strokes: Cached[] = [];
   private byId = new Map<string, Cached>();
   private noteId = '';
+  /** A note's strokes are still loading: ink would be overwritten by them, so input waits. */
+  private loading = false;
 
   private scrollY = 0;
   /** Horizontal scroll, only non-zero when zoomed in (free mode). */
@@ -261,6 +263,7 @@ export class Board {
     this.clearSelection();
     this.cancelActive();
     this.noteId = noteId;
+    this.area.dataset.note = noteId; // which note the board shows (tests wait for it)
     this.strokes = [];
     this.byId.clear();
     for (const s of strokes) this.cache(s);
@@ -653,6 +656,7 @@ export class Board {
       else if (size > this.settings.touchThreshold) accept = false; // too big -> palm
     }
     if (accept && !this.isUnlockedAt(pt.y)) accept = false; // only unlocked strips take input
+    if (!this.noteId || this.loading) accept = false; // no note open yet, or its ink still loading
     this.cb.onContact(size, e.pointerType, accept);
     if (!accept) return;
 
@@ -1313,7 +1317,7 @@ export class Board {
     const key = ++this.pendingSeq;
     const offset = this.pending.size * 24; // several at once step down-right, like a stack
     this.pending.set(key, { ...this.placeBox(800, 600, offset), offset });
-    this.area.setAttribute('aria-busy', 'true');
+    this.updateBusy();
     this.invalidate('live');
     return key;
   }
@@ -1328,8 +1332,24 @@ export class Board {
   }
   removePending(key: number) {
     this.pending.delete(key);
-    if (!this.pending.size) this.area.removeAttribute('aria-busy');
+    this.updateBusy();
     this.invalidate('live');
+  }
+
+  /** The board is busy (aria-busy) while a note loads or pictures are being added. */
+  private updateBusy() {
+    if (this.loading || this.pending.size) this.area.setAttribute('aria-busy', 'true');
+    else this.area.removeAttribute('aria-busy');
+  }
+
+  /**
+   * A note is opening: until its strokes are in, the board takes no ink (a stroke drawn meanwhile
+   * would be replaced by the loaded ones).
+   */
+  setLoading(on: boolean) {
+    this.loading = on;
+    if (on) this.cancelActive();
+    this.updateBusy();
   }
 
   /** Place a picture in the middle of the view, at most 600 page units wide, and select it. */

@@ -14,9 +14,11 @@ import { renderUnlock } from './encryptionUi';
 import { AccountSecurity } from './account';
 import { renderSecondStep } from './securityUi';
 import { h, lsGet, lsSet, toast } from './util';
+import { showStorageNotice } from './storageNotice';
 
 const root = document.getElementById('app')!;
 installRouter();
+showStorageNotice();
 const LOCAL_USER = { id: 'local', email: null };
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
@@ -277,7 +279,24 @@ if (!hasCloud) {
     if (!(await prepareEncryption(vault, store, uid, email, () => void signOut()))) return;
     await maybeMoveGuestNotes(store, uid);
     if (current !== uid) return; // signed out meanwhile
-    app = new App(root, store, { id: uid, email }, { signOut, account });
+    const onAccountDeleted = async () => {
+      current = null;
+      clearApp();
+      await vault.lock().catch(() => {}); // forget the encryption key on this device
+      // Forget this account's copies on the device: settings, the save queue, last note...
+      try {
+        for (const k of Object.keys(localStorage)) if (k.startsWith('lb-') && k.includes(uid)) localStorage.removeItem(k);
+      } catch {
+        /* storage unavailable */
+      }
+      // The session no longer exists on the server; clear it locally.
+      await sb.auth.signOut({ scope: 'local' }).catch(() => {});
+      setGuestActive(false);
+      activeSession = null;
+      navigate('/home');
+      toast('Your account and all its data have been deleted.');
+    };
+    app = new App(root, store, { id: uid, email }, { signOut, account, onAccountDeleted });
   };
 
   window.addEventListener(navigationEvent, () => {

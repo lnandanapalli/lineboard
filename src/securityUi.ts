@@ -1,4 +1,7 @@
+import type { Factor } from '@supabase/supabase-js';
+import { MIN_PASSWORD } from './auth';
 import { AccountError, describeDevice, passkeysSupported, type AccountSecurity, type DeviceSession } from './account';
+import { Captcha } from './captcha';
 import { logo } from './brand';
 import { actions, busy, button, check, errorLine, field, passInput, StepDialog } from './encryptionUi';
 import { dialog, h, toast } from './util';
@@ -8,7 +11,6 @@ import { dialog, h, toast } from './util';
  * the second-step screen shown after signing in when two-step verification is on.
  */
 
-const MIN_PASSWORD = 8;
 
 const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 const rel = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
@@ -299,14 +301,27 @@ export class SecurityPane {
  * confirmed in the last few minutes. Resolves false if they cancel.
  */
 export async function confirmItsYou(account: AccountSecurity, email: string | null, why = 'This change affects how your account is protected.'): Promise<boolean> {
-  if (account.recentlyConfirmed) return true;
-  const factors = await account.authenticators().catch(() => []);
+  // With two-step verification on, both the password and a code are needed: otherwise a stolen
+  // password alone would get past the second step for every sensitive action.
+  let factors: Factor[];
+  try {
+    factors = await account.authenticators();
+  } catch (e) {
+    toast((e as Error).message || 'Could not check your sign-in methods. Try again.', 'error');
+    return false;
+  }
+  const needCode = factors.length > 0;
+  const needPassword = !account.passwordRecent;
+  if (!needPassword && (!needCode || account.codeRecent)) return true;
+  const steps = (needPassword ? 1 : 0) + (needCode && !account.codeRecent ? 1 : 0);
   const d = new StepDialog('confirm-dialog');
   let ok = false;
+  const heading = (n: number) => h('h3', {}, steps > 1 ? `Confirm it’s you (step ${n} of 2)` : 'Confirm it’s you');
 
   const withPassword = () => {
     const pass = passInput('current-password');
     const err = errorLine();
+    const captcha = new Captcha();
     const go = button(
       'Confirm',
       'primary',
@@ -314,23 +329,23 @@ export async function confirmItsYou(account: AccountSecurity, email: string | nu
         if (!pass.value) return err.set('Enter your password.');
         if (!email) return err.set('This account has no email address to check the password against.');
         void busy(go, 'Checking...', err, async () => {
-          await account.verifyPassword(email, pass.value);
+          await account.verifyPassword(email, pass.value, await captcha.take());
+          if (needCode && !account.codeRecent) return withCode(2);
           ok = true;
           d.close();
         });
       },
       'submit',
     );
-    const alt = factors.length ? button('Use a code from your authenticator app instead', 'link-btn', withCode) : null;
     d.show(
-      h('h3', {}, 'Confirm it’s you'),
+      heading(1),
       h('p', {}, why + ' Enter your password to continue.'),
-      h('form', { class: 'enc-form' }, field('Password', pass), err.el, alt, actions(button('Cancel', '', () => d.close()), go)),
-      factors.length ? null : h('small', { class: 'muted' }, 'Signed up with an email link or a passkey and never set a password? Set one first with Change password.'),
+      h('form', { class: 'enc-form' }, field('Password', pass), captcha.el, err.el, actions(button('Cancel', '', () => d.close()), go)),
+      h('small', { class: 'muted' }, 'Signed up with an email link or a passkey and never set a password? Set one first with Change password.'),
     );
   };
 
-  const withCode = () => {
+  const withCode = (n: number) => {
     const code = codeInput();
     const err = errorLine();
     const go = button(
@@ -348,13 +363,15 @@ export async function confirmItsYou(account: AccountSecurity, email: string | nu
       'submit',
     );
     d.show(
-      h('h3', {}, 'Confirm it’s you'),
-      h('p', {}, why + ' Enter the 6-digit code from your authenticator app.'),
-      h('form', { class: 'enc-form' }, field('6-digit code', code), err.el, button('Use your password instead', 'link-btn', withPassword), actions(button('Cancel', '', () => d.close()), go)),
+      heading(n),
+      h('p', {}, (n > 1 ? 'Two-step verification is on, so a code is needed as well. ' : why + ' ') + 'Enter the 6-digit code from your authenticator app.'),
+      h('form', { class: 'enc-form' }, field('6-digit code', code), err.el, actions(button('Cancel', '', () => d.close()), go)),
     );
+    code.focus();
   };
 
-  withPassword();
+  if (needPassword) withPassword();
+  else withCode(1);
   await d.closed;
   return ok;
 }
@@ -366,10 +383,20 @@ export async function changePasswordDialog(account: AccountSecurity, email: stri
   const b = passInput('new-password');
   const others = check('Sign out all other devices', true);
   const code = codeInput();
+  code.setAttribute('aria-label', 'Confirmation code from your email');
   const codeField = field('Confirmation code from your email', code);
   codeField.hidden = true;
   const currentField = field('Current password', current);
   const err = errorLine();
+  const captcha = new Captcha();
+  // Two-step verification on: a code from the authenticator app is needed as well, whichever way
+  // the current password is proven (otherwise a stolen password could change the password).
+  const factors = await account.authenticators().catch(() => null);
+  if (!factors) return toast('Could not check your sign-in methods. Try again.', 'error');
+  const totp = codeInput();
+  totp.setAttribute('aria-label', '6-digit code from your authenticator app');
+  const totpField = field('6-digit code from your authenticator app', totp);
+  totpField.hidden = !factors.length;
   /** Accounts without a password (email link / passkey sign-up) confirm with an emailed code instead. */
   let byEmail = false;
   const noPassword = button('No password yet, or forgot it? Email me a code instead', 'link-btn', () => {
@@ -392,10 +419,13 @@ export async function changePasswordDialog(account: AccountSecurity, email: stri
       if (a.value.length < MIN_PASSWORD) return err.set(`Use at least ${MIN_PASSWORD} characters.`);
       if (a.value !== b.value) return err.set('The two new passwords do not match.');
       if (!codeField.hidden && !/^\d{6,10}$/.test(cleanCode(code.value))) return err.set('Enter the code from the email.');
+      const totpProblem = factors.length ? codeProblem(totp.value) : null;
+      if (totpProblem) return err.set(totpProblem);
       void busy(go, 'Saving...', err, async () => {
+        if (factors.length) await account.confirmWithCode(factors[0].id, totp.value);
         try {
           if (!codeField.hidden) await account.changePassword(a.value, { nonce: cleanCode(code.value) }, { signOutOthers: others.input.checked });
-          else await account.changePassword(a.value, { currentPassword: current.value, email: email ?? '' }, { signOutOthers: others.input.checked });
+          else await account.changePassword(a.value, { currentPassword: current.value, email: email ?? '', captchaToken: await captcha.take() }, { signOutOthers: others.input.checked });
         } catch (e) {
           // The project wants an emailed code too (old session and "secure password change" on).
           if (e instanceof AccountError && e.code === 'reauthentication_needed') {
@@ -424,7 +454,9 @@ export async function changePasswordDialog(account: AccountSecurity, email: stri
       codeField,
       field('New password', a, `At least ${MIN_PASSWORD} characters.`),
       field('Type the new password again', b),
+      totpField,
       others.el,
+      captcha.el,
       err.el,
       actions(button('Cancel', '', () => d.close()), go),
     ),

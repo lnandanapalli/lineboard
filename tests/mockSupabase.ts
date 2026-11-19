@@ -26,6 +26,11 @@ export interface MockDb {
   password: string;
   /** Supabase Storage: path within the bucket -> bytes and content type. */
   images?: Map<string, { body: Buffer; type: string }>;
+  /** Set once delete_my_account ran: the user no longer exists. */
+  deleted?: boolean;
+  /** Bot check on (Supabase "CAPTCHA protection"): auth requests need a token; the ones received. */
+  captcha?: boolean;
+  captchaTokens?: string[];
 }
 
 export interface Session {
@@ -74,18 +79,30 @@ function matches(url: URL) {
 
 function paginate(url: URL, rows: Row[]) {
   const offset = Number(url.searchParams.get('offset') ?? 0);
-  const limit = url.searchParams.get('limit');
-  return rows.slice(offset, limit ? offset + Number(limit) : undefined);
+  // Like a Supabase project's API: at most 1000 rows per response (max rows), whatever was asked.
+  const limit = Math.min(Number(url.searchParams.get('limit') ?? 1000), 1000);
+  return rows.slice(offset, offset + limit);
 }
 
 /** Pass `shared` to give a second browser context (another device) the same database. */
-export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb> {
+export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?: boolean } = {}): Promise<MockDb> {
   const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], passwordChanges: 0, password: 'secret123' };
+  if (opts.captcha) db.captcha = true;
 
   await page.route('**/config.js', (r) =>
     r.fulfill({
       contentType: 'application/javascript',
-      body: `window.__LINEBOARD_CONFIG__ = { supabaseUrl: "${MOCK_URL}", supabaseAnonKey: "test-anon-key" };`,
+      body: `window.__LINEBOARD_CONFIG__ = { supabaseUrl: "${MOCK_URL}", supabaseAnonKey: "test-anon-key"${db.captcha ? ', turnstileSiteKey: "test-site-key"' : ''} };`,
+    }),
+  );
+  // A stand-in for Cloudflare Turnstile: passes at once, and gives a fresh token after each reset.
+  await page.route('https://challenges.cloudflare.com/**', (r) =>
+    r.fulfill({
+      contentType: 'application/javascript',
+      body: `window.turnstile = { n: 0, w: {},
+        render(el, o) { const id = 'w' + (++this.n); this.w[id] = o; setTimeout(() => o.callback('tok-' + id + '-1'), 20); return id; },
+        reset(id) { const o = this.w[id]; o.k = (o.k || 1) + 1; setTimeout(() => o.callback('tok-' + id + '-' + o.k), 20); },
+        remove(id) { delete this.w[id]; } };`,
     }),
   );
 
@@ -145,6 +162,14 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
     const accessOk = () => !!session && (claims.aal === 'aal2' || !db.factors.some((f) => f.status === 'verified'));
 
     // ---- auth ----
+    // Bot check: sign-in, sign-up, email links and resets need a token (refreshes do not).
+    const needsCaptcha = (path === '/auth/v1/token' && url.searchParams.get('grant_type') !== 'refresh_token') || ['/auth/v1/signup', '/auth/v1/otp', '/auth/v1/recover'].includes(path);
+    if (db.captcha && needsCaptcha && method === 'POST') {
+      const tok = (body() as { gotrue_meta_security?: { captcha_token?: string } } | null)?.gotrue_meta_security?.captcha_token;
+      if (!tok) return authError(route, 400, 'captcha_failed', 'captcha protection: request disallowed (no captcha token)');
+      if ((db.captchaTokens ??= []).includes(tok)) return authError(route, 400, 'captcha_failed', 'captcha protection: token already used');
+      db.captchaTokens.push(tok);
+    }
     if (path === '/auth/v1/token') {
       const grant = url.searchParams.get('grant_type');
       if (grant === 'refresh_token') {
@@ -153,7 +178,7 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
         if (!existing) return authError(route, 400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
         return json(route, 200, tokenResponse(existing));
       }
-      if (grant === 'password' && body()?.password !== db.password) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
+      if (grant === 'password' && (db.deleted || body()?.password !== db.password)) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
       return json(route, 200, tokenResponse(newSession(ua)));
     }
     if (path === '/auth/v1/user') {
@@ -252,6 +277,30 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
       return json(route, 200, p ?? null);
     }
     if (path.startsWith('/auth/v1/')) return route.fulfill({ status: 204, headers: cors });
+
+    // ---- storage (pictures): list a folder, remove files ----
+    if (path === '/storage/v1/object/list/images' && method === 'POST') {
+      db.images ??= new Map();
+      const prefix = String(body()?.prefix ?? '').replace(/\/$/, '');
+      if (!accessOk() || prefix !== USER_ID) return json(route, 200, []);
+      const limit = Number(body()?.limit ?? 100);
+      const names = [...db.images.keys()].filter((k) => k.startsWith(prefix + '/')).map((k) => k.slice(prefix.length + 1));
+      return json(route, 200, names.slice(0, limit).map((name) => ({ name, id: crypto.randomUUID(), metadata: { size: db.images!.get(`${prefix}/${name}`)!.body.length } })));
+    }
+    if (path === '/storage/v1/object/images' && method === 'DELETE') {
+      db.images ??= new Map();
+      if (!accessOk()) return json(route, 403, { statusCode: '403', error: 'Unauthorized', message: 'Not allowed' });
+      const prefixes = (body()?.prefixes ?? []) as string[];
+      const removed = prefixes.filter((k) => k.startsWith(USER_ID + '/') && db.images!.delete(k));
+      return json(route, 200, removed.map((name) => ({ name })));
+    }
+
+    // ---- deleting the account ----
+    if (path === '/rest/v1/rpc/delete_my_account') {
+      if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
+      Object.assign(db, { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], deleted: true });
+      return route.fulfill({ status: 204, headers: cors, body: '' });
+    }
 
     // ---- storage (pictures) ----
     const so = /^\/storage\/v1\/object\/images\/(.+)$/.exec(path);

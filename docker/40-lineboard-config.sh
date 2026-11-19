@@ -4,6 +4,6 @@
 set -eu
 esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 cat > /usr/share/nginx/html/config.js <<EOF
-window.__LINEBOARD_CONFIG__ = { supabaseUrl: "$(esc "${SUPABASE_URL:-}")", supabaseAnonKey: "$(esc "${SUPABASE_ANON_KEY:-}")" };
+window.__LINEBOARD_CONFIG__ = { supabaseUrl: "$(esc "${SUPABASE_URL:-}")", supabaseAnonKey: "$(esc "${SUPABASE_ANON_KEY:-}")", turnstileSiteKey: "$(esc "${TURNSTILE_SITE_KEY:-}")" };
 EOF
-echo "lineboard: wrote config.js (supabase url: ${SUPABASE_URL:-<none, local mode>})"
+echo "lineboard: wrote config.js (supabase url: ${SUPABASE_URL:-<none, local mode>}, bot check: ${TURNSTILE_SITE_KEY:+on}${TURNSTILE_SITE_KEY:-off})"

@@ -21,7 +21,16 @@ function check(error: PgErr | null) {
   if (!error) return;
   // SQLSTATE classes 22 (data), 23 (constraint), 42 (syntax/permission) won't succeed on retry.
   const permanent = !!error.code && /^(22|23|42)/.test(error.code);
-  throw new StoreError(error.message || 'Request failed', permanent);
+  throw new StoreError(readable(error.message || 'Request failed'), permanent);
+}
+
+/** The schema's fair-use limits (supabase/schema.sql), in words. */
+function readable(message: string): string {
+  const limit = /Lineboard limit: (.*)$/.exec(message);
+  if (limit) return limit[1].charAt(0).toUpperCase() + limit[1].slice(1) + '.';
+  if (/strokes_points_size|strokes_enc_size/.test(message)) return 'That stroke is too long to save; draw it in shorter pieces.';
+  if (/user_settings_size/.test(message)) return 'Your settings are too large to save.';
+  return message;
 }
 
 /** Shown when a title or name cannot be decrypted on this device. */
@@ -44,6 +53,9 @@ const IMAGE_BUCKET = 'images';
 function imageError(error: { message?: string; statusCode?: string | number; status?: number } | null): StoreError {
   const msg = error?.message ?? 'Image request failed';
   if (/bucket not found/i.test(msg)) return new StoreError('Images need a database update: the site operator re-runs supabase/schema.sql.', true);
+  // The bucket's limits and the per-account quota (supabase/schema.sql).
+  if (/exceeded the maximum allowed size|payload too large/i.test(msg)) return new StoreError('That picture is too large (15 MB at most).', true);
+  if (/mime type .* not supported|invalid mime/i.test(msg)) return new StoreError('That file type cannot be stored as a picture.', true);
   return new StoreError(msg, false);
 }
 
@@ -275,9 +287,16 @@ export class SupabaseStore implements Store {
   }
 
   async listNotes(): Promise<NoteMeta[]> {
-    const { data, error } = await this.sb.from('notes').select(this.noteCols()).order('updated_at', { ascending: false });
-    check(error);
-    return Promise.all(((data ?? []) as unknown as NoteRow[]).map((r) => this.decodeNote(r)));
+    // Page through: the API returns at most 1000 rows per request, and an account may have more notes.
+    const rows: NoteRow[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('notes').select(this.noteCols()).order('updated_at', { ascending: false }).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      const page = (data ?? []) as unknown as NoteRow[];
+      rows.push(...page);
+      if (page.length < PAGE) break;
+    }
+    return Promise.all(rows.map((r) => this.decodeNote(r)));
   }
 
   async createNote(title: string, notebookId: string): Promise<NoteMeta> {
@@ -404,8 +423,14 @@ export class SupabaseStore implements Store {
     const body = key ? await sealBytes(key, ctx.image(id), bytes) : bytes;
     const contentType = key ? 'application/octet-stream' : type || 'application/octet-stream';
     const { error } = await this.sb.storage.from(IMAGE_BUCKET).upload(this.imagePath(id), body.buffer, { upsert: true, contentType });
+    if (error && /row-level security/i.test(error.message ?? '')) {
+      // Refused by the storage policy: the per-account quota, or this device lost access.
+      const { data: roomLeft } = await this.sb.rpc('image_quota_ok');
+      if (roomLeft === false) throw new StoreError('Your picture storage is full (5000 pictures or 2 GB). Delete some pictures to add more.', true);
+    }
     if (error) throw imageError(error);
   }
+
 
   /** Re-upload an image encrypted or decrypted, to match the account (used by convertAll). */
   private async convertImage(s: Stroke, encrypt: boolean) {

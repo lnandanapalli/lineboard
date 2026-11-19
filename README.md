@@ -18,13 +18,26 @@ you unlock accepts ink. Your palm can rest anywhere else.
 - **Palm filtering inside the unlocked strip:** one stroke at a time, oversized contacts ignored (with a
   calibration pad in Settings), strokes cancelled if a contact grows into a palm, and optional pen-only input
   when an active pen is detected.
-- Pen (pressure-aware with active pens), highlighter, stroke eraser, shapes, text boxes, size slider, stroke
-  smoothing, undo / redo, multiple notes, PNG export.
+- **Modes:** strips, multi-strip, a **free whiteboard** (write anywhere; two fingers scroll and zoom; plain,
+  lined, grid or dotted paper) and **split** (two panes, each locked or unlocked, with a movable divider).
+- **Tools:**
+  - pen, pressure-aware with active pens;
+  - highlighter, stroke eraser, size slider, stroke smoothing, colours (including a custom one);
+  - undo / redo, OS-aware keyboard shortcuts.
+- **Shapes:** a palette of 19 shapes that snap to perfect squares, circles and 45° lines without a keyboard,
+  with a Keep proportions switch, solid / dashed / dotted lines and four thicknesses.
+- **Text boxes** with font (sans, serif, mono, handwriting), size, bold / italic / underline, alignment and
+  colour; drag them to move.
+- **Pictures:** insert, paste or drop them, draw on top, and move or resize them. With encryption on they are
+  encrypted too.
+- **Select:** lasso or rectangle (anything touched is picked), then move, resize, duplicate or delete.
+- **Organise and export:** notebooks and notes, PNG export, manual orientation lock.
+- **Your data:** download everything as a zip, delete your account (Settings → Account).
 - **Accounts and sync** with Supabase, with background saving that survives reloads and offline periods.
 - **Account security.** See and sign out signed-in devices, change the password (which signs out other
   devices, as does a password reset), two-step verification with an authenticator app, and passkey sign-in.
   See [Account security](#account-security).
-- **Optional end-to-end encryption.** Turn it on in Settings → Privacy & security: ink, note titles and
+- **Optional end-to-end encryption.** Turn it on in Settings → Encryption: ink, note titles and
   notebook names are encrypted on the device before upload. See [End-to-end encryption](#end-to-end-encryption).
 - **Try without an account.** Notes stay in the browser and move into the account on sign-in.
 - **Local mode.** With no backend configured, the whole app runs in the browser with no sign-in.
@@ -58,9 +71,14 @@ Settings → Sign-in & devices, built on Supabase Auth:
   `current_password` so the server checks it too when *Require current password* is on in the project's
   Auth settings. Accounts without a password (email-link or passkey sign-up) confirm with an emailed code
   instead. It signs out other devices by default; so does a password reset from the email link.
-- **Confirm it's you.** Adding or removing a passkey or authenticator, and turning encryption on, ask for
-  the password (or an authenticator code) if it wasn't entered in the last five minutes, so someone at an
-  unlocked device can't add their own way into the account or lock the owner out of their notes.
+- **Confirm it's you.** These ask for the password if it wasn't entered in the last five minutes:
+  - adding or removing a passkey or authenticator;
+  - turning encryption on or off;
+  - downloading your data and deleting the account.
+
+  So someone at an unlocked device can't add their own way in, take the data, or lock the owner out. With
+  two-step verification on, they need the password **and** a fresh authenticator code, so a stolen password
+  alone gets past nothing. Changing the password needs the code too.
 - **Two-step verification** with any TOTP authenticator app (`auth.mfa`). Several authenticators can be
   added as backups. The same `access_ok()` policy requires `aal2` for users who turned it on, so notes can't
   be read with the password alone even by calling the API directly. Turning it on signs out other devices.
@@ -141,6 +159,7 @@ To enable accounts and sync, point Lineboard at a Supabase project:
 | `SUPABASE_URL` | `VITE_SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` (no path) |
 | `SUPABASE_ANON_KEY` | `VITE_SUPABASE_ANON_KEY` | Anon or publishable key |
 | `CANONICAL_HOST` (optional) | (not used) | The one address to serve, e.g. `example.com`. The other spelling (`www.example.com`, or the reverse) gets a permanent redirect to it. |
+| `TURNSTILE_SITE_KEY` (optional) | `VITE_TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key: turns on the bot check at sign-in, sign-up and password reset. Pair it with the secret key in Supabase (see [Security](#security-and-abuse-protection)). |
 
 Serve the app from one address. Browsers keep sign-ins, notes made without an account, the remembered
 encryption key and passkey origins separately for `example.com` and `www.example.com`, so set
@@ -154,10 +173,41 @@ For development, copy `.env.example` to `.env.local`. Never use the `service_rol
 Run [`supabase/schema.sql`](supabase/schema.sql) once in your project (SQL editor or `psql`). It creates the
 `notebooks`, `notes`, `strokes`, `user_settings` and `user_keys` tables with row-level security, and is safe to
 re-run. **When upgrading, run it again**: until you do, the app keeps working, but features that need newer
-tables or columns (the encryption switch, text boxes) say they need the database update.
+tables or columns (the encryption switch, text boxes, pictures, account deletion) say they need the database update,
+and the fair-use limits only apply once it has run.
 
 In Supabase Auth, add your site's URL to the allowed redirect URLs so that confirmation, sign-in-link and
 password-reset emails work.
+
+### Security and abuse protection
+
+Built in:
+
+- **Data isolation:** row-level security: every account reaches only its own rows and picture files, and a device that was signed out elsewhere loses access at once (`access_ok()` in the schema).
+- **Optional user protections:** end-to-end encryption, two-step verification, passkeys, a list of signed-in devices, and a fresh password check before sensitive changes ("Confirm it's you"), plus an authenticator code when two-step verification is on.
+- **Fair-use limits, enforced by the database:**
+  - 500 notebooks and 20,000 notes per account;
+  - 50,000 strokes per note and 2,000,000 strokes in all;
+  - pictures: image types only, at most 15 MB each, and 5,000 files or 2 GB per account.
+  - The app explains a refused save instead of retrying it.
+- **Web server:**
+  - per-client request rate limiting, with HTTP 429 for floods;
+  - GET and HEAD only, with a tiny request-body limit;
+  - security headers: CSP, HSTS, COOP, `X-Frame-Options`, `nosniff` and a referrer policy.
+- **Your data:** Settings > Account > Download my data / Delete account. A one-time notice explains the browser storage, which is essential-only, so no consent banner is needed.
+
+To do in the Supabase dashboard (Authentication settings):
+
+1. **Bot check (recommended).** Create a free Cloudflare Turnstile widget for your domain.
+   - Put its **secret key** under Attack Protection > CAPTCHA protection (provider: Turnstile).
+   - Set its **site key** as `TURNSTILE_SITE_KEY`.
+   - Set both at the same time: with only the secret set, every sign-in is refused; with only the site key set, the check is shown but not enforced.
+2. **Rate limits:** keep the defaults, or lower them, for sign-ups, sign-ins, OTP / email links and token refreshes.
+3. **Email:** keep *Confirm email*, *Secure email change* and *Secure password change* on, and use your own SMTP provider for production email.
+4. **Passwords:** set the minimum length to 8 or more. Turn on leaked-password protection if your plan has it.
+5. **Redirect URLs:** allow only your site's URL.
+
+Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ### Deployment
 
