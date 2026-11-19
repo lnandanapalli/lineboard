@@ -18,6 +18,7 @@ import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
+import { openSearch } from './searchUi';
 import { LocalStore } from './store/localStore';
 import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
 
@@ -368,6 +369,7 @@ export class App {
       'aside',
       { class: 'sidebar' },
       h('div', { class: 'sidebar-head' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')), this.iconBtn(icons.close, 'Close', () => this.toggleSidebar(false))),
+      this.searchButton(),
       h('div', { class: 'section-label' }, 'Notebook'),
       this.bookButton,
       this.bookPanel,
@@ -493,7 +495,10 @@ export class App {
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === 'z') {
+      if (mod && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        this.openSearch();
+      } else if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) this.redo();
         else this.undo();
@@ -1046,6 +1051,40 @@ export class App {
     const b = this.iconBtn(item.starred ? icons.starFilled : icons.star, item.starred ? `Unstar "${name}"` : `Star "${name}"`, () => void this.setFlags(kind, item, { starred: !item.starred }), 'small star-btn' + (item.starred ? ' on' : ''));
     b.setAttribute('aria-pressed', String(!!item.starred));
     return b;
+  }
+
+  // ----------------------------- search -----------------------------
+
+  private searchButton() {
+    const b = h('button', { class: 'search-btn', type: 'button', title: withShortcut('Search notes and notebooks', 'Mod+K') });
+    b.innerHTML = `${icons.search}<span>Search</span><kbd></kbd>`;
+    b.querySelector('kbd')!.textContent = isApple ? '⌘K' : 'Ctrl K';
+    b.addEventListener('click', () => this.openSearch());
+    return b;
+  }
+
+  private openSearch() {
+    if (document.querySelector('.search-modal') || this.historyPanel) return;
+    this.board.finishText();
+    openSearch({
+      notes: () => this.notes,
+      notebooks: () => this.notebooks,
+      openNote: async (n) => {
+        await this.openFromList(n);
+        if (window.innerWidth < 900) this.toggleSidebar(false);
+      },
+      openNotebook: async (b) => {
+        if (b.id !== this.currentBook?.id) await this.switchNotebook(b);
+        this.toggleSidebar(true);
+      },
+      restore: async (kind, item) => {
+        const name = 'title' in item ? item.title || 'Untitled' : item.name;
+        const ok = await dialog({ title: `Restore “${name}”?`, message: `This ${kind} is archived. Restore it to the sidebar to open it?`, ok: 'Restore and open' });
+        if (!ok) return false;
+        await this.unarchive(kind, item.id);
+        return !item.archived_at;
+      },
+    });
   }
 
   /** Open a note from the list (a starred one may be in another notebook). */
