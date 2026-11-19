@@ -684,7 +684,7 @@ export class App {
     const foot = h(
       'div',
       { class: 'shape-foot' },
-      h('div', {}, h('b', {}, 'Keep proportions'), h('small', {}, 'Squares, circles, even stars; lines at 45°. Off: nearly-square shapes still snap.')),
+      h('b', {}, 'Keep proportions'),
       lock,
     );
     ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, foot), { label: 'Shapes' }));
