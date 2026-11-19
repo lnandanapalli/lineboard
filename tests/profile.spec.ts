@@ -73,9 +73,10 @@ test('signed in: the account menu replaces the email; the name and picture are s
   await attachBoard(page);
   await openSidebar(page);
   await expect(page.locator('.sidebar')).not.toContainText('friend@example.com');
+  // The name and picture open Settings at the profile directly (no menu, so no Sign out to hit by mistake).
   await chip(page).click();
-  await expect(page.getByRole('menuitem')).toHaveText(['Profile', 'Data controls', 'Settings', 'Sign out']);
-  await page.getByRole('menuitem', { name: 'Profile' }).click();
+  await expect(page.locator('.settings-modal')).toBeVisible();
+  await expect(page.getByRole('menu')).toHaveCount(0);
   await page.getByLabel('Display name').fill('Grace Hopper');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect.poll(() => db.meta?.display_name).toBe('Grace Hopper');
@@ -106,16 +107,24 @@ test('initials and names: two letters from the first and last words, names clean
   expect(cleanName(42)).toBe('');
 });
 
-test('the account menu at the bottom of the sidebar opens upwards, fully on screen', async ({ page }) => {
+test('settings explain themselves behind ⓘ buttons: a popup opens and closes, and the setting is untouched', async ({ page }) => {
   await setup(page);
-  await openSidebar(page);
-  await chip(page).click();
-  const menu = page.getByRole('menu', { name: 'Account' });
-  await expect(menu).toBeVisible();
-  const box = (await menu.boundingBox())!;
-  const chipBox = (await chip(page).boundingBox())!;
-  expect(box.y + box.height).toBeLessThanOrEqual(chipBox.y);
-  expect(box.y).toBeGreaterThanOrEqual(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  // No long explanations on the screen itself.
+  await expect(page.locator('.settings-pane:not([hidden])')).not.toContainText('Steadies shaky lines');
+  const before = await page.getByRole('slider', { name: 'Smoothing' }).inputValue();
+  await page.getByRole('button', { name: 'About Smoothing' }).click();
+  const tip = page.getByRole('dialog', { name: 'Smoothing' });
+  await expect(tip).toContainText('Steadies shaky lines');
+  await expect(tip).toBeInViewport();
+  expect(await page.getByRole('slider', { name: 'Smoothing' }).inputValue()).toBe(before);
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(page.locator('.settings-modal')).toBeVisible(); // Escape closed the popup, not Settings
+  await page.locator('.settings-tab', { hasText: 'Encryption' }).click();
+  await page.getByRole('button', { name: 'About End-to-end encryption' }).click();
+  await expect(page.getByRole('dialog', { name: 'End-to-end encryption' })).toContainText('cannot be recovered by anyone');
 });
 
 test('turning encryption on also encrypts a profile picture added before', async ({ page }) => {

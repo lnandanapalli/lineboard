@@ -98,7 +98,7 @@ test('without an account, "Delete everything on this device" removes the notes a
   await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
   await expectStrokes(page, 2);
   await openAccountSettings(page);
-  await page.getByRole('button', { name: 'Delete everything on this device' }).click();
+  await page.getByRole('button', { name: 'Delete everything on this device', exact: true }).click();
   await page.locator('dialog[open]').getByRole('button', { name: 'Delete everything', exact: true }).click();
   await page.locator('.canvas-area canvas.live').waitFor();
   await expectStrokes(page, 0);
@@ -142,19 +142,19 @@ test('with an account: download my data, then delete the account and everything 
   expect([...lbd.keys()].some((k) => k.startsWith('pictures/'))).toBe(true);
 
   // A wrong confirmation word deletes nothing.
-  await page.getByRole('button', { name: 'Delete account' }).click();
+  await page.getByRole('button', { name: 'Delete account', exact: true }).click();
   let dlg = page.locator('dialog.modal.small[open]');
   await expect(dlg).toContainText('cannot be undone');
   await dlg.locator('input').fill('delete');
-  await dlg.getByRole('button', { name: 'Delete account' }).click();
+  await dlg.getByRole('button', { name: 'Delete account', exact: true }).click();
   await expect(page.locator('#toast')).toContainText('Type DELETE');
   expect(db.deleted).toBeFalsy();
 
   // DELETE, then the password: the account and every file go.
-  await page.getByRole('button', { name: 'Delete account' }).click();
+  await page.getByRole('button', { name: 'Delete account', exact: true }).click();
   dlg = page.locator('dialog.modal.small[open]');
   await dlg.locator('input').fill('DELETE');
-  await dlg.getByRole('button', { name: 'Delete account' }).click();
+  await dlg.getByRole('button', { name: 'Delete account', exact: true }).click();
   // The password was confirmed for the download moments ago, so it is not asked again (the same
   // short window as other sensitive changes); after that window it would be.
   await expect(page).toHaveURL(/\/home$/);
@@ -263,10 +263,10 @@ test('deleting the account asks for the password, and cancelling it deletes noth
   const db = await mockSupabase(page);
   await signIn(page);
   await openAccountSettings(page);
-  await page.getByRole('button', { name: 'Delete account' }).click();
+  await page.getByRole('button', { name: 'Delete account', exact: true }).click();
   const dlg = page.locator('dialog.modal.small[open]');
   await dlg.locator('input').fill('DELETE');
-  await dlg.getByRole('button', { name: 'Delete account' }).click();
+  await dlg.getByRole('button', { name: 'Delete account', exact: true }).click();
   const ask = page.locator('dialog.confirm-dialog');
   await expect(ask).toContainText('Deleting your account is permanent.');
   await ask.getByRole('button', { name: 'Cancel' }).click();

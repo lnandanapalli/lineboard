@@ -725,3 +725,11 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 .profile-name { display: flex; gap: 8px; }
 .profile-name .dlg-input { flex: 1; min-width: 0; }
 .field-label { font-size: 13px; font-weight: 600; }
+
+/* ----- ⓘ explanations ----- */
+.with-info { display: flex; align-items: center; gap: 4px; }
+.info-btn { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; flex: none; }
+.info-btn svg { width: 17px; height: 17px; }
+.info-btn:hover, .info-btn[aria-expanded="true"] { background: var(--bg); color: var(--accent); }
+.info-text { margin: 0; max-width: 300px; font-size: 14px; line-height: 1.45; }
+.set-switch .set-label.with-info { flex-wrap: wrap; }

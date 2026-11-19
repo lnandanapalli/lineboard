@@ -13,7 +13,8 @@ function fitBelow(el: HTMLElement, top: number) {
   el.style.overscrollBehavior = 'contain';
 }
 
-const popupHost = () => document.querySelector<HTMLElement>('.app') ?? document.body;
+/** Where popups go: inside an open modal dialog if there is one (it is drawn above everything else), else the app. */
+const popupHost = () => [...document.querySelectorAll<HTMLElement>('dialog[open]')].pop() ?? document.querySelector<HTMLElement>('.app') ?? document.body;
 
 /**
  * A toolbar dropdown: a button showing the current choice, opening a menu of options.
@@ -256,4 +257,26 @@ export function actionMenu(anchor: HTMLElement, label: string, items: ActionItem
     }
   });
   ({ close } = popover(anchor, list, { label }));
+}
+
+/**
+ * An ⓘ button that explains a setting in a small popup, so the screen shows the controls and the
+ * explanation is one tap away (as in most apps' settings). Safe inside a <label>: pressing it
+ * does not also toggle or focus the labelled control.
+ */
+export function infoButton(topic: string, text: string): HTMLButtonElement {
+  const b = h('button', { class: 'info-btn', type: 'button', 'aria-label': `About ${topic}`, title: `About ${topic}`, 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+  b.innerHTML = icons.info;
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (b.getAttribute('aria-expanded') === 'true') return void closeOpenMenu();
+    popover(b, h('p', { class: 'info-text' }, text), { label: topic });
+  });
+  return b;
+}
+
+/** A heading with its explanation behind an ⓘ. */
+export function infoHeading(tag: 'h4' | 'h3', title: string, text?: string | null) {
+  return h(tag, { class: 'with-info' }, h('span', {}, title), text ? infoButton(title, text) : null);
 }

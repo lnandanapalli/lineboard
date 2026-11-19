@@ -383,7 +383,7 @@ export class App {
         'div',
         { class: 'sidebar-foot' },
         // Name and picture, not the email: the sidebar is on screen in recordings and screen shares.
-        (this.accountChip = h('button', { class: 'account-chip', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement),
+        (this.accountChip = h('button', { class: 'account-chip', type: 'button' }) as HTMLButtonElement),
         h(
           'small',
           { class: 'foot-note' },
@@ -396,7 +396,8 @@ export class App {
       ),
       this.opts.signIn ? this.signInButton('sidebar') : null,
     );
-    this.accountChip.addEventListener('click', () => this.accountMenu());
+    // Your name and picture open Settings (profile, data controls and sign-out are all there).
+    this.accountChip.addEventListener('click', () => this.settingsPanel.open('account'));
     this.renderAccountChip();
     this.sidebar.append(this.resizeHandle());
     attachNameTips(this.sidebar, '.note-title, .book-title, .book-name');
@@ -1100,26 +1101,9 @@ export class App {
   private renderAccountChip() {
     const name = this.profile.name;
     this.accountChip.replaceChildren(avatar(this.profile, this.profileUrl, 32), h('span', { class: 'account-name' + (name ? '' : ' empty') }, name || 'Add your name'));
-    this.accountChip.insertAdjacentHTML('beforeend', icons.more);
-    this.accountChip.setAttribute('aria-label', `${name || 'Your profile'}: account menu`);
-  }
-
-  private accountMenu() {
-    actionMenu(this.accountChip, 'Account', [
-      { label: 'Profile', icon: icons.user, run: () => this.settingsPanel.open('account') },
-      { label: 'Data controls', icon: icons.archive, run: () => this.settingsPanel.open('data') },
-      { label: 'Settings', icon: icons.gear, run: () => this.openSettings() },
-      ...(this.opts.signOut
-        ? [{
-            label: 'Sign out',
-            icon: icons.close,
-            run: async () => {
-              if (this.queue.pending && !(await dialog({ title: 'Unsaved changes', message: 'Some strokes are still being saved. Sign out anyway?', ok: 'Sign out', danger: true }))) return;
-              await this.opts.signOut!();
-            },
-          }]
-        : []),
-    ]);
+    this.accountChip.insertAdjacentHTML('beforeend', icons.gear);
+    this.accountChip.setAttribute('aria-label', `${name || 'Your profile'}: settings`);
+    this.accountChip.title = 'Settings';
   }
 
   /** Change the name or picture (from Settings). */

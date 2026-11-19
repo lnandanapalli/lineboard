@@ -10,7 +10,12 @@ import { dialog, h, toast } from './util';
 import { isApple, shortcut } from './keys';
 import { orientation } from './orientation';
 import { avatar, MAX_NAME, type Profile } from './profile';
+import { infoButton, infoHeading } from './menu';
 import { IMAGE_TYPES } from './images';
+
+/** What end-to-end encryption does, behind the ⓘ next to its switch. */
+const ENC_INFO =
+  'Your ink, note titles, notebook names, pictures and version history are encrypted on your device with a key only you hold. The key is protected by an encryption passphrase (separate from your login password) and a recovery key. The server still sees when notes change and how much is in them, but cannot read them. If you lose both the passphrase and the recovery key, the notes cannot be recovered by anyone.';
 
 type Section = 'account' | 'data' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
@@ -159,8 +164,15 @@ export class SettingsPanel {
 
   // ----------------------------- helpers -----------------------------
 
+  /**
+   * A setting: its label (with an ⓘ for the explanation, if any) and its control. The ⓘ is kept
+   * out of a <label>, which would otherwise name the button instead of the control; the control
+   * is named directly.
+   */
   private row(label: string, control: HTMLElement, help?: string) {
-    return h('label', { class: 'set-row' }, h('span', { class: 'set-label' }, label), control, help ? h('small', {}, help) : null);
+    const field = control.matches('input, select, textarea') ? control : control.querySelector<HTMLElement>('input, select, textarea');
+    if (field && !field.hasAttribute('aria-label')) field.setAttribute('aria-label', label);
+    return h('div', { class: 'set-row' }, h('span', { class: 'set-label with-info' }, label, help ? infoButton(label, help) : null), control);
   }
 
   /** A labelled on/off switch row (the settings-screen standard, instead of a bare checkbox). */
@@ -178,7 +190,7 @@ export class SettingsPanel {
       this.host.changed();
     });
     this.addSync(paint);
-    return h('div', { class: 'set-switch' }, h('div', {}, h('div', { class: 'set-label' }, label), h('small', { class: 'muted' }, help)), sw);
+    return h('div', { class: 'set-switch' }, h('div', { class: 'set-label with-info' }, label, infoButton(label, help)), sw);
   }
 
   /** "Your data": built with the account pane, shown in Data controls. */
@@ -188,9 +200,15 @@ export class SettingsPanel {
     return h('div', { class: 'set-card' }, title ? h('h4', {}, title) : null, ...children);
   }
 
+  /** A card whose heading has an ⓘ with what the card is about. */
+  private infoCard(title: string, info: string, ...children: (Node | null)[]) {
+    return h('div', { class: 'set-card' }, infoHeading('h4', title, info), ...children);
+  }
+
   // ----------------------------- profile -----------------------------
 
   private profileBody = h('div', { class: 'profile-edit' });
+  private profileCard = h('div', { class: 'set-card' });
 
   /** Name and picture: shown in the sidebar instead of the email. */
   private renderProfile() {
@@ -228,7 +246,10 @@ export class SettingsPanel {
       h('div', { class: 'profile-row' }, avatar(profile, url, 64), h('div', { class: 'row-actions' }, pick, remove, file)),
       h('label', { class: 'field-label' }, 'Display name'),
       h('div', { class: 'profile-name' }, name, save),
-      h('p', { class: 'muted text-small' }, `Shown in the sidebar instead of your email. Up to ${MAX_NAME} characters; leave it empty for none.${this.host.user.email ? ' Your name and picture are stored with your account.' : ''}`),
+    );
+    this.profileCard.replaceChildren(
+      infoHeading('h4', 'Profile', `Your name and picture are shown in the sidebar instead of your email. Up to ${MAX_NAME} characters; leave the name empty for none.${this.host.user.email ? ' They are stored with your account.' : ''}`),
+      this.profileBody,
     );
   }
 
@@ -275,33 +296,29 @@ export class SettingsPanel {
     const erase = this.host.deleteAccount ?? this.host.deleteLocalData;
     const eraseBtn = erase ? (h('button', { class: 'btn danger', type: 'button' }, this.host.deleteAccount ? 'Delete account' : 'Delete everything on this device') as HTMLButtonElement) : null;
     eraseBtn?.addEventListener('click', () => void erase!());
-    this.dataCards = [this.card(
+    this.dataCards = [this.infoCard(
       'Your data',
-      h('p', { class: 'muted' }, 'Download a copy of everything: your account details and settings, and all your notebooks, notes (with their version history) and pictures as a Lineboard file (.lbd) you can import again.'),
-      h('div', { class: 'row-actions' }, exportBtn),
-      h('p', { class: 'muted' }, 'Move notes between accounts or devices: export them as a Lineboard file (.lbd), then import it. Exporting all notes keeps their version history; a single note or notebook, exported from the Notes list to share, has only its current content.'),
-      h('div', { class: 'row-actions' }, allBtn, importBtn),
-      eraseBtn
-        ? h(
-            'p',
-            { class: 'muted' },
-            this.host.deleteAccount
-              ? 'Deleting your account removes it and everything in it from our servers, permanently.'
-              : 'Deleting removes every note and picture saved in this browser, permanently.',
-          )
-        : null,
-      eraseBtn ? h('div', { class: 'row-actions' }, eraseBtn) : null,
-    )];
+      'Download my data: a copy of everything, your account details and settings, and all your notebooks, notes (with their version history) and pictures as a Lineboard file (.lbd) you can import again. Export and import move notes between accounts or devices; exporting all notes keeps their version history, while a single note or notebook exported from the Notes list to share has only its current content.',
+      h('div', { class: 'row-actions' }, exportBtn, allBtn, importBtn),
+    ), ...(eraseBtn
+      ? [this.infoCard(
+          this.host.deleteAccount ? 'Delete account' : 'Delete local data',
+          this.host.deleteAccount
+            ? 'Deleting your account removes it and everything in it from our servers, permanently. You are asked to confirm first.'
+            : 'Deleting removes every note and picture saved in this browser, permanently. You are asked to confirm first.',
+          h('div', { class: 'row-actions' }, eraseBtn),
+        )]
+      : [])];
     return [
-      this.card('Profile', this.profileBody),
+      this.profileCard,
       this.card(null, account),
-      this.card('Storage', h('p', { class: 'muted' }, where), h('p', { class: 'muted' }, store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : '')),
+      this.infoCard('Storage', store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : 'Nothing leaves this device.', h('p', { class: 'muted' }, where)),
     ];
   }
 
   /** Data controls: what is archived, a copy of everything, moving notes, and erasing it all. */
   private dataPane(): HTMLElement[] {
-    return [this.card('Archived', h('p', { class: 'muted' }, 'Archived notes and notebooks are hidden from the sidebar and search. They are kept, with their history, until you restore or delete them.'), this.archivedBody), ...this.dataCards];
+    return [this.infoCard('Archived', 'Archived notes and notebooks are hidden from the sidebar and search. They are kept, with their history, until you restore or delete them. Archive one from its ⋯ menu.', this.archivedBody), ...this.dataCards];
   }
   private archivedBody = h('div', { class: 'archived-list' });
 
@@ -326,7 +343,7 @@ export class SettingsPanel {
       ...notebooks.map((b) => row('notebook', b.id, b.name, b.notes === 1 ? '1 note' : `${b.notes} notes`)),
       ...notes.map((n) => row('note', n.id, n.title || 'Untitled', `in ${n.notebook}`)),
     ];
-    this.archivedBody.replaceChildren(items.length ? h('ul', { class: 'archived-items' }, ...items) : h('p', { class: 'muted' }, 'Nothing is archived. Use “Archive” in a note’s or notebook’s ⋯ menu.'));
+    this.archivedBody.replaceChildren(items.length ? h('ul', { class: 'archived-items' }, ...items) : h('p', { class: 'muted' }, 'Nothing is archived.'));
   }
 
   // ----------------------------- sign-in & devices -----------------------------
@@ -420,7 +437,6 @@ export class SettingsPanel {
           (on) => orientation.setManual(on),
         ),
       ),
-      this.card(null, h('p', { class: 'muted' }, 'Choose Split, Strips, Multi-strip or Free whiteboard from the Mode menu in the toolbar.')),
     ];
   }
 
@@ -484,7 +500,7 @@ export class SettingsPanel {
     return [
       this.card(
         'Palm rejection inside the unlocked strip',
-        this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts. Calibrate below for your stylus.'),
+        this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts, a pen tip as a small one. Write in the box below with your stylus to calibrate it.'),
         h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
         this.contactReadout,
       ),
@@ -515,32 +531,20 @@ export class SettingsPanel {
       h(
         'div',
         { class: 'set-switch' },
-        h('div', {}, h('div', { class: 'set-label' }, 'End-to-end encryption'), h('small', { class: 'muted enc-status' }, status)),
+        h('div', {}, h('div', { class: 'set-label with-info' }, 'End-to-end encryption', infoButton('End-to-end encryption', ENC_INFO)), h('small', { class: 'muted enc-status' }, status)),
         toggle,
       );
-    const details = this.card(
-      'How it works',
-      h(
-        'ul',
-        { class: 'enc-list' },
-        h('li', {}, 'Your ink, note titles and notebook names are encrypted on your device with a key only you hold.'),
-        h('li', {}, 'The key is protected by an encryption passphrase, separate from your login password, plus a recovery key.'),
-        h('li', {}, 'The server still sees when notes change and how much is in them, but cannot read them.'),
-        h('li', {}, 'If you lose both the passphrase and the recovery key, the notes cannot be recovered by anyone.'),
-      ),
-    );
 
     if (!vault) {
       const msg = this.host.signInButton
         ? 'Encryption is available with an account. Notes you make without one stay in this browser and are never uploaded.'
         : 'Local mode keeps notes only on this device; nothing is uploaded, so there is nothing to encrypt in transit.';
-      body.replaceChildren(this.card(null, header(sw(false, true), msg), this.host.signInButton ? this.host.signInButton() : null), details);
+      body.replaceChildren(this.card(null, header(sw(false, true), msg), this.host.signInButton ? this.host.signInButton() : null));
       return;
     }
     if (!vault.supported) {
       body.replaceChildren(
         this.card(null, header(sw(false, true), 'Not available yet: this server’s database needs an update first. Its operator re-runs supabase/schema.sql.')),
-        details,
       );
       return;
     }
@@ -583,14 +587,13 @@ export class SettingsPanel {
         location.reload();
       });
       parts.push(
-        this.card(
+        this.infoCard(
           'Keys',
-          h('p', { class: 'muted' }, 'Lost your recovery key, or think someone saw it? Make a new one; the old one stops working.'),
+          'Lost your recovery key, or think someone saw it? Make a new one; the old one stops working. Lock this device makes Lineboard forget the key here, so the passphrase is needed again.',
           h('div', { class: 'set-buttons' }, change, recovery, lock),
         ),
       );
     }
-    parts.push(details);
     body.replaceChildren(...parts);
   }
 

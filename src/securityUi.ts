@@ -1,3 +1,4 @@
+import { infoHeading } from './menu';
 import type { Factor } from '@supabase/supabase-js';
 import { MIN_PASSWORD } from './auth';
 import { MAX_PASSWORD } from './limits';
@@ -88,8 +89,7 @@ export class SecurityPane {
 
   private renderPassword() {
     this.passwordCard.replaceChildren(
-      h('h4', {}, 'Password'),
-      h('p', { class: 'muted' }, 'Changing your password signs you out on every other device.'),
+      infoHeading('h4', 'Password', 'Changing your password signs you out on every other device.'),
       h('div', { class: 'set-buttons' }, this.btn('Change password', () => void changePasswordDialog(this.account, this.email))),
     );
   }
@@ -135,26 +135,13 @@ export class SecurityPane {
       }, list.length ? '' : 'primary');
       put(
         card,
-        h('h4', {}, 'Two-step verification'),
-        h(
-          'div',
-          { class: 'set-switch' },
-          h(
-            'div',
-            {},
-            h('div', { class: 'set-label' }, 'Authenticator app'),
-            h(
-              'small',
-              { class: 'muted' },
-              list.length
-                ? 'Signing in asks for a code from your authenticator app as well as your password or passkey.'
-                : 'Ask for a 6-digit code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy...) whenever you sign in.',
-            ),
-          ),
-          h('span', { class: 'pill ' + (list.length ? 'on' : '') }, list.length ? 'On' : 'Off'),
+        infoHeading(
+          'h4',
+          'Two-step verification',
+          'Signing in also asks for a 6-digit code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy...), as well as your password or passkey. Add the same account to a second phone or password manager as a backup, in case you lose the first.',
         ),
+        h('div', { class: 'set-switch' }, h('div', { class: 'set-label' }, 'Authenticator app'), h('span', { class: 'pill ' + (list.length ? 'on' : '') }, list.length ? 'On' : 'Off')),
         list.length ? h('ul', { class: 'item-list' }, ...rows) : null,
-        list.length === 1 ? h('small', { class: 'muted' }, 'Tip: add the same account to a second phone or password manager as a backup in case you lose this one.') : null,
         h('div', { class: 'set-buttons' }, add),
       );
     } catch (e) {
@@ -166,9 +153,9 @@ export class SecurityPane {
 
   private async renderPasskeys() {
     const card = this.passkeyCard;
-    const intro = h('p', { class: 'muted' }, 'Sign in with your fingerprint, face or device PIN instead of typing a password. Passkeys cannot be phished or reused.');
+    const PASSKEY_INFO = 'Sign in with your fingerprint, face or device PIN instead of typing a password. Passkeys cannot be phished or reused.';
     if (!passkeysSupported()) {
-      card.replaceChildren(h('h4', {}, 'Passkeys'), intro, h('p', { class: 'muted' }, 'This browser does not support passkeys.'));
+      card.replaceChildren(infoHeading('h4', 'Passkeys', PASSKEY_INFO), h('p', { class: 'muted' }, 'This browser does not support passkeys.'));
       return;
     }
     this.loading(card, 'Passkeys');
@@ -223,11 +210,10 @@ export class SecurityPane {
         }
         void this.renderPasskeys();
       });
-      put(card, h('h4', {}, 'Passkeys'), intro, list.length ? h('ul', { class: 'item-list' }, ...rows) : null, h('div', { class: 'set-buttons' }, add));
+      put(card, infoHeading('h4', 'Passkeys', PASSKEY_INFO), list.length ? h('ul', { class: 'item-list' }, ...rows) : null, h('div', { class: 'set-buttons' }, add));
     } catch (e) {
       card.replaceChildren(
-        h('h4', {}, 'Passkeys'),
-        intro,
+        infoHeading('h4', 'Passkeys', PASSKEY_INFO),
         h('p', { class: 'muted' }, 'Passkeys are not turned on for this Lineboard server yet. ' + (e instanceof AccountError && e.code ? '' : `(${(e as Error).message})`)),
       );
     }
@@ -287,8 +273,7 @@ export class SecurityPane {
     });
     all.toggleAttribute('disabled', others === 0);
     card.replaceChildren(
-      h('h4', {}, 'Signed-in devices'),
-      h('p', { class: 'muted' }, "Devices where you're signed in to " + (this.email ?? 'your account') + '. Sign out any you don’t recognise, then change your password.'),
+      infoHeading('h4', 'Signed-in devices', 'Devices where you’re signed in to your account. Sign out any you don’t recognise, then change your password.'),
       h('ul', { class: 'item-list' }, ...rows),
       h('div', { class: 'set-buttons' }, all),
     );
