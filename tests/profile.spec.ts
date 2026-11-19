@@ -73,9 +73,10 @@ test('signed in: the account menu replaces the email; the name and picture are s
   await attachBoard(page);
   await openSidebar(page);
   await expect(page.locator('.sidebar')).not.toContainText('friend@example.com');
+  // The name and picture open Settings at the profile directly (no menu, so no Sign out to hit by mistake).
   await chip(page).click();
-  await expect(page.getByRole('menuitem')).toHaveText(['Profile', 'Data controls', 'Settings', 'Sign out']);
-  await page.getByRole('menuitem', { name: 'Profile' }).click();
+  await expect(page.locator('.settings-modal')).toBeVisible();
+  await expect(page.getByRole('menu')).toHaveCount(0);
   await page.getByLabel('Display name').fill('Grace Hopper');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect.poll(() => db.meta?.display_name).toBe('Grace Hopper');
@@ -106,16 +107,24 @@ test('initials and names: two letters from the first and last words, names clean
   expect(cleanName(42)).toBe('');
 });
 
-test('the account menu at the bottom of the sidebar opens upwards, fully on screen', async ({ page }) => {
+test('settings explain themselves behind ⓘ buttons: a popup opens and closes, and the setting is untouched', async ({ page }) => {
   await setup(page);
-  await openSidebar(page);
-  await chip(page).click();
-  const menu = page.getByRole('menu', { name: 'Account' });
-  await expect(menu).toBeVisible();
-  const box = (await menu.boundingBox())!;
-  const chipBox = (await chip(page).boundingBox())!;
-  expect(box.y + box.height).toBeLessThanOrEqual(chipBox.y);
-  expect(box.y).toBeGreaterThanOrEqual(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  // No long explanations on the screen itself.
+  await expect(page.locator('.settings-pane:not([hidden])')).not.toContainText('Steadies shaky lines');
+  const before = await page.getByRole('slider', { name: 'Smoothing' }).inputValue();
+  await page.getByRole('button', { name: 'About Smoothing' }).click();
+  const tip = page.getByRole('dialog', { name: 'Smoothing' });
+  await expect(tip).toContainText('Steadies shaky lines');
+  await expect(tip).toBeInViewport();
+  expect(await page.getByRole('slider', { name: 'Smoothing' }).inputValue()).toBe(before);
+  await page.keyboard.press('Escape');
+  await expect(tip).toHaveCount(0);
+  await expect(page.locator('.settings-modal')).toBeVisible(); // Escape closed the popup, not Settings
+  await page.locator('.settings-tab', { hasText: 'Encryption' }).click();
+  await page.getByRole('button', { name: 'About End-to-end encryption' }).click();
+  await expect(page.getByRole('dialog', { name: 'End-to-end encryption' })).toContainText('cannot be recovered by anyone');
 });
 
 test('turning encryption on also encrypts a profile picture added before', async ({ page }) => {
@@ -150,4 +159,31 @@ test('turning encryption on also encrypts a profile picture added before', async
   await expect(dlg).toContainText('Your notes are encrypted', { timeout: 20_000 });
   // Only ciphertext is stored now ("LBE1" marks an encrypted file).
   expect(db.images!.get(`${USER_ID}/profile-picture`)!.body.subarray(0, 4).toString()).toBe('LBE1');
+});
+
+test('with the app turned 90°, an ⓘ popup opens next to its button, inside Settings', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await setup(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  await page.getByRole('switch', { name: 'Manual orientation' }).click();
+  await page.locator('.settings-close').click();
+  await page.getByRole('button', { name: 'Rotate right' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-rotation', '90');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  const btn = page.getByRole('button', { name: 'About Smoothing' });
+  await btn.click();
+  const tip = page.getByRole('dialog', { name: 'Smoothing' });
+  await expect(tip).toBeVisible();
+  const t = (await tip.boundingBox())!;
+  const b = (await btn.boundingBox())!;
+  const d = (await page.locator('.settings-modal').boundingBox())!;
+  // Inside the Settings window, and close to its button (on screen the app is turned, so either side).
+  expect(t.x).toBeGreaterThanOrEqual(d.x - 1);
+  expect(t.y).toBeGreaterThanOrEqual(d.y - 1);
+  expect(t.x + t.width).toBeLessThanOrEqual(d.x + d.width + 1);
+  expect(t.y + t.height).toBeLessThanOrEqual(d.y + d.height + 1);
+  const gap = Math.max(0, Math.max(t.x - (b.x + b.width), b.x - (t.x + t.width))) + Math.max(0, Math.max(t.y - (b.y + b.height), b.y - (t.y + t.height)));
+  expect(gap).toBeLessThan(40);
 });

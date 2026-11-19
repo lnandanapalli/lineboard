@@ -13,7 +13,8 @@ function fitBelow(el: HTMLElement, top: number) {
   el.style.overscrollBehavior = 'contain';
 }
 
-const popupHost = () => document.querySelector<HTMLElement>('.app') ?? document.body;
+/** Where popups go: inside an open modal dialog if there is one (it is drawn above everything else), else the app. */
+const popupHost = () => [...document.querySelectorAll<HTMLElement>('dialog[open]')].pop() ?? document.querySelector<HTMLElement>('.app') ?? document.body;
 
 /**
  * A toolbar dropdown: a button showing the current choice, opening a menu of options.
@@ -174,15 +175,21 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: { label
   openMenu?.close();
   const panel = h('div', { class: 'popover', role: 'dialog', 'aria-label': opts.label }, content);
   popupHost().append(panel);
-  const r = appRect(anchor);
-  panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, appViewport().width - panel.offsetWidth - 8))}px`;
-  // Below the button, or above it when it sits low on the screen (the sidebar's account menu).
-  const vh = appViewport().height;
-  if (r.bottom + 6 + panel.offsetHeight > vh - 8 && r.top - 6 - panel.offsetHeight >= 8) {
+  // Where to measure from. Normally the screen (in the app's own coordinates, which follow its
+  // rotation). A host that is itself turned (a dialog with the app rotated) is the frame its
+  // fixed-position children are placed in, so the popup is placed within it instead.
+  const host = panel.parentElement!;
+  const turned = host.tagName === 'DIALOG' && getComputedStyle(host).rotate !== 'none' && getComputedStyle(host).rotate !== '';
+  const frame = turned ? appRect(host) : { left: 0, top: 0, ...appViewport() };
+  const a = appRect(anchor);
+  const r = { left: a.left - frame.left, top: a.top - frame.top, bottom: a.bottom - frame.top, width: a.width };
+  panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, frame.width - panel.offsetWidth - 8))}px`;
+  // Below the button, or above it when it sits low (the sidebar's account chip, the end of a dialog).
+  if (r.bottom + 6 + panel.offsetHeight > frame.height - 8 && r.top - 6 - panel.offsetHeight >= 8) {
     panel.style.top = `${r.top - 6 - panel.offsetHeight}px`;
   } else {
     panel.style.top = `${r.bottom + 6}px`;
-    fitBelow(panel, r.bottom + 6);
+    if (!turned) fitBelow(panel, r.bottom + 6);
   }
   anchor.setAttribute('aria-expanded', 'true');
   const onOutside = (e: PointerEvent) => {
@@ -256,4 +263,26 @@ export function actionMenu(anchor: HTMLElement, label: string, items: ActionItem
     }
   });
   ({ close } = popover(anchor, list, { label }));
+}
+
+/**
+ * An ⓘ button that explains a setting in a small popup, so the screen shows the controls and the
+ * explanation is one tap away (as in most apps' settings). Safe inside a <label>: pressing it
+ * does not also toggle or focus the labelled control.
+ */
+export function infoButton(topic: string, text: string): HTMLButtonElement {
+  const b = h('button', { class: 'info-btn', type: 'button', 'aria-label': `About ${topic}`, title: `About ${topic}`, 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+  b.innerHTML = icons.info;
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (b.getAttribute('aria-expanded') === 'true') return void closeOpenMenu();
+    popover(b, h('p', { class: 'info-text' }, text), { label: topic });
+  });
+  return b;
+}
+
+/** A heading with its explanation behind an ⓘ. */
+export function infoHeading(tag: 'h4' | 'h3', title: string, text?: string | null) {
+  return h(tag, { class: 'with-info' }, h('span', {}, title), text ? infoButton(title, text) : null);
 }
