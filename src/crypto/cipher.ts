@@ -192,3 +192,33 @@ function split(sealed: string) {
   if (bytes.length < 12 + 16) throw new CryptoError('Ciphertext too short');
   return { iv: bytes.slice(0, 12), ct: bytes.slice(12) };
 }
+
+// ----------------------------- binary data (images) -----------------------------
+
+/** Encrypted files start with these bytes, so a reader can tell them from plain images. */
+const BYTES_MAGIC = new Uint8Array([0x4c, 0x42, 0x45, 0x31]); // "LBE1"
+
+export function isSealedBytes(bytes: Uint8Array): boolean {
+  return bytes.length > BYTES_MAGIC.length && BYTES_MAGIC.every((b, i) => bytes[i] === b);
+}
+
+/** Encrypt a file's bytes; `context` (e.g. "image:<id>") is bound in as associated data. */
+export async function sealBytes(key: CryptoKey, context: string, data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = randomBytes(12);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(context) }, key, data));
+  const out = new Uint8Array(BYTES_MAGIC.length + iv.length + ct.length);
+  out.set(BYTES_MAGIC);
+  out.set(iv, BYTES_MAGIC.length);
+  out.set(ct, BYTES_MAGIC.length + iv.length);
+  return out;
+}
+
+export async function openBytes(key: CryptoKey, context: string, sealed: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = sealed.slice(BYTES_MAGIC.length, BYTES_MAGIC.length + 12);
+  const ct = sealed.slice(BYTES_MAGIC.length + 12);
+  try {
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(context) }, key, ct));
+  } catch {
+    throw new CryptoError('Could not decrypt image');
+  }
+}

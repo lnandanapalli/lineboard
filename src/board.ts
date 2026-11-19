@@ -26,6 +26,8 @@ export interface BoardCallbacks {
   onUnlockChange(unlocked: number[]): void;
   /** Split mode: the divider was moved (fraction of the board's height). */
   onSplitRatio?(ratio: number): void;
+  /** Load a picture referenced by an 'image' stroke. */
+  loadImage?(id: string, type: string): Promise<Blob>;
 }
 
 interface Cached {
@@ -41,7 +43,7 @@ interface Cached {
 interface ActiveInput {
   pointerId: number;
   pointerType: string;
-  kind: 'draw' | 'erase' | 'shape' | 'lasso' | 'move';
+  kind: 'draw' | 'erase' | 'shape' | 'lasso' | 'move' | 'scale';
   start: number;
   points: number[];
   erased: Cached[];
@@ -54,6 +56,8 @@ interface ActiveInput {
   /** Select tool, rectangle mode: the box being dragged out. */
   rect?: { x0: number; y0: number; x1: number; y1: number };
   move?: { x0: number; y0: number; dx: number; dy: number };
+  /** Select tool: resizing the selection from its corner handle, about its top-left corner. */
+  scale?: { ax: number; ay: number; bx: number; by: number; f: number };
 }
 
 /** Is (x, y) inside the polygon [x0, y0, x1, y1, ...]? (ray casting) */
@@ -66,17 +70,42 @@ function inPolygon(poly: number[], x: number, y: number): boolean {
   return inside;
 }
 
+/** Do segments (a, b) and (c, d) cross? */
+function segmentsCross(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
+  const d1 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+  const d2 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+  const d3 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  const d4 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
+
+/** Does a polyline [x, y, x, y...] cross the closed polygon's outline? */
+function crossesOutline(line: number[], poly: number[]): boolean {
+  for (let i = 2; i < line.length; i += 2)
+    for (let j = 0, k = poly.length - 2; j < poly.length; k = j, j += 2)
+      if (segmentsCross(line[i - 2], line[i - 1], line[i], line[i + 1], poly[k], poly[k + 1], poly[j], poly[j + 1])) return true;
+  return false;
+}
+
+/** A copy of a stroke scaled by f about (ax, ay). Text grows with it; ink keeps its pen width. */
+function scaled(s: Stroke, ax: number, ay: number, f: number): Stroke {
+  const p = s.points.slice();
+  for (let i = 0; i < p.length; i += 3) {
+    p[i] = Math.round((ax + (p[i] - ax) * f) * 10) / 10;
+    p[i + 1] = Math.round((ay + (p[i + 1] - ay) * f) * 10) / 10;
+  }
+  const width = s.tool === 'text' ? Math.min(100, Math.max(4, Math.round(s.width * f * 10) / 10)) : s.width;
+  return { ...s, points: p, width };
+}
+
 /** A copy of a stroke moved by (dx, dy); `id` defaults to the same one. */
 function moved(s: Stroke, dx: number, dy: number, id = s.id): Stroke {
   const p = s.points.slice();
-  if (s.tool === 'text') {
-    p[0] = Math.round((p[0] + dx) * 10) / 10;
-    p[1] = Math.round((p[1] + dy) * 10) / 10;
-  } else
-    for (let i = 0; i < p.length; i += 3) {
-      p[i] = Math.round((p[i] + dx) * 10) / 10;
-      p[i + 1] = Math.round((p[i + 1] + dy) * 10) / 10;
-    }
+  // Every kind keeps x, y, p triples (text: its corner; pictures: two corners), so one loop moves all.
+  for (let i = 0; i < p.length; i += 3) {
+    p[i] = Math.round((p[i] + dx) * 10) / 10;
+    p[i + 1] = Math.round((p[i + 1] + dy) * 10) / 10;
+  }
   return { ...s, id, points: p };
 }
 
@@ -165,6 +194,8 @@ export class Board {
   /** Two-finger gesture: the page point under the fingers stays under them while they move and pinch. */
   private pan: { startDist: number; startZoom: number; anchorX: number; anchorY: number } | null = null;
   private eraserCursor: { x: number; y: number } | null = null;
+  /** Pictures for 'image' strokes, by image id. */
+  private images = new Map<string, ImageBitmap | 'loading' | 'error'>();
   /** Select tool: the selected strokes, and the Delete / Duplicate bar shown above them. */
   private selection = new Set<Cached>();
   private selectBar: HTMLElement | null = null;
@@ -328,7 +359,8 @@ export class Board {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.setTransform(s, 0, 0, s, 0, 0);
-    for (const cs of this.strokes) this.drawStroke(ctx, cs);
+    await this.allImagesLoaded();
+    for (const pass of [true, false]) for (const cs of this.strokes) if ((cs.s.tool === 'image') === pass) this.drawStroke(ctx, cs);
     return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Export failed'))), 'image/png'));
   }
 
@@ -339,6 +371,13 @@ export class Board {
   // ----------------------------- geometry -----------------------------
 
   private cache(s: Stroke): Cached {
+    if (s.tool === 'image') {
+      const [l, t, , r, b] = s.points;
+      const c: Cached = { s, minX: Math.min(l, r), minY: Math.min(t, b), maxX: Math.max(l, r), maxY: Math.max(t, b), variable: false, path: null };
+      this.strokes.push(c);
+      this.byId.set(s.id, c);
+      return c;
+    }
     if (s.tool === 'text') {
       const b = textBox(s.text ?? '', s.width);
       const c: Cached = { s, minX: s.points[0], minY: s.points[1], maxX: s.points[0] + b.w, maxY: s.points[1] + b.h, variable: false, path: null };
@@ -615,6 +654,12 @@ export class Board {
     } catch {
       /* ignore */
     }
+    if (this.tool === 'select' && this.onHandle(pt.x, pt.y)) {
+      const b = this.selectionBox()!;
+      this.active = { pointerId: e.pointerId, pointerType: e.pointerType, kind: 'scale', start: performance.now(), points: [], erased: [], raw: null, scale: { ax: b.minX, ay: b.minY, bx: b.maxX, by: b.maxY, f: 1 } };
+      this.invalidate('ink', 'live');
+      return;
+    }
     if (this.tool === 'select') {
       // Inside the current selection: drag it. Elsewhere: start a new lasso.
       const b = this.selectionBox();
@@ -683,6 +728,12 @@ export class Board {
         return;
       }
       const pt = this.toLogical(ev.clientX, ev.clientY);
+      if (a.scale) {
+        const { ax, ay, bx, by } = a.scale;
+        a.scale.f = Math.max(0.05, Math.max((pt.x - ax) / Math.max(1, bx - ax), (pt.y - ay) / Math.max(1, by - ay)));
+        this.invalidate('live');
+        continue;
+      }
       if (a.move) {
         a.move.dx = pt.x - a.move.x0;
         a.move.dy = pt.y - a.move.y0;
@@ -806,6 +857,7 @@ export class Board {
     const r = ERASER_RADIUS;
     const hit: Cached[] = [];
     for (const c of this.strokes) {
+      if (c.s.tool === 'image') continue; // the eraser removes ink, not pictures (select + Delete does)
       if (x < c.minX - r || x > c.maxX + r || y < c.minY - r || y > c.maxY + r) continue;
       if (this.strokeHit(c, x, y, r)) hit.push(c);
     }
@@ -821,7 +873,7 @@ export class Board {
   }
 
   private strokeHit(c: Cached, x: number, y: number, r: number): boolean {
-    if (c.s.tool === 'text') return x >= c.minX - r && x <= c.maxX + r && y >= c.minY - r && y <= c.maxY + r;
+    if (c.s.tool === 'text' || c.s.tool === 'image') return x >= c.minX - r && x <= c.maxX + r && y >= c.minY - r && y <= c.maxY + r;
     const p = c.s.points;
     const tol = r + c.s.width / 2;
     const tol2 = tol * tol;
@@ -984,22 +1036,123 @@ export class Board {
       this.invalidate('ink', 'live');
       return;
     }
+    // Anything the loop or box touches is selected: a point inside it, or a line crossing its edge.
+    let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
+    for (let i = 0; i < poly.length; i += 2) {
+      px0 = Math.min(px0, poly[i]);
+      py0 = Math.min(py0, poly[i + 1]);
+      px1 = Math.max(px1, poly[i]);
+      py1 = Math.max(py1, poly[i + 1]);
+    }
     for (const c of this.strokes) {
-      if (c.s.tool === 'text') {
-        if (inPolygon(poly, (c.minX + c.maxX) / 2, (c.minY + c.maxY) / 2)) this.selection.add(c);
-        continue;
-      }
-      const p = c.s.points;
-      const n = p.length / 3;
-      const step = Math.max(1, Math.floor(n / 40));
-      let inside = 0, total = 0;
-      for (let i = 0; i < n; i += step) {
-        total++;
-        if (inPolygon(poly, p[i * 3], p[i * 3 + 1])) inside++;
-      }
-      if (inside / total >= 0.6) this.selection.add(c);
+      if (c.maxX < px0 || c.minX > px1 || c.maxY < py0 || c.minY > py1) continue;
+      if (this.touches(c, poly)) this.selection.add(c);
     }
     this.invalidate('ink', 'live');
+  }
+
+  private touches(c: Cached, poly: number[]): boolean {
+    if (c.s.tool === 'text' || c.s.tool === 'image') {
+      // A box: a corner inside the loop, the loop inside the box, or the outlines crossing.
+      const box = [c.minX, c.minY, c.maxX, c.minY, c.maxX, c.maxY, c.minX, c.maxY];
+      for (let i = 0; i < 8; i += 2) if (inPolygon(poly, box[i], box[i + 1])) return true;
+      if (inPolygon(box, poly[0], poly[1])) return true;
+      return crossesOutline([...box, box[0], box[1]], poly);
+    }
+    const p = c.s.points;
+    const n = p.length / 3;
+    const step = Math.max(1, Math.floor(n / 200));
+    const line: number[] = [];
+    for (let i = 0; i < n; i += step) {
+      if (inPolygon(poly, p[i * 3], p[i * 3 + 1])) return true;
+      line.push(p[i * 3], p[i * 3 + 1]);
+    }
+    line.push(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
+    return crossesOutline(line, poly);
+  }
+
+  /** Select these strokes (e.g. a picture just inserted). */
+  select(ids: string[]) {
+    this.selection = new Set(ids.map((id) => this.byId.get(id)).filter((c): c is Cached => !!c));
+    this.invalidate('ink', 'live');
+  }
+
+  private finishScale(f: number, ax: number, ay: number) {
+    this.invalidate('ink', 'live');
+    if (Math.abs(f - 1) < 0.01) return;
+    const before = [...this.selection].map((c) => c.s);
+    const after = before.map((st) => scaled(st, ax, ay, f));
+    this.replaceCached(before, after);
+    this.cb.onStrokesReplaced(before, after);
+  }
+
+  /** The resize handle sits on the selection's bottom-right corner. */
+  private onHandle(x: number, y: number): boolean {
+    const b = this.selectionBox();
+    if (!b) return false;
+    return Math.hypot(x - b.maxX, y - b.maxY) <= 18 / this.scale;
+  }
+
+  // ----------------------------- pictures -----------------------------
+
+  /** Place a picture in the middle of the view, at most 600 page units wide, and select it. */
+  insertImage(id: string, type: string, bitmap: ImageBitmap): Stroke {
+    this.commitText();
+    let w = Math.min(600, (bitmap.width * PAGE_W) / Math.max(1, this.viewW));
+    let h = (w * bitmap.height) / bitmap.width;
+    const maxH = (this.viewH / this.scale) * 0.8;
+    if (h > maxH) {
+      w *= maxH / h;
+      h = maxH;
+    }
+    const cx = this.scrollX + this.viewW / this.scale / 2;
+    const cy = this.scrollY + this.viewH / this.scale / 2;
+    const l = Math.max(4, Math.min(PAGE_W - w - 4, cx - w / 2));
+    const t = Math.max(4, cy - h / 2);
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    const stroke: Stroke = {
+      id: uuid(),
+      note_id: this.noteId,
+      tool: 'image',
+      color: type,
+      width: 1,
+      points: [r1(l), r1(t), 0, r1(l + w), r1(t + h), 0],
+      text: id,
+      created_at: new Date().toISOString(),
+    };
+    this.images.set(id, bitmap);
+    this.cache(stroke);
+    this.invalidate('ink', 'bg', 'margin');
+    this.cb.onStrokesAdded([stroke]);
+    return stroke;
+  }
+
+  /** The picture for an image stroke, starting to load it if needed. */
+  private imageFor(s: Stroke): ImageBitmap | 'loading' | 'error' {
+    const id = s.text ?? '';
+    const have = this.images.get(id);
+    if (have) return have;
+    this.images.set(id, 'loading');
+    const load = this.cb.loadImage;
+    if (!load) {
+      this.images.set(id, 'error');
+      return 'error';
+    }
+    load(id, s.color)
+      .then((blob) => createImageBitmap(blob))
+      .then((bm) => this.images.set(id, bm))
+      .catch((e) => {
+        console.warn('Picture not loaded', e);
+        this.images.set(id, 'error');
+      })
+      .finally(() => this.invalidate('ink'));
+    return 'loading';
+  }
+
+  /** Wait for every picture on the page (before exporting). */
+  private async allImagesLoaded() {
+    for (const c of this.strokes) if (c.s.tool === 'image') this.imageFor(c.s);
+    for (let i = 0; i < 100 && [...this.images.values()].includes('loading'); i++) await new Promise((r) => setTimeout(r, 50));
   }
 
   private finishMove(dx: number, dy: number) {
@@ -1042,7 +1195,7 @@ export class Board {
 
   /** The Delete / Duplicate bar floats above the selection. */
   private positionSelectBar(box: { minX: number; minY: number; maxX: number } | null) {
-    if (!box || this.active?.kind === 'move') {
+    if (!box || this.active?.kind === 'move' || this.active?.kind === 'scale') {
       this.selectBar?.remove();
       this.selectBar = null;
       return;
@@ -1099,6 +1252,7 @@ export class Board {
       return this.finishLasso([x0, y0, x1, y0, x1, y1, x0, y1]); // same "mostly inside" rule; a tap picks one
     }
     if (a.move) return this.finishMove(a.move.dx, a.move.dy);
+    if (a.scale) return this.finishScale(a.scale.f, a.scale.ax, a.scale.ay);
     if (a.kind === 'erase') {
       if (this.tool === 'eraser' && a.pointerType !== 'mouse') this.eraserCursor = null;
       if (a.erased.length) this.cb.onStrokesRemoved(a.erased.map((c) => c.s));
@@ -1287,15 +1441,40 @@ export class Board {
     const y0 = this.scrollY;
     const y1 = this.scrollY + this.viewH / this.scale;
     const hidden = this.editor?.original;
-    const dragging = this.active?.kind === 'move';
-    for (const c of this.strokes) {
-      if (c.maxY < y0 || c.minY > y1 || c === hidden || (dragging && this.selection.has(c))) continue;
-      this.drawStroke(ctx, c);
-    }
+    const dragging = this.active?.kind === 'move' || this.active?.kind === 'scale';
+    // Pictures first, so ink is always drawn on top of them.
+    for (const pass of [true, false])
+      for (const c of this.strokes) {
+        if ((c.s.tool === 'image') !== pass) continue;
+        if (c.maxY < y0 || c.minY > y1 || c === hidden || (dragging && this.selection.has(c))) continue;
+        this.drawStroke(ctx, c);
+      }
   }
 
   private drawStroke(ctx: CanvasRenderingContext2D, c: Cached) {
     const s = c.s;
+    if (s.tool === 'image') {
+      const img = this.imageFor(s);
+      const w = c.maxX - c.minX, h = c.maxY - c.minY;
+      if (img !== 'loading' && img !== 'error') {
+        ctx.drawImage(img, c.minX, c.minY, w, h);
+        return;
+      }
+      ctx.save();
+      ctx.fillStyle = '#f1f5f9';
+      ctx.fillRect(c.minX, c.minY, w, h);
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(c.minX, c.minY, w, h);
+      if (img === 'error') {
+        ctx.fillStyle = '#64748b';
+        ctx.font = `14px ${TEXT_FONT}`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Picture unavailable', c.minX + 10, c.minY + h / 2);
+      }
+      ctx.restore();
+      return;
+    }
     if (s.tool === 'text') {
       ctx.save();
       ctx.fillStyle = s.color;
@@ -1390,17 +1569,37 @@ export class Board {
       ctx.stroke();
       ctx.restore();
     }
-    const box = this.selectionBox();
+    let box = this.selectionBox();
+    if (box && a?.scale) {
+      // Resizing: draw the selection at its new size (pictures underneath ink, as on the page).
+      const { ax, ay, f } = a.scale;
+      const preview = [...this.selection].map((c) => ({ ...c, s: scaled(c.s, ax, ay, f), path: null }));
+      for (const pass of [true, false])
+        for (const c of preview) {
+          if ((c.s.tool === 'image') !== pass) continue;
+          const p = c.s.points;
+          if (c.s.tool === 'image') Object.assign(c, { minX: p[0], minY: p[1], maxX: p[3], maxY: p[4] });
+          this.drawStroke(ctx, c);
+        }
+      box = { minX: ax + (box.minX - ax) * f, minY: ay + (box.minY - ay) * f, maxX: ax + (box.maxX - ax) * f, maxY: ay + (box.maxY - ay) * f };
+    }
     if (box) {
       const dx = a?.move?.dx ?? 0;
       const dy = a?.move?.dy ?? 0;
       ctx.save();
       ctx.translate(dx, dy);
-      if (a?.move) for (const c of this.selection) this.drawStroke(ctx, c);
+      if (a?.move)
+        for (const pass of [true, false]) for (const c of this.selection) if ((c.s.tool === 'image') === pass) this.drawStroke(ctx, c);
       ctx.setLineDash([6 / this.scale, 4 / this.scale]);
       ctx.lineWidth = 1.5 / this.scale;
       ctx.strokeStyle = '#2563eb';
       ctx.strokeRect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+      // Resize handle.
+      const hs = 7 / this.scale;
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(box.maxX - hs, box.maxY - hs, hs * 2, hs * 2);
+      ctx.strokeRect(box.maxX - hs, box.maxY - hs, hs * 2, hs * 2);
       ctx.restore();
     }
     this.positionSelectBar(box);

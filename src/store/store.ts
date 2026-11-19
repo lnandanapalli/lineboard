@@ -29,6 +29,10 @@ export interface Store {
   deleteStrokes(ids: string[]): Promise<void>;
   loadSettings(): Promise<Partial<Settings> | null>;
   saveSettings(s: Settings): Promise<void>;
+  /** Save an image file under an id (images are referenced by 'image' strokes). */
+  putImage(id: string, file: Blob): Promise<void>;
+  /** Load an image file saved with putImage (`type`: its file type, from the image stroke). */
+  getImage(id: string, type?: string): Promise<Blob>;
   /** False when the cloud database predates text boxes (schema not updated yet). */
   supportsText?(): Promise<boolean>;
 }

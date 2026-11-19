@@ -2,6 +2,29 @@ import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, typ
 import { lsGet, lsSet, uuid } from '../util';
 import type { Store } from './store';
 
+/** Images on this device: IndexedDB, since localStorage is far too small for pictures. */
+const IMG_DB = 'lineboard-local-images';
+function imageDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IMG_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('images');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error('Image storage unavailable'));
+  });
+}
+async function imageTx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
+  const db = await imageDb();
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const r = fn(db.transaction('images', mode).objectStore('images'));
+      r.onsuccess = () => resolve(r.result as T);
+      r.onerror = () => reject(r.error ?? new Error('Image storage failed'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
 /** Device-only storage, used when no Supabase project is configured. */
 export class LocalStore implements Store {
   readonly mode = 'local' as const;
@@ -101,8 +124,18 @@ export class LocalStore implements Store {
       }
     }
   }
-  /** Remove every note, stroke and setting kept on this device. */
+  async putImage(id: string, file: Blob) {
+    await imageTx('readwrite', (s) => s.put(file, id));
+  }
+  async getImage(id: string): Promise<Blob> {
+    const b = await imageTx<Blob | undefined>('readonly', (s) => s.get(id));
+    if (!b) throw new Error('Image not found on this device');
+    return b;
+  }
+
+  /** Remove every note, stroke, image and setting kept on this device. */
   clearAll() {
+    void imageTx('readwrite', (s) => s.clear()).catch(() => {});
     for (const m of this.notes()) {
       try {
         localStorage.removeItem(this.strokesKey(m.id));

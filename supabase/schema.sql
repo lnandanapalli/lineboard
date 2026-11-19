@@ -32,7 +32,7 @@ create table if not exists public.strokes (
   id          uuid primary key,                       -- generated on the device so offline saves are idempotent
   note_id     uuid not null references public.notes (id) on delete cascade,
   user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  tool        text not null check (tool in ('pen', 'highlighter', 'text')),
+  tool        text not null check (tool in ('pen', 'highlighter', 'text', 'image')),
   color       text not null check (char_length(color) <= 32),
   width       real not null check (width > 0 and width <= 100),
   points      jsonb not null check (jsonb_typeof(points) = 'array'),  -- [x, y, pressure, x, y, pressure, ...]
@@ -61,7 +61,7 @@ alter table public.strokes add constraint strokes_payload_present check (
 alter table public.strokes add column if not exists text text check (char_length(text) <= 10000);
 alter table public.strokes drop constraint if exists strokes_tool_check;
 alter table public.strokes drop constraint if exists strokes_tool_valid;
-alter table public.strokes add constraint strokes_tool_valid check (tool in ('pen', 'highlighter', 'text'));
+alter table public.strokes add constraint strokes_tool_valid check (tool in ('pen', 'highlighter', 'text', 'image'));
 
 -- Wrapped copies of the user's data key. The key itself never reaches the server: one copy is
 -- encrypted with a key derived from the user's passphrase, the other with their recovery key.
@@ -219,6 +219,27 @@ end $$;
 
 revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) from anon, public;
 grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) to authenticated;
+
+-- ------------- Pictures -------------
+-- An 'image' stroke points at a file in this private bucket, at <user id>/<image id>. Files of
+-- encrypted accounts are encrypted on the device before upload.
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('images', 'images', false, 15728640)
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit;
+
+drop policy if exists "own images: read" on storage.objects;
+drop policy if exists "own images: add" on storage.objects;
+drop policy if exists "own images: change" on storage.objects;
+drop policy if exists "own images: remove" on storage.objects;
+create policy "own images: read" on storage.objects for select to authenticated
+  using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
+create policy "own images: add" on storage.objects for insert to authenticated
+  with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
+create policy "own images: change" on storage.objects for update to authenticated
+  using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()))
+  with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
+create policy "own images: remove" on storage.objects for delete to authenticated
+  using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
 
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
 grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys to authenticated;

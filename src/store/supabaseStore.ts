@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { open, seal } from '../crypto/cipher';
+import { isSealedBytes, open, openBytes, seal, sealBytes } from '../crypto/cipher';
 import type { KeyVault } from '../crypto/vault';
 import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { uuid } from '../util';
@@ -32,7 +32,17 @@ type StrokePayload = Pick<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text'
 type NoteRow = NoteMeta & { title_enc?: string | null };
 type BookRow = Notebook & { name_enc?: string | null };
 
+/** Private Storage bucket for images, one folder per user (see supabase/schema.sql). */
+const IMAGE_BUCKET = 'images';
+
+function imageError(error: { message?: string; statusCode?: string | number; status?: number } | null): StoreError {
+  const msg = error?.message ?? 'Image request failed';
+  if (/bucket not found/i.test(msg)) return new StoreError('Images need a database update: the site operator re-runs supabase/schema.sql.', true);
+  return new StoreError(msg, false);
+}
+
 const ctx = {
+  image: (id: string) => `image:${id}`,
   stroke: (id: string) => `stroke:${id}`,
   note: (id: string) => `note:${id}`,
   book: (id: string) => `notebook:${id}`,
@@ -157,7 +167,7 @@ export class SupabaseStore implements Store {
   }
   private async encodeStroke(key: CryptoKey | null, s: Stroke) {
     const base = { id: s.id, note_id: s.note_id, user_id: this.userId, created_at: s.created_at };
-    const text = s.tool === 'text' ? (s.text ?? '') : null;
+    const text = s.tool === 'text' || s.tool === 'image' ? (s.text ?? '') : null;
     if (!key) return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}), ...(this.textCol ? { text } : {}) };
     const payload: StrokePayload = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(text != null ? { text } : {}) };
     const enc = await seal(key, ctx.stroke(s.id), payload);
@@ -337,6 +347,49 @@ export class SupabaseStore implements Store {
     }
   }
 
+  // ----------------------------- images -----------------------------
+
+  private imagePath(id: string) {
+    return `${this.userId}/${id}`;
+  }
+
+  /** Upload an image. With encryption on, only ciphertext leaves the device. */
+  async putImage(id: string, file: Blob) {
+    const key = await this.writeKey();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    // Raw bytes with an explicit type (a Blob would be sent as a multipart form).
+    const body = key ? await sealBytes(key, ctx.image(id), bytes) : bytes;
+    const contentType = key ? 'application/octet-stream' : file.type || 'application/octet-stream';
+    const { error } = await this.sb.storage.from(IMAGE_BUCKET).upload(this.imagePath(id), body.buffer, { upsert: true, contentType });
+    if (error) throw imageError(error);
+  }
+
+  async getImage(id: string, type = 'image/png'): Promise<Blob> {
+    const { data, error } = await this.sb.storage.from(IMAGE_BUCKET).download(this.imagePath(id));
+    if (error || !data) throw imageError(error);
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    if (!isSealedBytes(bytes)) return new Blob([bytes], { type });
+    const key = this.vault?.key;
+    if (!key) throw new StoreError('This image is encrypted; unlock encryption to see it', false);
+    return new Blob([await openBytes(key, ctx.image(id), bytes)], { type });
+  }
+
+  /** Re-upload an image encrypted or decrypted, to match the account (used by convertAll). */
+  private async convertImage(s: Stroke, encrypt: boolean) {
+    const id = s.text;
+    const key = this.vault?.key;
+    if (!id || !key) return;
+    const { data, error } = await this.sb.storage.from(IMAGE_BUCKET).download(this.imagePath(id));
+    if (error || !data) return; // missing image: nothing to convert
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    if (isSealedBytes(bytes) === encrypt) return;
+    const out = encrypt ? await sealBytes(key, ctx.image(id), bytes) : await openBytes(key, ctx.image(id), bytes);
+    const { error: up } = await this.sb.storage
+      .from(IMAGE_BUCKET)
+      .upload(this.imagePath(id), out.buffer, { upsert: true, contentType: encrypt ? 'application/octet-stream' : s.color || 'image/png' });
+    if (up) throw imageError(up);
+  }
+
   // ----------------------------- settings -----------------------------
 
   async loadSettings(): Promise<Partial<Settings> | null> {
@@ -450,6 +503,7 @@ export class SupabaseStore implements Store {
       if (!rows.length) return changed;
       const decoded = await Promise.all(rows.map((r) => this.decodeStroke(r)));
       const ok = decoded.filter((s): s is Stroke => !!s);
+      for (const st of ok) if (st.tool === 'image') await this.convertImage(st, encrypting);
       skip += rows.length - ok.length;
       for (let i = 0; i < ok.length; i += CHUNK) {
         const out = await Promise.all(ok.slice(i, i + CHUNK).map((s) => this.encodeStroke(target, s)));
