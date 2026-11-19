@@ -136,3 +136,46 @@ test('scores rank exact over starts-with over a word start over a typo', () => {
   // Very long queries are cut, not refused.
   expect(parseQuery('x'.repeat(5000)).whole.length).toBe(200);
 });
+
+test('Ctrl+K opens search while typing too: in the title, or in a text box on the page', async ({ page }) => {
+  const { geo } = await setup(page);
+  await page.locator('.title-input').click();
+  await page.keyboard.press('Control+k');
+  await expect(search(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.mouse.click(geo.areaX + 600, geo.areaY + 45); // leave the title
+  await page.keyboard.press('t');
+  await page.mouse.click(geo.areaX + 200, geo.areaY + 45);
+  await expect(page.locator('textarea.text-editor')).toBeFocused();
+  await page.keyboard.type('Hello');
+  await page.keyboard.press('Control+k');
+  await expect(search(page)).toBeVisible();
+  // The text being typed was kept.
+  await expect.poll(() => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('lb-local-strokes-')).flatMap((k) => JSON.parse(localStorage[k])).some((s: { text?: string }) => s.text === 'Hello'))).toBe(true);
+});
+
+test('an archived note in an archived notebook: "Restore and open" brings back both', async ({ page }) => {
+  await setup(page);
+  await newNotebook(page, 'Old term');
+  await newNote(page, 'Exam answers');
+  await openSidebar(page);
+  await page.locator('.note-list li', { hasText: 'Exam answers' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Archive' }).click();
+  await page.locator('.book-button').click();
+  await page.locator('.book-list li', { hasText: 'Old term' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Archive' }).click();
+  await page.locator('.scrim').click();
+  await page.keyboard.press('Control+k');
+  await search(page).getByText('Include archived').click();
+  await page.keyboard.type('exam');
+  await results(page).first().click();
+  await expect(page.locator('dialog.modal.small')).toContainText('notebook “Old term” are archived');
+  await page.locator('dialog.modal.small').getByRole('button', { name: 'Restore and open' }).click();
+  await expect(page.locator('.title-input')).toHaveValue('Exam answers');
+  await expect(page.locator('.book-button')).toContainText('Old term');
+  const state = await page.evaluate(() => ({
+    note: JSON.parse(localStorage.getItem('lb-local-notes') ?? '[]').find((n: { title: string }) => n.title === 'Exam answers')?.archived_at ?? null,
+    book: JSON.parse(localStorage.getItem('lb-local-notebooks') ?? '[]').find((b: { name: string }) => b.name === 'Old term')?.archived_at ?? null,
+  }));
+  expect(state).toEqual({ note: null, book: null });
+});

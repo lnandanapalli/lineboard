@@ -112,10 +112,9 @@ export function openSearch(host: SearchHost) {
   const pick = async (i: number) => {
     const r = results[i];
     if (!r) return;
-    // An archived result (or a note in an archived notebook) is restored first, if wanted.
+    // An archived result, or a note in an archived notebook, is restored first (both, if both are), if wanted.
     const book = r.kind === 'note' ? books().get(r.item.notebook_id ?? '') : undefined;
-    const target = r.item.archived_at ? r : book?.archived_at ? { kind: 'notebook' as const, item: book } : null;
-    if (target && !(await host.restore(target.kind, target.item))) return;
+    if ((r.item.archived_at || book?.archived_at) && !(await host.restore(r.kind, r.item))) return;
     done();
     if (r.kind === 'note') await host.openNote(r.item);
     else await host.openNotebook(r.item);
