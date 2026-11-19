@@ -19,6 +19,7 @@ import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lb
 import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
 import { openSearch } from './searchUi';
+import { avatar, EMPTY_PROFILE, squarePicture, type Profile } from './profile';
 import { LocalStore } from './store/localStore';
 import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
 
@@ -189,6 +190,7 @@ export class App {
   }
 
   private async init() {
+    void this.loadProfile();
     try {
       const remote = await this.store.loadSettings();
       if (remote) {
@@ -378,15 +380,22 @@ export class App {
       h(
         'div',
         { class: 'sidebar-foot' },
-        // No email here: the sidebar is on screen in recordings and screen shares.
-        this.opts.signIn
-          ? 'Trying without an account: notes are saved in this browser only.'
-          : this.store.mode === 'local'
-            ? 'Local mode: notes stay on this device.'
-            : 'Synced to your account.',
+        // Name and picture, not the email: the sidebar is on screen in recordings and screen shares.
+        (this.accountChip = h('button', { class: 'account-chip', type: 'button', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement),
+        h(
+          'small',
+          { class: 'foot-note' },
+          this.opts.signIn
+            ? 'Trying without an account: notes are saved in this browser only.'
+            : this.store.mode === 'local'
+              ? 'Local mode: notes stay on this device.'
+              : 'Synced to your account.',
+        ),
       ),
       this.opts.signIn ? this.signInButton('sidebar') : null,
     );
+    this.accountChip.addEventListener('click', () => this.accountMenu());
+    this.renderAccountChip();
     this.sidebar.append(this.resizeHandle());
     attachNameTips(this.sidebar, '.note-title, .book-title, .book-name');
     const scrim = h('div', { class: 'scrim' });
@@ -1051,6 +1060,57 @@ export class App {
     const b = this.iconBtn(item.starred ? icons.starFilled : icons.star, item.starred ? `Unstar "${name}"` : `Star "${name}"`, () => void this.setFlags(kind, item, { starred: !item.starred }), 'small star-btn' + (item.starred ? ' on' : ''));
     b.setAttribute('aria-pressed', String(!!item.starred));
     return b;
+  }
+
+  // ----------------------------- profile -----------------------------
+
+  private profile: Profile = { ...EMPTY_PROFILE };
+  /** The profile picture as an object URL (null: none, or not readable here). */
+  private profileUrl: string | null = null;
+  private accountChip!: HTMLButtonElement;
+
+  private async loadProfile(p?: Profile) {
+    try {
+      this.profile = p ?? (await this.store.loadProfile());
+      const blob = await this.store.loadProfilePicture(this.profile);
+      if (this.profileUrl) URL.revokeObjectURL(this.profileUrl);
+      this.profileUrl = blob ? URL.createObjectURL(blob) : null;
+    } catch (e) {
+      console.warn('Profile not loaded', e);
+    }
+    this.renderAccountChip();
+  }
+
+  private renderAccountChip() {
+    const name = this.profile.name;
+    this.accountChip.replaceChildren(avatar(this.profile, this.profileUrl, 32), h('span', { class: 'account-name' + (name ? '' : ' empty') }, name || 'Add your name'));
+    this.accountChip.insertAdjacentHTML('beforeend', icons.more);
+    this.accountChip.setAttribute('aria-label', `${name || 'Your profile'}: account menu`);
+  }
+
+  private accountMenu() {
+    actionMenu(this.accountChip, 'Account', [
+      { label: 'Profile', icon: icons.user, run: () => this.settingsPanel.open('account') },
+      { label: 'Data controls', icon: icons.archive, run: () => this.settingsPanel.open('data') },
+      { label: 'Settings', icon: icons.gear, run: () => this.openSettings() },
+      ...(this.opts.signOut
+        ? [{
+            label: 'Sign out',
+            icon: icons.close,
+            run: async () => {
+              if (this.queue.pending && !(await dialog({ title: 'Unsaved changes', message: 'Some strokes are still being saved. Sign out anyway?', ok: 'Sign out', danger: true }))) return;
+              await this.opts.signOut!();
+            },
+          }]
+        : []),
+    ]);
+  }
+
+  /** Change the name or picture (from Settings). */
+  private async changeProfile(change: { name?: string; picture?: File | null }) {
+    const picture = change.picture ? await squarePicture(change.picture) : change.picture;
+    const saved = await this.store.saveProfile({ ...(change.name !== undefined ? { name: change.name } : {}), ...(picture !== undefined ? { picture } : {}) });
+    await this.loadProfile(saved);
   }
 
   // ----------------------------- search -----------------------------
@@ -1729,6 +1789,8 @@ export class App {
       importNotes: () => this.pickImport(),
       deleteAccount: this.opts.account ? () => this.deleteAccount() : undefined,
       deleteLocalData: this.store.mode === 'local' ? () => this.deleteLocalData() : undefined,
+      profile: () => ({ profile: this.profile, url: this.profileUrl }),
+      changeProfile: (change) => this.changeProfile(change),
       archived: () => {
         const books = this.notebooks.filter((b) => b.archived_at);
         const live = new Map(this.notebooks.filter((b) => !b.archived_at).map((b) => [b.id, b.name]));

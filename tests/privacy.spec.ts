@@ -75,7 +75,7 @@ test('without an account, "Download my data" gives a zip with every note, stroke
   await send(cdp, 'touchEnd', []);
   await page.keyboard.type('Remember this');
   await page.keyboard.press('Escape');
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
   await expectStrokes(page, 3);
 
   await openAccountSettings(page);
@@ -95,7 +95,7 @@ test('without an account, "Download my data" gives a zip with every note, stroke
 test('without an account, "Delete everything on this device" removes the notes and pictures after confirming', async ({ page }) => {
   const { cdp, geo } = await setup(page);
   await drag(cdp, geo.areaX + 100, geo.areaY + 60, geo.areaX + 300, geo.areaY + 60);
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
   await expectStrokes(page, 2);
   await openAccountSettings(page);
   await page.getByRole('button', { name: 'Delete everything on this device' }).click();
@@ -118,7 +118,7 @@ test('with an account: download my data, then delete the account and everything 
   const { cdp, geo } = await attachBoard(page);
   await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));
   await expect.poll(() => db.strokes.length).toBe(1);
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
   await expect.poll(() => db.strokes.map((s) => s.tool).sort(), { timeout: 15_000 }).toEqual(['image', 'pen']);
   await expect.poll(() => db.images?.size ?? 0).toBe(1);
 

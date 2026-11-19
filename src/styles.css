@@ -707,3 +707,21 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 @media (hover: none) { .search-keys { display: none; } }
 .search-input::-webkit-search-cancel-button { display: none; }
 .search-modal[open] { margin-top: max(16px, 12dvh); }
+
+/* ----- Profile ----- */
+.avatar-circle { display: inline-grid; place-items: center; flex: none; border-radius: 50%; overflow: hidden; font-weight: 700; letter-spacing: 0.02em; line-height: 1; user-select: none; }
+.avatar-circle img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-circle.blank { background: #e5e7eb; color: #6b7280; }
+.sidebar-foot { display: flex; flex-direction: column; gap: 6px; }
+.account-chip { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 10px; background: transparent; cursor: pointer; font: inherit; color: var(--ink); text-align: left; }
+.account-chip:hover, .account-chip[aria-expanded="true"] { background: var(--bg); }
+.account-chip > svg { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
+.account-name.empty { color: var(--muted); font-weight: 500; }
+.foot-note { font-size: 12px; color: var(--muted); padding: 0 8px; }
+.profile-edit { display: flex; flex-direction: column; gap: 8px; }
+.profile-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.profile-row .row-actions { margin: 0; }
+.profile-name { display: flex; gap: 8px; }
+.profile-name .dlg-input { flex: 1; min-width: 0; }
+.field-label { font-size: 13px; font-weight: 600; }

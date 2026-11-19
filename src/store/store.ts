@@ -1,4 +1,5 @@
 import type { SnapStroke, VersionMeta } from '../history';
+import type { Profile } from '../profile';
 import type { Flags, Notebook, NoteMeta, Settings, Stroke } from '../types';
 
 export class StoreError extends Error {
@@ -34,6 +35,12 @@ export interface Store {
   putImage(id: string, file: Blob): Promise<void>;
   /** Load an image file saved with putImage (`type`: its file type, from the image stroke). */
   getImage(id: string, type?: string): Promise<Blob>;
+  /** The user's display name and picture. */
+  loadProfile(): Promise<Profile>;
+  /** Change the name and / or the picture (null removes it); returns the profile as saved. */
+  saveProfile(change: { name?: string; picture?: Blob | null }): Promise<Profile>;
+  /** The profile picture's file, or null when there is none (or it cannot be read here). */
+  loadProfilePicture(p: Profile): Promise<Blob | null>;
   /** Star / archive a note or notebook (its content and date are left alone). */
   setNoteFlags(id: string, flags: Flags): Promise<void>;
   setNotebookFlags(id: string, flags: Flags): Promise<void>;

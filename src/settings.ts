@@ -9,6 +9,8 @@ import type { AppUser, Paper, Settings } from './types';
 import { dialog, h, toast } from './util';
 import { isApple, shortcut } from './keys';
 import { orientation } from './orientation';
+import { avatar, MAX_NAME, type Profile } from './profile';
+import { IMAGE_TYPES } from './images';
 
 type Section = 'account' | 'data' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
@@ -45,6 +47,9 @@ export interface SettingsHost {
   deleteAccount?: () => Promise<void>;
   /** No account: delete everything kept in this browser. */
   deleteLocalData?: () => Promise<void>;
+  /** The display name and picture (the picture as an object URL, or null). */
+  profile: () => { profile: Profile; url: string | null };
+  changeProfile: (change: { name?: string; picture?: File | null }) => Promise<void>;
   /** What is archived: notebooks (with how many notes) and notes in notebooks that are not. */
   archived: () => { notebooks: { id: string; name: string; notes: number }[]; notes: { id: string; title: string; notebook: string }[] };
   unarchive: (kind: 'note' | 'notebook', id: string) => Promise<void>;
@@ -120,6 +125,7 @@ export class SettingsPanel {
 
   open(section?: Section) {
     this.syncForm();
+    this.renderProfile();
     this.renderSecurity();
     this.renderArchived();
     if (section) this.show(section, true);
@@ -182,6 +188,50 @@ export class SettingsPanel {
     return h('div', { class: 'set-card' }, title ? h('h4', {}, title) : null, ...children);
   }
 
+  // ----------------------------- profile -----------------------------
+
+  private profileBody = h('div', { class: 'profile-edit' });
+
+  /** Name and picture: shown in the sidebar instead of the email. */
+  private renderProfile() {
+    const { profile, url } = this.host.profile();
+    const name = h('input', { type: 'text', class: 'dlg-input', maxlength: String(MAX_NAME), placeholder: 'Your name', 'aria-label': 'Display name', autocomplete: 'name' }) as HTMLInputElement;
+    name.value = profile.name;
+    const save = h('button', { class: 'btn primary', type: 'button' }, 'Save name') as HTMLButtonElement;
+    const busy = async (b: HTMLButtonElement, fn: () => Promise<void>) => {
+      b.disabled = true;
+      try {
+        await fn();
+        this.renderProfile();
+      } catch (e) {
+        toast((e as Error).message, 'error');
+        b.disabled = false;
+      }
+    };
+    save.addEventListener('click', () => void busy(save, async () => {
+      await this.host.changeProfile({ name: name.value });
+      toast('Name saved.');
+    }));
+    name.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save.click();
+    });
+    const file = h('input', { type: 'file', accept: IMAGE_TYPES, hidden: true }) as HTMLInputElement;
+    const pick = h('button', { class: 'btn', type: 'button' }, profile.picture ? 'Change picture' : 'Add picture') as HTMLButtonElement;
+    pick.addEventListener('click', () => file.click());
+    file.addEventListener('change', () => {
+      const f = file.files?.[0];
+      if (f) void busy(pick, () => this.host.changeProfile({ picture: f }));
+    });
+    const remove = profile.picture ? (h('button', { class: 'btn danger-text', type: 'button' }, 'Remove picture') as HTMLButtonElement) : null;
+    remove?.addEventListener('click', () => void busy(remove, () => this.host.changeProfile({ picture: null })));
+    this.profileBody.replaceChildren(
+      h('div', { class: 'profile-row' }, avatar(profile, url, 64), h('div', { class: 'row-actions' }, pick, remove, file)),
+      h('label', { class: 'field-label' }, 'Display name'),
+      h('div', { class: 'profile-name' }, name, save),
+      h('p', { class: 'muted text-small' }, `Shown in the sidebar instead of your email. Up to ${MAX_NAME} characters; leave it empty for none.${this.host.user.email ? ' Your name and picture are stored with your account.' : ''}`),
+    );
+  }
+
   // ----------------------------- account -----------------------------
 
   private accountPane(): HTMLElement[] {
@@ -196,8 +246,7 @@ export class SettingsPanel {
         }
         await signOut();
       });
-      const avatar = h('div', { class: 'avatar', 'aria-hidden': 'true' }, (user.email ?? '?').slice(0, 1).toUpperCase());
-      account.append(h('div', { class: 'profile' }, avatar, h('div', {}, h('div', { class: 'muted text-small' }, 'Signed in as'), h('b', {}, user.email ?? ''))), out);
+      account.append(h('div', { class: 'profile' }, h('div', {}, h('div', { class: 'muted text-small' }, 'Signed in as'), h('b', {}, user.email ?? ''))), out);
     } else if (signInButton) {
       account.append(
         h('span', {}, "You're trying Lineboard without an account. Notes are saved only in this browser. Sign in or create a free account to keep them and use them on other devices."),
@@ -244,6 +293,7 @@ export class SettingsPanel {
       eraseBtn ? h('div', { class: 'row-actions' }, eraseBtn) : null,
     )];
     return [
+      this.card('Profile', this.profileBody),
       this.card(null, account),
       this.card('Storage', h('p', { class: 'muted' }, where), h('p', { class: 'muted' }, store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : '')),
     ];

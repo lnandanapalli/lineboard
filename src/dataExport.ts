@@ -7,7 +7,8 @@ import { zip } from './zip';
  * "Download my data": everything the account (or this device, in guest mode) holds, in open,
  * machine-readable form (data portability, GDPR art. 20). A zip with:
  *   README.txt         what is in it
- *   account.json       the account and its settings
+ *   account.json       the account (with the display name) and its settings
+ *   profile-picture.*  the profile picture, if there is one
  *   notes.lbd          every notebook, note (with its version history) and picture, as a Lineboard file (see lbd.ts and
  *                      docs/file-format.md); it can be imported back into Lineboard
  */
@@ -25,17 +26,22 @@ export async function buildExport(
   if (unfiled.length) groups.push({ notebook: { id: '', name: 'Unfiled notes', created_at: '', updated_at: '' }, notes: unfiled });
   const { blob: lbd, missingPictures } = await buildLbd(store, groups, pending, undefined, true);
 
+  const profile = await store.loadProfile().catch(() => null);
+  const picture = profile ? await store.loadProfilePicture(profile) : null;
+  const pictureName = picture ? `profile-picture.${picture.type === 'image/png' ? 'png' : 'jpg'}` : null;
   const account = {
     format: 'lineboard-account',
     version: 1,
     exported_at: new Date().toISOString(),
     account: store.mode === 'cloud' ? { id: user.id, email: user.email } : { local: true, note: 'Notes kept in this browser without an account.' },
+    profile: { display_name: profile?.name ?? '', picture: pictureName },
     settings,
   };
   const readme = [
     'Lineboard data export',
     '',
-    'account.json   Your account details and settings.',
+    'account.json   Your account details (with your display name) and settings.',
+    ...(pictureName ? [`${pictureName.padEnd(15)}Your profile picture.`] : []),
     'notes.lbd      All your notebooks and notes, with their pictures and version history, as a Lineboard file.',
     '               Import it in Lineboard (Notes > Import) to get them back, in this or another account.',
     '               An .lbd file is a zip archive: lineboard.json lists the notebooks, notes/*.json hold',
@@ -50,6 +56,7 @@ export async function buildExport(
     { name: 'README.txt', data: enc.encode(readme), compress: true },
     { name: 'account.json', data: enc.encode(JSON.stringify(account, null, 2)), compress: true },
     { name: 'notes.lbd', data: new Uint8Array(await lbd.arrayBuffer()) },
+    ...(picture && pictureName ? [{ name: pictureName, data: new Uint8Array(await picture.arrayBuffer()) }] : []),
   ]);
   return { blob, missingPictures };
 }

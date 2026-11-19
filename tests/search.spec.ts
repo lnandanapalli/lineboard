@@ -14,7 +14,7 @@ const openSidebar = async (page: Page) => {
 async function newNote(page: Page, title: string) {
   await openSidebar(page);
   await page.getByRole('button', { name: 'New note' }).click();
-  await page.locator('dialog .dlg-input').fill(title);
+  await page.locator('dialog[open] .dlg-input').fill(title);
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
 }
@@ -23,7 +23,7 @@ async function newNotebook(page: Page, name: string) {
   await openSidebar(page);
   await page.locator('.book-button').click();
   await page.getByRole('button', { name: 'New notebook' }).click();
-  await page.locator('dialog .dlg-input').fill(name);
+  await page.locator('dialog[open] .dlg-input').fill(name);
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
 }

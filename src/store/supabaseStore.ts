@@ -5,6 +5,7 @@ import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } fro
 import type { KeyVault } from '../crypto/vault';
 import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { uuid } from '../util';
+import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
 import { StoreError, type Store } from './store';
 
 const PAGE = 1000; // PostgREST default max rows per request
@@ -431,6 +432,41 @@ export class SupabaseStore implements Store {
       const { error } = await this.sb.from('strokes').delete().in('id', ids.slice(i, i + CHUNK));
       check(error);
     }
+  }
+
+  // ----------------------------- profile -----------------------------
+  // The display name lives in the account's user metadata (like the email, it is account
+  // information, readable by the operator). The picture is a file in the account's picture folder,
+  // encrypted like the other pictures when encryption is on.
+
+  private static PICTURE_ID = 'profile-picture';
+
+  async loadProfile(): Promise<Profile> {
+    const { data, error } = await this.sb.auth.getUser();
+    if (error || !data.user) return { ...EMPTY_PROFILE };
+    const m = (data.user.user_metadata ?? {}) as { display_name?: unknown; picture?: unknown; picture_type?: unknown };
+    return { name: cleanName(m.display_name), picture: typeof m.picture === 'string' ? m.picture : null, pictureType: typeof m.picture_type === 'string' ? m.picture_type : null };
+  }
+
+  async saveProfile(change: { name?: string; picture?: Blob | null }): Promise<Profile> {
+    const data: Record<string, unknown> = {};
+    if (change.name !== undefined) data.display_name = cleanName(change.name);
+    if (change.picture === null) {
+      const { error } = await this.sb.storage.from(IMAGE_BUCKET).remove([this.imagePath(SupabaseStore.PICTURE_ID)]);
+      if (error && !isMissing(error)) throw imageError(error);
+      Object.assign(data, { picture: null, picture_type: null });
+    } else if (change.picture) {
+      await this.putImage(SupabaseStore.PICTURE_ID, change.picture);
+      Object.assign(data, { picture: uuid(), picture_type: change.picture.type });
+    }
+    const { error } = await this.sb.auth.updateUser({ data });
+    if (error) throw new StoreError(error.message, false);
+    return this.loadProfile();
+  }
+
+  async loadProfilePicture(p: Profile): Promise<Blob | null> {
+    if (!p.picture) return null;
+    return this.getImage(SupabaseStore.PICTURE_ID, p.pictureType ?? 'image/jpeg').catch(() => null);
   }
 
   // ----------------------------- version history -----------------------------

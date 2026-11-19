@@ -19,7 +19,7 @@ const openSidebar = async (page: Page) => {
 async function newNote(page: Page, title: string) {
   await openSidebar(page);
   await page.getByRole('button', { name: 'New note' }).click();
-  await page.locator('dialog .dlg-input').fill(title);
+  await page.locator('dialog[open] .dlg-input').fill(title);
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
 }
@@ -55,7 +55,7 @@ test('the ⋯ menu holds a note’s actions; a starred note is pinned under "Sta
   // Another notebook: the starred note is still there, labelled with its notebook.
   await page.locator('.book-button').click();
   await page.getByRole('button', { name: 'New notebook' }).click();
-  await page.locator('dialog .dlg-input').fill('Maths');
+  await page.locator('dialog[open] .dlg-input').fill('Maths');
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
   await openSidebar(page);
@@ -71,7 +71,7 @@ test('starred notebooks come first', async ({ page }) => {
   await openSidebar(page);
   await page.locator('.book-button').click();
   await page.getByRole('button', { name: 'New notebook' }).click();
-  await page.locator('dialog .dlg-input').fill('Zoology');
+  await page.locator('dialog[open] .dlg-input').fill('Zoology');
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
   await openSidebar(page);
@@ -127,7 +127,7 @@ test('an archived notebook takes its notes with it, and comes back with them', a
   await openSidebar(page);
   await page.locator('.book-button').click();
   await page.getByRole('button', { name: 'New notebook' }).click();
-  await page.locator('dialog .dlg-input').fill('Old term');
+  await page.locator('dialog[open] .dlg-input').fill('Old term');
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
   await openSidebar(page);
@@ -208,7 +208,7 @@ test('a PDF keeps a 200-character title ending in a bracket intact', async ({ pa
   await openSidebar(page);
   await page.locator('.note-list li').first().locator('.more-btn').click();
   await page.getByRole('menuitem', { name: 'Rename' }).click();
-  await page.locator('dialog .dlg-input').fill(title);
+  await page.locator('dialog[open] .dlg-input').fill(title);
   await page.locator('dialog').getByRole('button', { name: 'Rename' }).click();
   await page.locator('.scrim').click();
   await page.getByRole('button', { name: 'Share or export', exact: true }).click();

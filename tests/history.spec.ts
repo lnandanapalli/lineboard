@@ -51,7 +51,7 @@ async function openNote(page: Page, title: string) {
 async function newNote(page: Page, title: string) {
   await openSidebar(page);
   await page.getByRole('button', { name: 'New note' }).click();
-  await page.locator('dialog .dlg-input').fill(title);
+  await page.locator('dialog[open] .dlg-input').fill(title);
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
   if (await page.locator('.app.sidebar-open').count()) {
@@ -129,7 +129,7 @@ test('a copy of a version is a new note: fresh, or with the history up to that v
   await page.getByRole('button', { name: 'Version history' }).click();
   await panel(page).getByRole('option').nth(2).click();
   await panel(page).getByRole('button', { name: 'Make a copy' }).click();
-  await page.locator('dialog .dlg-input').fill('Fresh copy');
+  await page.locator('dialog[open] .dlg-input').fill('Fresh copy');
   await page.locator('dialog').getByRole('button', { name: 'Make a copy' }).click();
   await expect(page.locator('.title-input')).toHaveValue('Fresh copy');
   const fresh = (await notes(page)).find((n) => n.title === 'Fresh copy')!;
@@ -142,7 +142,7 @@ test('a copy of a version is a new note: fresh, or with the history up to that v
   await page.getByRole('button', { name: 'Version history' }).click();
   await panel(page).getByRole('option').nth(1).click();
   await panel(page).getByRole('button', { name: 'Make a copy' }).click();
-  await page.locator('dialog .dlg-input').fill('With history');
+  await page.locator('dialog[open] .dlg-input').fill('With history');
   await page.locator('dialog').getByText('Keep the history up to this version').click();
   await page.locator('dialog').getByRole('button', { name: 'Make a copy' }).click();
   await expect(page.locator('.title-input')).toHaveValue('With history');
@@ -160,7 +160,7 @@ test('naming versions: the current one, and an older one; named versions show in
   await draw(cdp, geo, 50);
   await page.getByRole('button', { name: 'Version history' }).click();
   await panel(page).getByRole('button', { name: 'Name current version' }).click();
-  await page.locator('dialog .dlg-input').fill('First draft');
+  await page.locator('dialog[open] .dlg-input').fill('First draft');
   await page.locator('dialog').getByRole('button', { name: 'Save' }).click();
   await expect(panel(page).getByRole('option', { name: /First draft/ })).toBeVisible();
   await panel(page).getByText('Only named versions').click();
@@ -185,7 +185,7 @@ test('signed in: versions are stored in the account; without the database update
   await expect.poll(() => db.strokes.length).toBe(1);
   await page.getByRole('button', { name: 'Version history' }).click();
   await panel(page).getByRole('button', { name: 'Name current version' }).click();
-  await page.locator('dialog .dlg-input').fill('Saved');
+  await page.locator('dialog[open] .dlg-input').fill('Saved');
   await page.locator('dialog').getByRole('button', { name: 'Save' }).click();
   await expect.poll(() => (db.versions ?? []).length).toBe(1);
   const row = db.versions![0];
@@ -220,7 +220,7 @@ function unzip(buf: Buffer): Map<string, Buffer> {
 async function nameCurrent(page: Page, name: string) {
   await page.getByRole('button', { name: 'Version history' }).click();
   await panel(page).getByRole('button', { name: 'Name current version' }).click();
-  await page.locator('dialog .dlg-input').fill(name);
+  await page.locator('dialog[open] .dlg-input').fill(name);
   await page.locator('dialog').getByRole('button', { name: 'Save' }).click();
   await expect(panel(page).getByRole('option', { name: new RegExp(name) })).toBeVisible();
   await page.keyboard.press('Escape');

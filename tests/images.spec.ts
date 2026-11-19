@@ -24,7 +24,7 @@ async function freeBoard(page: Page) {
 }
 
 async function insertPicture(page: Page) {
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
 }
 
 /** Screen position of a page point. */
@@ -275,7 +275,7 @@ test('while a picture is being added, a placeholder shows where it will go', asy
 
 test('pictures added together land where their placeholders were, not on top of each other', async ({ page }) => {
   await freeBoard(page);
-  await page.locator('input[type=file][accept^="image/"]').setInputFiles([
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles([
     { name: 'a.png', mimeType: 'image/png', buffer: PNG },
     { name: 'b.png', mimeType: 'image/png', buffer: PNG },
   ]);
