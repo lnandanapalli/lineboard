@@ -14,6 +14,7 @@ export const icons = {
   multi: svg('<rect x="3" y="3" width="18" height="5" rx="1"/><rect x="3" y="10" width="18" height="5" rx="1"/><rect x="3" y="17" width="18" height="4" rx="1"/>'),
   down: svg('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>'),
   up: svg('<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   star: svg('<path d="m12 3 2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.8Z"/>'),
   starFilled: svg('<path fill="currentColor" d="m12 3 2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.8Z"/>'),
   more: svg('<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>'),

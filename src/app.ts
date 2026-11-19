@@ -18,6 +18,7 @@ import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
+import { openSearch } from './searchUi';
 import { LocalStore } from './store/localStore';
 import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
 
@@ -368,6 +369,7 @@ export class App {
       'aside',
       { class: 'sidebar' },
       h('div', { class: 'sidebar-head' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')), this.iconBtn(icons.close, 'Close', () => this.toggleSidebar(false))),
+      this.searchButton(),
       h('div', { class: 'section-label' }, 'Notebook'),
       this.bookButton,
       this.bookPanel,
@@ -488,6 +490,19 @@ export class App {
   }
 
   private bindKeys() {
+    // Search works from anywhere, typing included (the title, a text box): caught before the board's
+    // text box keeps the key to itself, and before the browser takes Ctrl+K for its address bar.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+          e.preventDefault();
+          e.stopPropagation();
+          this.openSearch();
+        }
+      },
+      { capture: true, signal: this.abort.signal },
+    );
     window.addEventListener('keydown', (e) => {
       if (e.defaultPrevented || this.historyPanel) return; // already handled (an open menu, a text box...), or looking at history
       const t = e.target as HTMLElement;
@@ -1046,6 +1061,44 @@ export class App {
     const b = this.iconBtn(item.starred ? icons.starFilled : icons.star, item.starred ? `Unstar "${name}"` : `Star "${name}"`, () => void this.setFlags(kind, item, { starred: !item.starred }), 'small star-btn' + (item.starred ? ' on' : ''));
     b.setAttribute('aria-pressed', String(!!item.starred));
     return b;
+  }
+
+  // ----------------------------- search -----------------------------
+
+  private searchButton() {
+    const b = h('button', { class: 'search-btn', type: 'button', title: withShortcut('Search notes and notebooks', 'Mod+K') });
+    b.innerHTML = `${icons.search}<span>Search</span><kbd></kbd>`;
+    b.querySelector('kbd')!.textContent = isApple ? '⌘K' : 'Ctrl K';
+    b.addEventListener('click', () => this.openSearch());
+    return b;
+  }
+
+  private openSearch() {
+    if (document.querySelector('.search-modal') || this.historyPanel) return;
+    this.board.finishText();
+    openSearch({
+      notes: () => this.notes,
+      notebooks: () => this.notebooks,
+      openNote: async (n) => {
+        await this.openFromList(n);
+        if (window.innerWidth < 900) this.toggleSidebar(false);
+      },
+      openNotebook: async (b) => {
+        if (b.id !== this.currentBook?.id) await this.switchNotebook(b);
+        this.toggleSidebar(true);
+      },
+      restore: async (kind, item) => {
+        const name = 'title' in item ? item.title || 'Untitled' : item.name;
+        // A note may be archived itself, in an archived notebook, or both: bring back what is needed.
+        const book = 'notebook_id' in item ? this.notebooks.find((b) => b.id === item.notebook_id && b.archived_at) : undefined;
+        const what = kind === 'note' && !item.archived_at ? `It is in the archived notebook “${book?.name}”.` : book ? `It and its notebook “${book.name}” are archived.` : `This ${kind} is archived.`;
+        const ok = await dialog({ title: `Restore “${name}”?`, message: `${what} Restore to open it?`, ok: 'Restore and open' });
+        if (!ok) return false;
+        if (item.archived_at) await this.unarchive(kind, item.id);
+        if (book) await this.unarchive('notebook', book.id);
+        return !item.archived_at && !book?.archived_at;
+      },
+    });
   }
 
   /** Open a note from the list (a starred one may be in another notebook). */
