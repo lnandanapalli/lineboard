@@ -1104,6 +1104,10 @@ export class App {
 
   /** "Download my data": every notebook, note, stroke, picture and setting, as a zip. */
   private async exportData() {
+    // Everything in the account in one file: ask for the password (or a code) first, so someone
+    // who picks up a signed-in device cannot just take it all.
+    const account = this.opts.account;
+    if (account && !(await confirmItsYou(account, this.user.email, 'Downloading your data gives a copy of everything in your account.'))) return;
     try {
       this.board.finishText();
       toast('Preparing your data...');

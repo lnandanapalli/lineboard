@@ -28,9 +28,15 @@ async function openAccountSettings(page: Page) {
   await page.locator('.settings-tab', { hasText: 'Account' }).click();
 }
 
-async function download(page: Page) {
+/** Click "Download my data" (signed in: confirm with the password) and read the zip. */
+async function download(page: Page, password?: string) {
   const wait = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download my data' }).click();
+  if (password) {
+    const ask = page.locator('dialog.confirm-dialog');
+    await ask.locator('input[type=password]').fill(password);
+    await ask.getByRole('button', { name: 'Confirm' }).click();
+  }
   const d = await wait;
   expect(d.suggestedFilename()).toMatch(/^lineboard-data-\d{4}-\d{2}-\d{2}\.zip$/);
   return unzip(readFileSync((await d.path())!));
@@ -103,7 +109,20 @@ test('with an account: download my data, then delete the account and everything 
   await expect.poll(() => db.images?.size ?? 0).toBe(1);
 
   await openAccountSettings(page);
-  const files = await download(page);
+  // Signed in, the download asks for the password first; cancelling downloads nothing.
+  let downloads = 0;
+  page.on('download', () => downloads++);
+  await page.getByRole('button', { name: 'Download my data' }).click();
+  const ask = page.locator('dialog.confirm-dialog');
+  await expect(ask).toContainText('Downloading your data gives a copy of everything in your account.');
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(300);
+  expect(downloads).toBe(0);
+  const wait = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download my data' }).click();
+  await ask.locator('input[type=password]').fill('secret123');
+  await ask.getByRole('button', { name: 'Confirm' }).click();
+  const files = unzip(readFileSync((await (await wait).path())!));
   const data = JSON.parse(files.get('lineboard-data.json')!.toString('utf8'));
   expect(data.account).toEqual({ id: USER_ID, email: 'friend@example.com' });
   expect([...files.keys()].some((k) => k.startsWith('pictures/'))).toBe(true);
@@ -122,9 +141,8 @@ test('with an account: download my data, then delete the account and everything 
   dlg = page.locator('dialog.modal.small[open]');
   await dlg.locator('input').fill('DELETE');
   await dlg.getByRole('button', { name: 'Delete account' }).click();
-  const confirm = page.locator('dialog.confirm-dialog');
-  await confirm.locator('input[type=password]').fill('secret123');
-  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  // The password was confirmed for the download moments ago, so it is not asked again (the same
+  // short window as other sensitive changes); after that window it would be.
   await expect(page).toHaveURL(/\/home$/);
   await expect(page.locator('#toast')).toContainText('deleted');
   expect(db.deleted).toBe(true);
@@ -201,7 +219,7 @@ test('the export includes changes still waiting to be saved', async ({ page }) =
   await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));
   await expect(page.locator('.status')).toHaveText(/Saving|Offline/);
   await openAccountSettings(page);
-  const data = JSON.parse((await download(page)).get('lineboard-data.json')!.toString('utf8'));
+  const data = JSON.parse((await download(page, 'secret123')).get('lineboard-data.json')!.toString('utf8'));
   const strokes = data.notebooks.flatMap((b: { notes: { strokes: unknown[] }[] }) => b.notes.flatMap((n) => n.strokes));
   expect(strokes).toHaveLength(1);
 });
@@ -217,8 +235,23 @@ test('an account with more than 1000 notes gets all of them (listed and exported
   }
   await signIn(page);
   await openAccountSettings(page);
-  const data = JSON.parse((await download(page)).get('lineboard-data.json')!.toString('utf8'));
+  const data = JSON.parse((await download(page, 'secret123')).get('lineboard-data.json')!.toString('utf8'));
   const titles = data.notebooks.flatMap((b: { notes: { title: string }[] }) => b.notes.map((n) => n.title));
   expect(titles).toHaveLength(1005);
   expect(titles).toContain('Note 0'); // the oldest, beyond the first page
+});
+
+test('deleting the account asks for the password, and cancelling it deletes nothing', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await signIn(page);
+  await openAccountSettings(page);
+  await page.getByRole('button', { name: 'Delete account' }).click();
+  const dlg = page.locator('dialog.modal.small[open]');
+  await dlg.locator('input').fill('DELETE');
+  await dlg.getByRole('button', { name: 'Delete account' }).click();
+  const ask = page.locator('dialog.confirm-dialog');
+  await expect(ask).toContainText('Deleting your account is permanent.');
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(300);
+  expect(db.deleted).toBeFalsy();
 });
