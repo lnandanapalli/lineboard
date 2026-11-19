@@ -159,6 +159,8 @@ export function dropdown<T extends string>(opts: {
     set(v: T) {
       value = v;
       render();
+      // An open menu follows too (the choice can change from a keyboard shortcut while it is open).
+      menu?.querySelectorAll('[role=menuitemradio]').forEach((item, i) => item.setAttribute('aria-checked', String(opts.options[i]?.value === v)));
     },
     close,
   };

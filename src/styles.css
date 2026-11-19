@@ -49,11 +49,15 @@ button { font: inherit; color: inherit; }
 .icon-btn.small { width: 34px; height: 34px; }
 .icon-btn.small svg { width: 18px; height: 18px; }
 
+/* A colour: its own colour, with a faint edge so white and pale colours show. The chosen one gets a
+   ring (with a white gap, so it reads on any colour, black included) and a check in a contrasting shade. */
 .swatch {
-  width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; flex: none;
-  background: var(--c); cursor: pointer; margin: 0 1px; box-shadow: inset 0 0 0 2px #fff;
+  width: 24px; height: 24px; border-radius: 50%; border: 0; padding: 0; flex: none; margin: 0 3px; /* 30 px a colour, as before */
+  background: var(--c); cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  display: grid; place-items: center;
 }
-.swatch.active { border-color: var(--ink); }
+.swatch.active { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+.swatch svg { width: 16px; height: 16px; color: var(--tick); stroke-width: 3; }
 .width-btn { width: 32px; height: 36px; border: 0; border-radius: 8px; background: transparent; display: grid; place-items: center; cursor: pointer; flex: none; }
 .width-btn i { display: block; background: var(--ink); border-radius: 50%; }
 .width-btn.active { background: var(--accent-soft); }
@@ -82,7 +86,7 @@ button { font: inherit; color: inherit; }
 
 /* ----- Sidebar ----- */
 .sidebar {
-  position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; width: min(320px, 85vw);
+  position: absolute; z-index: 20; top: 0; bottom: 0; left: 0; width: min(var(--sidebar-w, 320px), 85vw);
   background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; padding: 12px;
   transform: translateX(-105%); transition: transform 0.2s ease; box-shadow: 4px 0 24px rgba(0,0,0,0.08);
 }
@@ -636,4 +640,19 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 @media (max-width: 700px) {
   .app.history-open .main { flex-direction: column; }
   .history-panel { width: auto; height: 48%; border-left: 0; border-top: 1px solid var(--line); }
+}
+
+/* ----- Sidebar resizing and full-name popups ----- */
+.sidebar-resize { position: absolute; top: 0; bottom: 0; right: -5px; width: 10px; cursor: ew-resize; touch-action: none; z-index: 2; }
+.sidebar-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background 0.15s; }
+.sidebar-resize:hover::after, .sidebar-resize:focus-visible::after, .sidebar.resizing .sidebar-resize::after { background: var(--accent); }
+.sidebar-resize:focus-visible { outline: none; }
+.sidebar.resizing { transition: none; user-select: none; }
+@media (max-width: 600px) { .sidebar-resize { display: none; } }
+.book-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-tip {
+  position: fixed; z-index: 60; max-width: min(360px, 90vw); padding: 6px 10px; border-radius: 8px;
+  background: #111827; color: #fff; font-size: 13px; line-height: 1.35; pointer-events: none;
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
