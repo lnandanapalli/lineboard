@@ -499,15 +499,25 @@ export class App {
   }
 
   private bindKeys() {
+    // Search works from anywhere, typing included (the title, a text box): caught before the board's
+    // text box keeps the key to itself, and before the browser takes Ctrl+K for its address bar.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+          e.preventDefault();
+          e.stopPropagation();
+          this.openSearch();
+        }
+      },
+      { capture: true, signal: this.abort.signal },
+    );
     window.addEventListener('keydown', (e) => {
       if (e.defaultPrevented || this.historyPanel) return; // already handled (an open menu, a text box...), or looking at history
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        this.openSearch();
-      } else if (mod && e.key.toLowerCase() === 'z') {
+      if (mod && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) this.redo();
         else this.undo();
@@ -1139,10 +1149,14 @@ export class App {
       },
       restore: async (kind, item) => {
         const name = 'title' in item ? item.title || 'Untitled' : item.name;
-        const ok = await dialog({ title: `Restore “${name}”?`, message: `This ${kind} is archived. Restore it to the sidebar to open it?`, ok: 'Restore and open' });
+        // A note may be archived itself, in an archived notebook, or both: bring back what is needed.
+        const book = 'notebook_id' in item ? this.notebooks.find((b) => b.id === item.notebook_id && b.archived_at) : undefined;
+        const what = kind === 'note' && !item.archived_at ? `It is in the archived notebook “${book?.name}”.` : book ? `It and its notebook “${book.name}” are archived.` : `This ${kind} is archived.`;
+        const ok = await dialog({ title: `Restore “${name}”?`, message: `${what} Restore to open it?`, ok: 'Restore and open' });
         if (!ok) return false;
-        await this.unarchive(kind, item.id);
-        return !item.archived_at;
+        if (item.archived_at) await this.unarchive(kind, item.id);
+        if (book) await this.unarchive('notebook', book.id);
+        return !item.archived_at && !book?.archived_at;
       },
     });
   }
