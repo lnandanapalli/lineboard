@@ -1,3 +1,4 @@
+import type { SnapStroke, VersionMeta } from '../history';
 import type { Notebook, NoteMeta, Settings, Stroke } from '../types';
 
 export class StoreError extends Error {
@@ -33,6 +34,17 @@ export interface Store {
   putImage(id: string, file: Blob): Promise<void>;
   /** Load an image file saved with putImage (`type`: its file type, from the image stroke). */
   getImage(id: string, type?: string): Promise<Blob>;
+  /** A note's versions, newest first (without their content). */
+  listVersions(noteId: string): Promise<VersionMeta[]>;
+  /** One version's strokes. */
+  loadVersion(v: VersionMeta): Promise<SnapStroke[]>;
+  /** Save a version (its id, note and date are in `v`). */
+  saveVersion(v: VersionMeta, strokes: SnapStroke[]): Promise<void>;
+  /** Name a version, or remove its name (null). */
+  renameVersion(v: VersionMeta, name: string | null): Promise<void>;
+  deleteVersions(ids: string[]): Promise<void>;
+  /** False when the cloud database predates version history (schema not updated yet). */
+  supportsHistory?(): Promise<boolean>;
   /** False when the cloud database predates text boxes (schema not updated yet). */
   supportsText?(): Promise<boolean>;
 }

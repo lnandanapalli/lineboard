@@ -92,6 +92,28 @@ create table if not exists public.user_settings (
   updated_at  timestamptz not null default now()
 );
 
+-- Version history: past states of a note, each a full snapshot of its strokes (deflated JSON,
+-- base64). With encryption on, the snapshot and the version's name are encrypted on the device
+-- (data_enc, name_enc) and the plaintext columns stay empty. `size` is the stored length, kept so
+-- the per-account limit below can be checked without reading every snapshot.
+create table if not exists public.note_versions (
+  id             uuid primary key,                    -- generated on the device
+  note_id        uuid not null references public.notes (id) on delete cascade,
+  user_id        uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  created_at     timestamptz not null default now(),
+  kind           text not null default 'auto' check (kind in ('auto', 'restore')),
+  name           text check (char_length(name) <= 120),
+  name_enc       text check (char_length(name_enc) <= 4000),
+  restored_from  timestamptz,
+  data           text check (char_length(data) <= 16000000),
+  data_enc       text check (char_length(data_enc) <= 16000000),
+  size           integer not null default 0,
+  constraint note_versions_payload check ((data is null) <> (data_enc is null)),
+  constraint note_versions_size check (size = coalesce(char_length(data), 0) + coalesce(char_length(data_enc), 0))
+);
+create index if not exists note_versions_note_idx on public.note_versions (note_id, created_at desc);
+create index if not exists note_versions_user_idx on public.note_versions (user_id);
+
 -- ------------- Keep notes.updated_at fresh when ink changes -------------
 
 create or replace function public.touch_note() returns trigger
@@ -114,6 +136,7 @@ alter table public.notes         enable row level security;
 alter table public.strokes       enable row level security;
 alter table public.user_settings enable row level security;
 alter table public.user_keys     enable row level security;
+alter table public.note_versions enable row level security;
 
 drop policy if exists "own notebooks" on public.notebooks;
 create policy "own notebooks" on public.notebooks
@@ -139,6 +162,16 @@ create policy "own strokes" on public.strokes
   with check (
     user_id = (select auth.uid())
     and (enc is not null or not (select public.encryption_required()))
+    and exists (select 1 from public.notes n where n.id = note_id and n.user_id = (select auth.uid()))
+  );
+
+drop policy if exists "own versions" on public.note_versions;
+create policy "own versions" on public.note_versions
+  for all to authenticated
+  using (user_id = (select auth.uid()))
+  with check (
+    user_id = (select auth.uid())
+    and ((data_enc is not null and name is null) or not (select public.encryption_required()))
     and exists (select 1 from public.notes n where n.id = note_id and n.user_id = (select auth.uid()))
   );
 
@@ -179,7 +212,7 @@ $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['notebooks', 'notes', 'strokes', 'user_settings', 'user_keys'] loop
+  foreach t in array array['notebooks', 'notes', 'strokes', 'user_settings', 'user_keys', 'note_versions'] loop
     execute format('drop policy if exists "active session with required MFA" on public.%I', t);
     execute format(
       'create policy "active session with required MFA" on public.%I as restrictive for all to authenticated '
@@ -222,7 +255,7 @@ begin
 end $$;
 
 -- Delete the signed-in user's account (right to erasure). Removing the auth user removes every
--- row that references it (notebooks, notes, strokes, settings, keys, sessions, factors, passkeys).
+-- row that references it (notebooks, notes, strokes, versions, settings, keys, sessions, factors, passkeys).
 -- The app deletes the user's picture files through the Storage API first.
 create or replace function public.delete_my_account() returns void
 language plpgsql volatile security definer set search_path = '' as $$
@@ -307,6 +340,13 @@ begin
       select format('%s strokes in all', 2000000) into bad from (select distinct user_id from added) a
        where (select count(*) from public.strokes s where s.user_id = a.user_id) > 2000000 limit 1;
     end if;
+  elsif tg_table_name = 'note_versions' then
+    select format('%s versions of one note', 500) into bad from (select distinct note_id from added) a
+     where (select count(*) from public.note_versions v where v.note_id = a.note_id) > 500 limit 1;
+    if bad is null then
+      select '1 GB of version history; delete some named versions or old notes' into bad from (select distinct user_id from added) a
+       where (select coalesce(sum(v.size), 0) from public.note_versions v where v.user_id = a.user_id) > 1073741824 limit 1;
+    end if;
   end if;
   if bad is not null then
     raise exception 'Lineboard limit: an account can have at most %', bad using errcode = '23514';
@@ -324,9 +364,13 @@ create trigger notes_row_limits after insert on public.notes
 drop trigger if exists strokes_row_limits on public.strokes;
 create trigger strokes_row_limits after insert on public.strokes
   referencing new table as added for each statement execute function public.enforce_row_limits();
+drop trigger if exists note_versions_row_limits on public.note_versions;
+create trigger note_versions_row_limits after insert on public.note_versions
+  referencing new table as added for each statement execute function public.enforce_row_limits();
+drop trigger if exists note_versions_size_limits on public.note_versions;
 
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
-grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys to authenticated;
-revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys from anon;
+grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions to authenticated;
+revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions from anon;
 grant execute on function public.encryption_required() to authenticated;
 revoke execute on function public.encryption_required() from anon, public;

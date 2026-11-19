@@ -8,7 +8,7 @@ import { zip } from './zip';
  * machine-readable form (data portability, GDPR art. 20). A zip with:
  *   README.txt         what is in it
  *   account.json       the account and its settings
- *   notes.lbd          every notebook, note and picture, as a Lineboard file (see lbd.ts and
+ *   notes.lbd          every notebook, note (with its version history) and picture, as a Lineboard file (see lbd.ts and
  *                      docs/file-format.md); it can be imported back into Lineboard
  */
 export async function buildExport(
@@ -23,7 +23,7 @@ export async function buildExport(
   // Notes not in any notebook (older data, from before notebooks existed).
   const unfiled = notes.filter((n) => !books.some((b) => b.id === n.notebook_id));
   if (unfiled.length) groups.push({ notebook: { id: '', name: 'Unfiled notes', created_at: '', updated_at: '' }, notes: unfiled });
-  const { blob: lbd, missingPictures } = await buildLbd(store, groups, pending);
+  const { blob: lbd, missingPictures } = await buildLbd(store, groups, pending, undefined, true);
 
   const account = {
     format: 'lineboard-account',
@@ -36,10 +36,11 @@ export async function buildExport(
     'Lineboard data export',
     '',
     'account.json   Your account details and settings.',
-    'notes.lbd      All your notebooks and notes, with their pictures, as a Lineboard file.',
+    'notes.lbd      All your notebooks and notes, with their pictures and version history, as a Lineboard file.',
     '               Import it in Lineboard (Notes > Import) to get them back, in this or another account.',
     '               An .lbd file is a zip archive: lineboard.json lists the notebooks, notes/*.json hold',
-    '               each note (strokes as x, y, pressure points; text; shapes) and pictures/ the pictures.',
+    '               each note (strokes as x, y, pressure points; text; shapes; its earlier versions under',
+    '               "history") and pictures/ the pictures.',
     '               The format is described at https://github.com/lnandanapalli/lineboard/blob/main/docs/file-format.md',
     '',
     ...(missingPictures ? ['', `${missingPictures} picture(s) could not be read when this was exported and are not included.`] : []),

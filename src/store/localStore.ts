@@ -1,3 +1,4 @@
+import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { lsGet, lsSet, uuid } from '../util';
 import type { Store } from './store';
@@ -19,6 +20,32 @@ async function imageTx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => I
       const r = fn(db.transaction('images', mode).objectStore('images'));
       r.onsuccess = () => resolve(r.result as T);
       r.onerror = () => reject(r.error ?? new Error('Image storage failed'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/** Version history on this device: IndexedDB too (snapshots can be large). */
+const HISTORY_DB = 'lineboard-local-history';
+type VersionRecord = VersionMeta & { data: Uint8Array<ArrayBuffer> };
+function historyDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(HISTORY_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('versions', { keyPath: 'id' }).createIndex('note_id', 'note_id');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error ?? new Error('History storage unavailable'));
+  });
+}
+/** Run `fn` in one transaction on the versions store; resolves with its result once committed. */
+async function historyTx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest | void): Promise<T> {
+  const db = await historyDb();
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const tx = db.transaction('versions', mode);
+      const r = fn(tx.objectStore('versions'));
+      tx.oncomplete = () => resolve((r ? r.result : undefined) as T);
+      tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('History storage failed'));
     });
   } finally {
     db.close();
@@ -94,6 +121,7 @@ export class LocalStore implements Store {
   }
   async deleteNote(id: string) {
     this.saveNotes(this.notes().filter((m) => m.id !== id));
+    await this.deleteVersions((await this.listVersions(id)).map((v) => v.id)).catch(() => {});
     try {
       localStorage.removeItem(this.strokesKey(id));
     } catch {
@@ -133,8 +161,30 @@ export class LocalStore implements Store {
     return b;
   }
 
+  async listVersions(noteId: string): Promise<VersionMeta[]> {
+    const rows = await historyTx<VersionRecord[]>('readonly', (s) => s.index('note_id').getAll(noteId));
+    return rows.map(({ data: _data, ...meta }) => meta).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+  async loadVersion(v: VersionMeta): Promise<SnapStroke[]> {
+    const r = await historyTx<VersionRecord | undefined>('readonly', (s) => s.get(v.id));
+    if (!r) throw new Error('This version is no longer on this device.');
+    return decodeSnapshot(r.data);
+  }
+  async saveVersion(v: VersionMeta, strokes: SnapStroke[]) {
+    const data = await encodeSnapshot(strokes);
+    await historyTx('readwrite', (s) => void s.put({ ...v, data } satisfies VersionRecord));
+  }
+  async renameVersion(v: VersionMeta, name: string | null) {
+    const r = await historyTx<VersionRecord | undefined>('readonly', (s) => s.get(v.id));
+    if (r) await historyTx('readwrite', (s) => void s.put({ ...r, name }));
+  }
+  async deleteVersions(ids: string[]) {
+    if (ids.length) await historyTx('readwrite', (s) => void ids.forEach((id) => s.delete(id)));
+  }
+
   /** Remove every note, stroke, image and setting kept on this device. */
   async clearAll() {
+    await historyTx('readwrite', (s) => void s.clear());
     // Wait until the pictures are really gone (the transaction has committed): a reload straight
     // after could otherwise abort it and leave the files behind.
     const db = await imageDb();

@@ -5,6 +5,10 @@ import { shapeStrokes } from './shapes';
 import { cleanStyle, fontCss, isPlain, type TextStyle } from './textStyle';
 import { createTextBar, type TextFormatPatch } from './textBar';
 
+/** Version history: how removed ink and the glow behind new ink are drawn. */
+const REMOVED_INK = '#dc2626';
+const ADDED_GLOW = 'rgba(34, 197, 94, 0.35)';
+
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
 /** A stroke that ends within this many ms with almost no movement, via pointercancel, is discarded. */
@@ -217,6 +221,12 @@ export class Board {
   /** Text formatting controls, shown while typing or when only text boxes are selected. */
   private textBar: ReturnType<typeof createTextBar> | null = null;
 
+  /**
+   * Version history: another state of the note shown read-only in place of its ink, with what
+   * changed marked (new ink highlighted, removed ink faded in red). Null when not previewing.
+   */
+  private preview: { items: { c: Cached; mark: 'added' | 'removed' | null }[]; drag: { pointerId: number; x0: number; y0: number; sx: number; sy: number } | null } | null = null;
+
   private dirty = { bg: false, ink: false, live: false, margin: false };
   private rafId = 0;
   private scrollAnim = 0;
@@ -364,6 +374,40 @@ export class Board {
     this.setScroll(this.scrollY + dyLogical);
   }
 
+  /** The note's strokes as shown (not a preview). */
+  allStrokes(): Stroke[] {
+    return this.strokes.map((c) => c.s);
+  }
+
+  get previewing() {
+    return !!this.preview;
+  }
+
+  /**
+   * Show strokes read-only instead of the note's own (version history). `marks` says which are new
+   * ('added') and which are gone ('removed', drawn faded); unmarked ones are unchanged. The place on
+   * the page is kept, so versions can be compared where you are looking.
+   */
+  showPreview(strokes: { s: Stroke; mark: 'added' | 'removed' | null }[]) {
+    this.commitText();
+    this.clearSelection();
+    this.cancelActive();
+    this.eraserCursor = null;
+    // Gone ink first, so what is there now is drawn over it.
+    const order = [...strokes].sort((a, b) => Number(b.mark === 'removed') - Number(a.mark === 'removed'));
+    this.preview = { items: order.map(({ s, mark }) => ({ c: this.measure(s), mark })), drag: null };
+    this.el.classList.add('previewing');
+    this.invalidate('bg', 'ink', 'live', 'margin');
+  }
+
+  endPreview() {
+    if (!this.preview) return;
+    this.preview = null;
+    this.el.classList.remove('previewing');
+    this.setScroll(this.scrollY, this.scrollX); // back within the note's own length
+    this.invalidate('bg', 'ink', 'live', 'margin');
+  }
+
   /** Render the whole note to a PNG. */
   async exportPNG(): Promise<Blob> {
     const bottom = Math.max(this.contentBottom() + 40, 400);
@@ -389,22 +433,24 @@ export class Board {
   // ----------------------------- geometry -----------------------------
 
   private cache(s: Stroke): Cached {
+    const c = this.measure(s);
+    this.strokes.push(c);
+    this.byId.set(s.id, c);
+    return c;
+  }
+
+  /** A stroke's bounds and drawing data. */
+  private measure(s: Stroke): Cached {
     if (s.tool === 'image') {
       const [l, t, , r, b] = s.points;
-      const c: Cached = { s, minX: Math.min(l, r), minY: Math.min(t, b), maxX: Math.max(l, r), maxY: Math.max(t, b), variable: false, path: null };
-      this.strokes.push(c);
-      this.byId.set(s.id, c);
-      return c;
+      return { s, minX: Math.min(l, r), minY: Math.min(t, b), maxX: Math.max(l, r), maxY: Math.max(t, b), variable: false, path: null };
     }
     if (s.tool === 'text') {
       // A bundled font (handwriting) may still be loading: measure again once it is in.
       const font = fontCss(s.font, s.width);
       if (s.font?.family && typeof document.fonts?.check === 'function' && !document.fonts.check(font)) void document.fonts.load(font).then(() => this.remeasureText(), () => {});
       const b = textBox(s.text ?? '', s.width, s.font);
-      const c: Cached = { s, minX: s.points[0], minY: s.points[1], maxX: s.points[0] + b.w, maxY: s.points[1] + b.h, variable: false, path: null };
-      this.strokes.push(c);
-      this.byId.set(s.id, c);
-      return c;
+      return { s, minX: s.points[0], minY: s.points[1], maxX: s.points[0] + b.w, maxY: s.points[1] + b.h, variable: false, path: null };
     }
     const p = s.points;
     let minX = Infinity,
@@ -425,7 +471,7 @@ export class Board {
       if (pr > pmax) pmax = pr;
     }
     const pad = s.width * pressureFactor(1) * 0.5 + 1;
-    const c: Cached = {
+    return {
       s,
       minX: minX - pad,
       minY: minY - pad,
@@ -434,14 +480,12 @@ export class Board {
       variable: s.tool === 'pen' && pmax - pmin > 0.05,
       path: null,
     };
-    this.strokes.push(c);
-    this.byId.set(s.id, c);
-    return c;
   }
 
   private contentBottom(): number {
     let b = 0;
     for (const c of this.strokes) if (c.maxY > b) b = c.maxY;
+    for (const { c } of this.preview?.items ?? []) if (c.maxY > b) b = c.maxY;
     return b;
   }
 
@@ -643,6 +687,19 @@ export class Board {
   }
 
   private onDown(e: PointerEvent) {
+    if (this.preview) {
+      // Read-only: any drag scrolls the page.
+      if (this.preview.drag) return;
+      e.preventDefault();
+      try {
+        this.live.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      const p = clientToApp(e.clientX, e.clientY);
+      this.preview.drag = { pointerId: e.pointerId, x0: p.x, y0: p.y, sx: this.scrollX, sy: this.scrollY };
+      return;
+    }
     if (e.pointerType === 'pen') this.penSeen = true;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const size = contactSize(e);
@@ -733,6 +790,14 @@ export class Board {
   }
 
   private onMove(e: PointerEvent) {
+    const pd = this.preview?.drag;
+    if (this.preview) {
+      if (pd?.pointerId === e.pointerId) {
+        const p = clientToApp(e.clientX, e.clientY);
+        this.setScroll(pd.sy - (p.y - pd.y0) / this.scale, pd.sx - (p.x - pd.x0) / this.scale);
+      }
+      return;
+    }
     if (this.fingers.has(e.pointerId)) {
       this.fingers.set(e.pointerId, { ...clientToApp(e.clientX, e.clientY), t: this.fingers.get(e.pointerId)!.t });
       if (this.pan) {
@@ -796,6 +861,10 @@ export class Board {
   }
 
   private onUp(e: PointerEvent, cancelled: boolean) {
+    if (this.preview) {
+      if (this.preview.drag?.pointerId === e.pointerId) this.preview.drag = null;
+      return;
+    }
     if (this.fingers.delete(e.pointerId) && this.pan) {
       if (this.fingers.size < 2) this.pan = null;
       return;
@@ -1716,6 +1785,14 @@ export class Board {
     this.setPageTransform(ctx);
     const y0 = this.scrollY;
     const y1 = this.scrollY + this.viewH / this.scale;
+    if (this.preview) {
+      for (const pass of [true, false])
+        for (const { c, mark } of this.preview.items) {
+          if ((c.s.tool === 'image') !== pass || c.maxY < y0 || c.minY > y1) continue;
+          this.drawMarked(ctx, c, mark);
+        }
+      return;
+    }
     const hidden = this.editor?.original;
     const dragging = this.active?.kind === 'move' || this.active?.kind === 'scale';
     // Pictures first, so ink is always drawn on top of them.
@@ -1725,6 +1802,42 @@ export class Board {
         if (c.maxY < y0 || c.minY > y1 || c === hidden || (dragging && this.selection.has(c))) continue;
         this.drawStroke(ctx, c);
       }
+  }
+
+  /** Version history: a stroke with its change shown. */
+  private drawMarked(ctx: CanvasRenderingContext2D, c: Cached, mark: 'added' | 'removed' | null) {
+    const box = c.s.tool === 'image' || c.s.tool === 'text';
+    if (mark === 'removed') {
+      ctx.save();
+      ctx.globalAlpha = box ? 0.3 : 0.5;
+      this.drawStroke(ctx, box ? c : { ...c, s: { ...c.s, color: REMOVED_INK }, path: c.path });
+      ctx.restore();
+      if (box) {
+        ctx.save();
+        ctx.strokeStyle = REMOVED_INK;
+        ctx.lineWidth = 1.5 / this.scale;
+        ctx.setLineDash([6 / this.scale, 4 / this.scale]);
+        ctx.strokeRect(c.minX, c.minY, c.maxX - c.minX, c.maxY - c.minY);
+        ctx.restore();
+      }
+      return;
+    }
+    if (mark === 'added') {
+      ctx.save();
+      if (box) {
+        ctx.fillStyle = ADDED_GLOW;
+        const pad = 4 / this.scale;
+        ctx.fillRect(c.minX - pad, c.minY - pad, c.maxX - c.minX + 2 * pad, c.maxY - c.minY + 2 * pad);
+      } else {
+        ctx.strokeStyle = ADDED_GLOW;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = c.s.width * (c.variable ? pressureFactor(1) : 1) + 10 / this.scale;
+        ctx.stroke((c.path ??= buildPath(c.s.points)));
+      }
+      ctx.restore();
+    }
+    this.drawStroke(ctx, c);
   }
 
   private drawStroke(ctx: CanvasRenderingContext2D, c: Cached) {

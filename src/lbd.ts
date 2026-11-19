@@ -1,3 +1,4 @@
+import type { SnapStroke } from './history';
 import { prepareImage } from './images';
 import type { Store } from './store/store';
 import { cleanStyle, isPlain } from './textStyle';
@@ -18,7 +19,9 @@ import { isZip, unzip, zip, ZipError, type UnzipBudget, type ZipEntry } from './
  * A stroke: { tool: "pen" | "highlighter" | "text" | "image", color, width, points, created_at? }
  * plus, by tool, `text` and `font` (text boxes), `dash` (dashed / dotted shapes), `picture` (the
  * picture's path in the archive; `color` is then its file type). `points` is a flat list
- * x, y, pressure, x, y, pressure... in page units, the page being 1000 wide. Ids are not stored:
+ * x, y, pressure, x, y, pressure... in page units, the page being 1000 wide. A note may also carry its
+ * version history (`history`: past versions, oldest first, each with its own strokes); backups have
+ * it, a single note or notebook exported to share does not. Ids are not stored:
  * an import makes new ones, so importing never overwrites anything. The full description is in
  * docs/file-format.md.
  */
@@ -40,11 +43,22 @@ export interface LbdStroke {
   missing?: true;
   created_at?: string;
 }
+/** A past version of a note (version history). */
+export interface LbdVersion {
+  created_at: string;
+  /** 'restore': this version brought back the one made at `restored_from`. */
+  kind?: 'restore';
+  name?: string;
+  restored_from?: string;
+  strokes: LbdStroke[];
+}
 export interface LbdNote {
   title: string;
   created_at?: string;
   updated_at?: string;
   strokes: LbdStroke[];
+  /** Oldest first. */
+  history?: LbdVersion[];
 }
 /** What a file holds once read and checked: notebooks of notes, and the picture files. */
 export interface LbdDocument {
@@ -70,6 +84,8 @@ export async function buildLbd(
   groups: { notebook: Pick<Notebook, 'name'>; notes: NoteMeta[] }[],
   pending: (noteId: string, saved: Stroke[]) => Stroke[] = (_, s) => s,
   onProgress: (done: number, total: number) => void = () => {},
+  /** Include each note's version history (backups do; a note shared with someone does not). */
+  withHistory = false,
 ): Promise<{ blob: Blob; missingPictures: number }> {
   let missingPictures = 0;
   const enc = new TextEncoder();
@@ -77,37 +93,56 @@ export async function buildLbd(
   const total = groups.reduce((n, g) => n + g.notes.length, 0);
   let done = 0;
   const manifest = { format: 'lineboard', version: LBD_VERSION, exported_at: new Date().toISOString(), notebooks: [] as { name: string; notes: { file: string }[] }[] };
+  const pictures = new Set<string>();
+  /** Strokes as the file has them; pictures go into the archive once each. */
+  const convert = async (strokes: SnapStroke[]): Promise<LbdStroke[]> => {
+    const out: LbdStroke[] = [];
+    for (const s of strokes) {
+      const base: LbdStroke = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(s.created_at ? { created_at: s.created_at } : {}) };
+      if (s.tool === 'image') {
+        if (!s.text) continue;
+        const path = `pictures/${s.text}.${PICTURE_EXT[s.color] ?? 'png'}`;
+        if (pictures.has(path)) {
+          out.push({ ...base, picture: path });
+          continue;
+        }
+        // One retry for a passing network error; a picture that still cannot be read is kept as a
+        // marked stroke (where it was, how big) and counted, so the export never hides the loss.
+        const blob = await store.getImage(s.text, s.color).catch(() => store.getImage(s.text!, s.color).catch(() => null));
+        if (blob) {
+          pictures.add(path);
+          files.push({ name: path, data: new Uint8Array(await blob.arrayBuffer()) });
+          out.push({ ...base, picture: path });
+        } else {
+          missingPictures++;
+          out.push({ ...base, missing: true });
+        }
+        continue;
+      }
+      if (s.tool === 'text') out.push({ ...base, text: s.text ?? '', ...(isPlain(s.font) ? {} : { font: cleanStyle(s.font) }) });
+      else out.push({ ...base, ...(s.dash ? { dash: s.dash } : {}) });
+    }
+    return out;
+  };
+  const history = withHistory && (await (store.supportsHistory?.() ?? Promise.resolve(true)).catch(() => false));
   for (const g of groups) {
     const book = { name: g.notebook.name, notes: [] as { file: string }[] };
     for (const n of g.notes) {
-      const strokes = pending(n.id, await store.loadStrokes(n.id));
-      const out: LbdStroke[] = [];
-      for (const s of strokes) {
-        const base: LbdStroke = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(s.created_at ? { created_at: s.created_at } : {}) };
-        if (s.tool === 'image') {
-          if (!s.text) continue;
-          const path = `pictures/${s.text}.${PICTURE_EXT[s.color] ?? 'png'}`;
-          if (files.some((f) => f.name === path)) {
-            out.push({ ...base, picture: path });
-            continue;
-          }
-          // One retry for a passing network error; a picture that still cannot be read is kept as a
-          // marked stroke (where it was, how big) and counted, so the export never hides the loss.
-          const blob = await store.getImage(s.text, s.color).catch(() => store.getImage(s.text!, s.color).catch(() => null));
-          if (blob) {
-            files.push({ name: path, data: new Uint8Array(await blob.arrayBuffer()) });
-            out.push({ ...base, picture: path });
-          } else {
-            missingPictures++;
-            out.push({ ...base, missing: true });
-          }
-          continue;
+      const out = await convert(pending(n.id, await store.loadStrokes(n.id)));
+      const versions: LbdVersion[] = [];
+      if (history) {
+        for (const v of (await store.listVersions(n.id)).reverse()) {
+          versions.push({
+            created_at: v.created_at,
+            ...(v.kind === 'restore' ? { kind: 'restore' as const } : {}),
+            ...(v.name ? { name: v.name } : {}),
+            ...(v.restored_from ? { restored_from: v.restored_from } : {}),
+            strokes: await convert(await store.loadVersion(v)),
+          });
         }
-        if (s.tool === 'text') out.push({ ...base, text: s.text ?? '', ...(isPlain(s.font) ? {} : { font: cleanStyle(s.font) }) });
-        else out.push({ ...base, ...(s.dash ? { dash: s.dash } : {}) });
       }
       const file = `notes/${String(++done).padStart(4, '0')}.json`;
-      const note: LbdNote = { title: n.title, created_at: n.created_at, updated_at: n.updated_at, strokes: out };
+      const note: LbdNote = { title: n.title, created_at: n.created_at, updated_at: n.updated_at, strokes: out, ...(versions.length ? { history: versions } : {}) };
       files.push({ name: file, data: enc.encode(JSON.stringify(note)), compress: true });
       book.notes.push({ file });
       onProgress(done, total);
@@ -127,7 +162,9 @@ const LIMITS = { maxEntries: 30_000, maxTotal: 1_500_000_000, maxEntry: 60_000_0
 const OUTER_LIMITS = { maxEntries: 1_000, maxTotal: 1_500_000_000, maxEntry: 1_500_000_000 };
 const MAX_NOTES = 20_000;
 const MAX_STROKES = 50_000;
-const MAX_ALL_STROKES = 2_000_000;
+/** Strokes in all, past versions included (each version is a full copy of its note). */
+const MAX_ALL_STROKES = 5_000_000;
+const MAX_VERSIONS = 500;
 
 /**
  * One allowance for a whole import, shared by every .lbd in it, so splitting content across many
@@ -206,7 +243,7 @@ async function readLbd(bytes: Uint8Array, budget: Budget): Promise<LbdDocument> 
       const path = (ref as { file?: unknown })?.file;
       const data = typeof path === 'string' ? files.get(path) : undefined;
       if (!data) throw new LbdError('This Lineboard file is damaged (a note is missing).');
-      let raw: { title?: unknown; created_at?: unknown; updated_at?: unknown; strokes?: unknown };
+      let raw: { title?: unknown; created_at?: unknown; updated_at?: unknown; strokes?: unknown; history?: unknown };
       try {
         raw = JSON.parse(new TextDecoder().decode(data));
       } catch {
@@ -221,7 +258,31 @@ async function readLbd(bytes: Uint8Array, budget: Budget): Promise<LbdDocument> 
         if (ok) strokes.push(ok);
         else doc.skipped++;
       }
-      book.notes.push({ title: str(raw.title, 200).trim() || 'Untitled', created_at: date(raw.created_at), updated_at: date(raw.updated_at), strokes });
+      const history: LbdVersion[] = [];
+      if (Array.isArray(raw.history)) {
+        if (raw.history.length > MAX_VERSIONS) throw new LbdError(`A note in this file has more than ${MAX_VERSIONS} versions.`);
+        for (const rv of raw.history as Record<string, unknown>[]) {
+          const created = date(rv?.created_at);
+          const vlist = Array.isArray(rv?.strokes) ? rv.strokes : null;
+          if (!created || !vlist) {
+            doc.skipped++;
+            continue;
+          }
+          if (vlist.length > MAX_STROKES) throw new LbdError(`A version in this file has more than ${MAX_STROKES.toLocaleString()} strokes.`);
+          if ((budget.strokes -= vlist.length) < 0) throw new LbdError(`This has more than ${MAX_ALL_STROKES.toLocaleString()} strokes. Import it in smaller batches.`);
+          const vs: LbdStroke[] = [];
+          for (const s of vlist) {
+            const ok = readStroke(s, pictures);
+            if (ok) vs.push(ok);
+            else doc.skipped++;
+          }
+          const name = str(rv.name, 120).trim();
+          const from = date(rv.restored_from);
+          history.push({ created_at: created, ...(rv.kind === 'restore' ? { kind: 'restore' as const } : {}), ...(name ? { name } : {}), ...(from ? { restored_from: from } : {}), strokes: vs });
+        }
+        history.sort((a, b) => a.created_at.localeCompare(b.created_at));
+      }
+      book.notes.push({ title: str(raw.title, 200).trim() || 'Untitled', created_at: date(raw.created_at), updated_at: date(raw.updated_at), strokes, ...(history.length ? { history } : {}) });
     }
     doc.notebooks.push(book);
   }
@@ -251,7 +312,10 @@ export async function readNotesFile(file: Blob): Promise<LbdDocument> {
       const prefix = `${all.notebooks.length}:`;
       for (const [p, blob] of doc.pictures) all.pictures.set(prefix + p, blob);
       for (const book of doc.notebooks)
-        all.notebooks.push({ ...book, notes: book.notes.map((n) => ({ ...n, strokes: n.strokes.map((s) => (s.picture ? { ...s, picture: prefix + s.picture } : s)) })) });
+      {
+        const re = (list: LbdStroke[]) => list.map((s) => (s.picture ? { ...s, picture: prefix + s.picture } : s));
+        all.notebooks.push({ ...book, notes: book.notes.map((n) => ({ ...n, strokes: re(n.strokes), ...(n.history ? { history: n.history.map((v) => ({ ...v, strokes: re(v.strokes) })) } : {}) })) });
+      }
       all.skipped += doc.skipped;
     }
     return all;
@@ -287,6 +351,34 @@ export async function importDocument(
   const books = [...existing];
   const uploaded = new Map<string, { id: string; type: string }>();
   let done = 0;
+  const history = await (store.supportsHistory?.() ?? Promise.resolve(true)).catch(() => false);
+  /** A file's strokes as the app keeps them: pictures uploaded (once each) under new ids. */
+  const convert = async (list: LbdStroke[]): Promise<SnapStroke[]> => {
+    const out: SnapStroke[] = [];
+    for (const s of list) {
+      const { picture, missing: _missing, ...rest } = s;
+      const stroke: SnapStroke = { ...rest };
+      if (s.tool === 'image' && picture) {
+        let pic = uploaded.get(picture);
+        if (!pic) {
+          try {
+            // Normalised like a picture added in the app (and proven to be an image).
+            const img = await prepareImage(doc.pictures.get(picture)!);
+            pic = { id: uuid(), type: img.type };
+            await store.putImage(pic.id, img.blob);
+            uploaded.set(picture, pic);
+          } catch {
+            result.skipped++;
+            continue;
+          }
+        }
+        stroke.text = pic.id;
+        stroke.color = pic.type;
+      }
+      out.push(stroke);
+    }
+    return out;
+  };
   for (const group of doc.notebooks) {
     if (!group.notes.length) continue;
     let target = current;
@@ -301,30 +393,12 @@ export async function importDocument(
     }
     for (const n of group.notes) {
       const note = await store.createNote(n.title, target.id);
-      const strokes: Stroke[] = [];
-      for (const s of n.strokes) {
-        const { picture, ...rest } = s;
-        const stroke: Stroke = { ...rest, id: uuid(), note_id: note.id, created_at: s.created_at ?? new Date().toISOString() } as Stroke;
-        if (s.tool === 'image' && picture) {
-          let pic = uploaded.get(picture);
-          if (!pic) {
-            try {
-              // Normalised like a picture added in the app (and proven to be an image).
-              const img = await prepareImage(doc.pictures.get(picture)!);
-              pic = { id: uuid(), type: img.type };
-              await store.putImage(pic.id, img.blob);
-              uploaded.set(picture, pic);
-            } catch {
-              result.skipped++;
-              continue;
-            }
-          }
-          stroke.text = pic.id;
-          stroke.color = pic.type;
-        }
-        strokes.push(stroke);
-      }
+      const now = new Date().toISOString();
+      const strokes: Stroke[] = (await convert(n.strokes)).map((s) => ({ ...s, id: uuid(), note_id: note.id, created_at: s.created_at ?? now }));
       for (let i = 0; i < strokes.length; i += 500) await store.upsertStrokes(strokes.slice(i, i + 500));
+      if (history)
+        for (const v of n.history ?? [])
+          await store.saveVersion({ id: uuid(), note_id: note.id, created_at: v.created_at, kind: v.kind ?? 'auto', name: v.name ?? null, restored_from: v.restored_from ?? null }, await convert(v.strokes));
       result.notes.push(note);
       onProgress(++done, total);
     }

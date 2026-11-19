@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { cleanStyle, isPlain } from '../textStyle';
-import { isSealedBytes, open, openBytes, seal, sealBytes } from '../crypto/cipher';
+import { fromB64, isSealedBytes, open, openBytes, seal, sealBytes, toB64 } from '../crypto/cipher';
+import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import type { KeyVault } from '../crypto/vault';
 import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { uuid } from '../util';
@@ -69,7 +70,14 @@ const ctx = {
   stroke: (id: string) => `stroke:${id}`,
   note: (id: string) => `note:${id}`,
   book: (id: string) => `notebook:${id}`,
+  version: (id: string) => `version:${id}`,
+  versionName: (id: string) => `version-name:${id}`,
 };
+
+type VersionRow = Omit<VersionMeta, 'name'> & { name: string | null; name_enc: string | null; data?: string | null; data_enc?: string | null };
+const VERSION_COLS = 'id,note_id,created_at,kind,name,name_enc,restored_from';
+/** Versions are fetched a few at a time when their content comes along (each can be large). */
+const VERSION_PAGE = 20;
 
 /**
  * Cloud storage. With a vault whose encryption is on, note titles, notebook names and ink are
@@ -388,6 +396,115 @@ export class SupabaseStore implements Store {
     }
   }
 
+  // ----------------------------- version history -----------------------------
+
+  private historyProbe: Promise<boolean> | null = null;
+  supportsHistory(): Promise<boolean> {
+    this.historyProbe ??= (async () => {
+      const { error } = await this.sb.from('note_versions').select('id').limit(1);
+      if (!error) return true;
+      const missing = error.code === '42P01' || error.code === 'PGRST205' || /note_versions/.test(error.message ?? '');
+      if (!missing) this.historyProbe = null; // offline or similar: ask again next time
+      return !missing;
+    })();
+    return this.historyProbe;
+  }
+
+  private async decodeVersion(r: VersionRow): Promise<VersionMeta> {
+    const name = r.name_enc ? await this.readText('', r.name_enc, ctx.versionName(r.id)) : r.name;
+    return { id: r.id, note_id: r.note_id, created_at: r.created_at, kind: r.kind, name: name || null, restored_from: r.restored_from };
+  }
+
+  async listVersions(noteId: string): Promise<VersionMeta[]> {
+    const rows: VersionRow[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('note_versions').select(VERSION_COLS).eq('note_id', noteId).order('created_at', { ascending: false }).range(from, from + PAGE - 1);
+      check(error);
+      const page = (data ?? []) as unknown as VersionRow[];
+      rows.push(...page);
+      if (page.length < PAGE) break;
+    }
+    return Promise.all(rows.map((r) => this.decodeVersion(r)));
+  }
+
+  /** A version's snapshot bytes (deflated JSON), decrypted when needed. */
+  private async versionBytes(r: Pick<VersionRow, 'id' | 'data' | 'data_enc'>): Promise<Uint8Array<ArrayBuffer>> {
+    if (!r.data_enc) return fromB64(r.data ?? '');
+    const key = this.vault?.key;
+    if (!key) throw new StoreError('This version is encrypted; unlock encryption to see it', false);
+    return openBytes(key, ctx.version(r.id), fromB64(r.data_enc));
+  }
+
+  async loadVersion(v: VersionMeta): Promise<SnapStroke[]> {
+    const { data, error } = await this.sb.from('note_versions').select('id,data,data_enc').eq('id', v.id).maybeSingle();
+    check(error);
+    if (!data) throw new StoreError('This version no longer exists.', true);
+    return decodeSnapshot(await this.versionBytes(data as VersionRow));
+  }
+
+  private async encodeVersion(key: CryptoKey | null, v: VersionMeta, bytes: Uint8Array<ArrayBuffer>): Promise<Record<string, unknown>> {
+    const name: { name: string | null; name_enc: string | null } = v.name ? (key ? { name: null, name_enc: await seal(key, ctx.versionName(v.id), v.name) } : { name: v.name, name_enc: null }) : { name: null, name_enc: null };
+    const payload: { data: string | null; data_enc: string | null } = key ? { data: null, data_enc: toB64(await sealBytes(key, ctx.version(v.id), bytes)) } : { data: toB64(bytes), data_enc: null };
+    const size = (payload.data ?? payload.data_enc ?? '').length;
+    return { id: v.id, note_id: v.note_id, user_id: this.userId, created_at: v.created_at, kind: v.kind, restored_from: v.restored_from, ...name, ...payload, size };
+  }
+
+  async saveVersion(v: VersionMeta, strokes: SnapStroke[]) {
+    const bytes = await encodeSnapshot(strokes);
+    await this.write(async (key) => {
+      const { error } = await this.sb.from('note_versions').upsert(await this.encodeVersion(key, v, bytes), { onConflict: 'id' });
+      return error;
+    });
+  }
+
+  async renameVersion(v: VersionMeta, name: string | null) {
+    await this.write(async (key) => {
+      const patch = name ? (key ? { name: null, name_enc: await seal(key, ctx.versionName(v.id), name) } : { name, name_enc: null }) : { name: null, name_enc: null };
+      const { error } = await this.sb.from('note_versions').update(patch).eq('id', v.id);
+      return error;
+    });
+  }
+
+  async deleteVersions(ids: string[]) {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const { error } = await this.sb.from('note_versions').delete().in('id', ids.slice(i, i + CHUNK));
+      check(error);
+    }
+  }
+
+  /** Bring versions in line with the account's encryption (one note's, or every remaining one). */
+  private async convertVersions(target: CryptoKey | null, encrypting: boolean, noteId: string | null) {
+    if (!(await this.supportsHistory())) return;
+    let skip = 0; // versions that cannot be decrypted stay as they are
+    for (;;) {
+      let q = this.sb.from('note_versions').select(VERSION_COLS + ',data,data_enc');
+      if (noteId) q = q.eq('note_id', noteId);
+      q = encrypting ? q.is('data_enc', null) : q.not('data_enc', 'is', null);
+      const { data, error } = await q.order('id', { ascending: true }).range(skip, skip + VERSION_PAGE - 1);
+      check(error);
+      const rows = (data ?? []) as unknown as VersionRow[];
+      if (!rows.length) return;
+      for (const r of rows) {
+        let bytes: Uint8Array<ArrayBuffer>;
+        try {
+          bytes = await this.versionBytes(r);
+        } catch (e) {
+          console.warn(e);
+          skip++;
+          continue;
+        }
+        const meta = await this.decodeVersion(r);
+        if (meta.name === LOCKED_TITLE && r.name_enc && !encrypting) {
+          skip++;
+          continue;
+        }
+        const { error: ue } = await this.sb.from('note_versions').upsert(await this.encodeVersion(target, meta, bytes), { onConflict: 'id' });
+        check(ue);
+      }
+      if (rows.length < VERSION_PAGE) return;
+    }
+  }
+
   // ----------------------------- images -----------------------------
 
   private imagePath(id: string) {
@@ -504,6 +621,7 @@ export class SupabaseStore implements Store {
         }
       }
       const changed = await this.convertStrokes(target, encrypting, r.id);
+      await this.convertVersions(target, encrypting, r.id);
       // Saving strokes bumps the note's date; put the original back.
       if (changed) {
         const { error } = await this.sb.from('notes').update({ updated_at: r.updated_at }).eq('id', r.id);
@@ -513,6 +631,7 @@ export class SupabaseStore implements Store {
     }
     // Anything written meanwhile by another device (notes made after the list above was read).
     await this.convertStrokes(target, encrypting, null);
+    await this.convertVersions(target, encrypting, null);
   }
 
   /**
@@ -544,6 +663,7 @@ export class SupabaseStore implements Store {
       check(error);
     }
     await this.convertStrokes(target, encrypting, null);
+    await this.convertVersions(target, encrypting, null);
   }
 
   /** Convert one note's strokes (or every remaining one, with noteId null). Returns how many changed. */

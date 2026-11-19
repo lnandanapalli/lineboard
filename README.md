@@ -39,9 +39,14 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
   encrypted too.
 - **Select:** lasso or rectangle (anything touched is picked), then move, resize, duplicate or delete.
 - **Organise and export:** notebooks and notes, PNG export, manual orientation lock.
+- **Version history.** Versions are saved as you write (after a pause, and when you leave a note). Browse them
+  read-only on the board, with new ink highlighted and removed ink faded. Restoring adds a new version on top,
+  so nothing is ever lost and the restore can be undone. Make a copy of any version as a new note, fresh or with
+  its history; name versions to keep them. Unnamed ones thin out over time (all from the last day, hourly for a
+  week, daily for 90 days).
 - **Lineboard files (`.lbd`).** Export a note, a notebook or all notes, and import them back by file, by a zip of
   several, or by dropping one on the board. Pictures travel inside the file. See [the format](docs/file-format.md).
-- **Your data:** download everything (your account details, plus all notes as an `.lbd`), or delete your account
+- **Your data:** download everything (your account details, plus all notes and their history as an `.lbd`), or delete your account
   (Settings → Account).
 - **Accounts and sync** with Supabase, with background saving that survives reloads and offline periods.
 - **Account security.** See and sign out signed-in devices, change the password (which signs out other
@@ -198,6 +203,7 @@ Built in:
 - **Fair-use limits, enforced by the database:**
   - 500 notebooks and 20,000 notes per account;
   - 50,000 strokes per note and 2,000,000 strokes in all;
+  - version history: 500 versions per note and 1 GB per account;
   - pictures: image types only, at most 15 MB each, and 5,000 files or 2 GB per account.
   - The app explains a refused save instead of retrying it.
 - **Web server:**
