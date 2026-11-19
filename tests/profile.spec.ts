@@ -160,3 +160,30 @@ test('turning encryption on also encrypts a profile picture added before', async
   // Only ciphertext is stored now ("LBE1" marks an encrypted file).
   expect(db.images!.get(`${USER_ID}/profile-picture`)!.body.subarray(0, 4).toString()).toBe('LBE1');
 });
+
+test('with the app turned 90°, an ⓘ popup opens next to its button, inside Settings', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await setup(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  await page.getByRole('switch', { name: 'Manual orientation' }).click();
+  await page.locator('.settings-close').click();
+  await page.getByRole('button', { name: 'Rotate right' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-rotation', '90');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  const btn = page.getByRole('button', { name: 'About Smoothing' });
+  await btn.click();
+  const tip = page.getByRole('dialog', { name: 'Smoothing' });
+  await expect(tip).toBeVisible();
+  const t = (await tip.boundingBox())!;
+  const b = (await btn.boundingBox())!;
+  const d = (await page.locator('.settings-modal').boundingBox())!;
+  // Inside the Settings window, and close to its button (on screen the app is turned, so either side).
+  expect(t.x).toBeGreaterThanOrEqual(d.x - 1);
+  expect(t.y).toBeGreaterThanOrEqual(d.y - 1);
+  expect(t.x + t.width).toBeLessThanOrEqual(d.x + d.width + 1);
+  expect(t.y + t.height).toBeLessThanOrEqual(d.y + d.height + 1);
+  const gap = Math.max(0, Math.max(t.x - (b.x + b.width), b.x - (t.x + t.width))) + Math.max(0, Math.max(t.y - (b.y + b.height), b.y - (t.y + t.height)));
+  expect(gap).toBeLessThan(40);
+});
