@@ -1,10 +1,12 @@
 # Lineboard
 
-**A handwriting whiteboard that ignores your palm, made for tablets without an active pen.**
+**A handwriting whiteboard you can rest your hand on, made for tablets without an active pen.**
 
-On tablets without a pen digitizer, a capacitive stylus and a resting palm look the same to the screen.
-Lineboard avoids guessing which is which: the page is split into horizontal **strips**, and only the strip
-you unlock accepts ink. Your palm can rest anywhere else.
+On a tablet without a pen digitizer, a capacitive stylus, a fingertip and a resting palm all look the same
+to the screen, and some tablets react badly the moment a palm lands on it. Lineboard does not try to tell
+them apart. It draws **one line** across the screen: above it, the page takes your ink; below it, the screen
+is locked, so your hand and stray fingers can rest there without leaving marks. Drag the line to wherever
+your hand sits, scroll the page underneath, and keep writing. That line is where the name comes from.
 
 ![Lineboard on a tablet in landscape](docs/screenshot.png)
 
@@ -12,14 +14,19 @@ you unlock accepts ink. Your palm can rest anywhere else.
 
 ## Features
 
-- **Strip lock.** Tap a lock in the margin to unlock a strip; unlocking one locks the others.
-  **Multi-strip** mode unlocks several at once for larger drawings.
+- **The line (split mode, the default).** One line divides the screen into two panes:
+  - write in the open pane; the locked one ignores every touch;
+  - each pane has a lock in the margin, so you can switch which half you write in;
+  - tap the grip on the line, then drag it, to move it;
+  - the page scrolls underneath both panes.
+- **Strips, for finer control.** Lock the page strip by strip: unlock one strip to write in it, or switch to
+  **multi-strip** to unlock several at once for larger drawings.
 - **Palm-safe scrolling.** Drag the margin to scroll, or step line by line with the arrow buttons or keys.
-- **Palm filtering inside the unlocked strip:** one stroke at a time, oversized contacts ignored (with a
+- **Palm filtering inside the open area:** one stroke at a time, oversized contacts ignored (with a
   calibration pad in Settings), strokes cancelled if a contact grows into a palm, and optional pen-only input
   when an active pen is detected.
-- **Modes:** **split** (the default for new users), strips, multi-strip, a **free whiteboard** (write anywhere; two fingers scroll and zoom; plain,
-  lined, grid or dotted paper). Split is two panes, each locked or unlocked, with a movable divider.
+- **Free whiteboard** when an idea needs the whole page: write anywhere, two fingers scroll and zoom, with
+  plain, lined, grid or dotted paper.
 - **Tools:**
   - pen, pressure-aware with active pens;
   - highlighter, stroke eraser, size slider, stroke smoothing, colours (including a custom one);
@@ -229,7 +236,7 @@ The tests simulate stylus and palm contacts of different sizes, and cover the si
 in-memory Supabase stand-in, so they need no backend or keys.
 
 ```
-src/board.ts        canvas engine: strips, palm filtering, eraser, rendering, export
+src/board.ts        canvas engine: split / strips, palm filtering, eraser, rendering, export
 src/app.ts          toolbar, notes, settings, undo / redo
 src/sync.ts         background save queue
 src/store/          Supabase and browser storage backends

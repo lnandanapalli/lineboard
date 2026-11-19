@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Handwriting whiteboard with strip-lock palm rejection, for tablets without an active pen.",
+  "description": "Handwriting whiteboard for tablets without an active pen: write above a movable line, rest your hand on the locked part below it.",
   "license": "MIT",
   "engines": {
     "node": ">=20.19"

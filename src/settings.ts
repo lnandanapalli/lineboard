@@ -321,7 +321,7 @@ export class SettingsPanel {
           (on) => orientation.setManual(on),
         ),
       ),
-      this.card(null, h('p', { class: 'muted' }, 'Choose Strips, Multi-strip or Free whiteboard from the Mode menu in the toolbar.')),
+      this.card(null, h('p', { class: 'muted' }, 'Choose Split, Strips, Multi-strip or Free whiteboard from the Mode menu in the toolbar.')),
     ];
   }
 
@@ -502,7 +502,7 @@ export class SettingsPanel {
     return [
       this.card(
         null,
-        h('p', {}, 'Lineboard is a handwriting whiteboard with strip-lock palm rejection, for tablets without an active pen.'),
+        h('p', {}, 'Lineboard is a handwriting whiteboard for tablets without an active pen: write above the line, and rest your hand below it.'),
         h('p', { class: 'set-links' }, link('/home', 'About Lineboard'), ' · ', link('/terms', 'Terms of service'), ' · ', link('/privacy', 'Privacy policy'), ' · ', link('https://github.com/lnandanapalli/lineboard', 'Source code')),
       ),
       this.card(
