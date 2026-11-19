@@ -79,8 +79,9 @@ function matches(url: URL) {
 
 function paginate(url: URL, rows: Row[]) {
   const offset = Number(url.searchParams.get('offset') ?? 0);
-  const limit = url.searchParams.get('limit');
-  return rows.slice(offset, limit ? offset + Number(limit) : undefined);
+  // Like a Supabase project's API: at most 1000 rows per response (max rows), whatever was asked.
+  const limit = Math.min(Number(url.searchParams.get('limit') ?? 1000), 1000);
+  return rows.slice(offset, offset + limit);
 }
 
 /** Pass `shared` to give a second browser context (another device) the same database. */

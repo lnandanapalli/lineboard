@@ -81,7 +81,14 @@ export function zip(files: { name: string; data: Uint8Array }[], date = new Date
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp' };
 
 /** Everything this account (or device) holds, as a zip. `onProgress` gets (notes done, total). */
-export async function buildExport(store: Store, user: AppUser, settings: Settings, onProgress: (done: number, total: number) => void = () => {}): Promise<Blob> {
+export async function buildExport(
+  store: Store,
+  user: AppUser,
+  settings: Settings,
+  /** Apply changes not yet saved (the sync queue), so the export matches what the user sees. */
+  pending: (noteId: string, saved: Stroke[]) => Stroke[] = (_, saved) => saved,
+  onProgress: (done: number, total: number) => void = () => {},
+): Promise<Blob> {
   const enc = new TextEncoder();
   const [books, notes] = await Promise.all([store.listNotebooks(), store.listNotes()]);
   const files: { name: string; data: Uint8Array }[] = [];
@@ -89,7 +96,7 @@ export async function buildExport(store: Store, user: AppUser, settings: Setting
   const strokesOf = new Map<string, Stroke[]>();
   onProgress(0, notes.length);
   for (let i = 0; i < notes.length; i++) {
-    const strokes = await store.loadStrokes(notes[i].id);
+    const strokes = pending(notes[i].id, await store.loadStrokes(notes[i].id));
     strokesOf.set(notes[i].id, strokes);
     for (const s of strokes) {
       if (s.tool !== 'image' || !s.text) continue;

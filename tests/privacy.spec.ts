@@ -72,15 +72,23 @@ test('without an account, "Download my data" gives a zip with every note, stroke
   expect(data.settings.penColor).toBeTruthy();
 });
 
-test('without an account, "Delete everything on this device" removes the notes after confirming', async ({ page }) => {
+test('without an account, "Delete everything on this device" removes the notes and pictures after confirming', async ({ page }) => {
   const { cdp, geo } = await setup(page);
   await drag(cdp, geo.areaX + 100, geo.areaY + 60, geo.areaX + 300, geo.areaY + 60);
-  await expectStrokes(page, 1);
+  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
+  await expectStrokes(page, 2);
   await openAccountSettings(page);
   await page.getByRole('button', { name: 'Delete everything on this device' }).click();
   await page.locator('dialog[open]').getByRole('button', { name: 'Delete everything', exact: true }).click();
   await page.locator('.canvas-area canvas.live').waitFor();
   await expectStrokes(page, 0);
+  // The picture files went too (the deletion finished before the page reloaded).
+  const pictures = await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((res, rej) => { const r = indexedDB.open('lineboard-local-images'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    if (!db.objectStoreNames.contains('images')) return 0;
+    return new Promise<number>((res) => { const c = db.transaction('images').objectStore('images').count(); c.onsuccess = () => res(c.result); });
+  });
+  expect(pictures).toBe(0);
 });
 
 test('with an account: download my data, then delete the account and everything in it', async ({ page }) => {
@@ -181,4 +189,36 @@ test('the privacy policy covers rights, retention, providers and children; the t
   await expect(page.locator('#rights')).toContainText('Delete account');
   await page.goto('/terms');
   for (const id of ['acceptable-use', 'limits', 'suspension', 'account']) await expect(page.locator(`section#${id}`)).toBeVisible();
+});
+
+test('the export includes changes still waiting to be saved', async ({ page }) => {
+  await mockSupabase(page);
+  // The server is unreachable for saves: the stroke stays queued.
+  await page.route('**/rest/v1/strokes*', (route) => (route.request().method() === 'POST' ? route.abort() : route.fallback()));
+  await signIn(page);
+  const { attachBoard } = await import('./helpers');
+  const { cdp, geo } = await attachBoard(page);
+  await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));
+  await expect(page.locator('.status')).toHaveText(/Saving|Offline/);
+  await openAccountSettings(page);
+  const data = JSON.parse((await download(page)).get('lineboard-data.json')!.toString('utf8'));
+  const strokes = data.notebooks.flatMap((b: { notes: { strokes: unknown[] }[] }) => b.notes.flatMap((n) => n.strokes));
+  expect(strokes).toHaveLength(1);
+});
+
+test('an account with more than 1000 notes gets all of them (listed and exported)', async ({ page }) => {
+  test.setTimeout(90_000);
+  const db = await mockSupabase(page);
+  const t0 = Date.parse('2026-01-01T00:00:00Z');
+  db.notebooks.push({ id: USER_ID, user_id: USER_ID, name: 'My Notebook', name_enc: null, created_at: new Date(t0).toISOString(), updated_at: new Date(t0).toISOString() });
+  for (let i = 0; i < 1005; i++) {
+    const at = new Date(t0 + i * 60_000).toISOString();
+    db.notes.push({ id: crypto.randomUUID(), user_id: USER_ID, notebook_id: USER_ID, title: `Note ${i}`, title_enc: null, created_at: at, updated_at: at });
+  }
+  await signIn(page);
+  await openAccountSettings(page);
+  const data = JSON.parse((await download(page)).get('lineboard-data.json')!.toString('utf8'));
+  const titles = data.notebooks.flatMap((b: { notes: { title: string }[] }) => b.notes.map((n) => n.title));
+  expect(titles).toHaveLength(1005);
+  expect(titles).toContain('Note 0'); // the oldest, beyond the first page
 });

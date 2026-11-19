@@ -32,7 +32,7 @@ export async function guestNotesWithInk(local: LocalStore): Promise<NoteMeta[]> 
 
 /** Remove everything the guest session stored on this device. */
 export function clearGuestData(local: LocalStore) {
-  local.clearAll();
+  void local.clearAll().catch(() => {});
   for (const k of GUEST_APP_KEYS) lsDel(k);
   lsDel(GUEST_MIGRATE);
 }

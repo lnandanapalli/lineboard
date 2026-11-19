@@ -1107,7 +1107,8 @@ export class App {
     try {
       this.board.finishText();
       toast('Preparing your data...');
-      const blob = await buildExport(this.store, this.user, this.settings);
+      // Include changes still waiting to be saved (and leave out strokes waiting to be deleted).
+      const blob = await buildExport(this.store, this.user, this.settings, (noteId, saved) => this.queue.overlay(noteId, saved));
       this.download(blob, `lineboard-data-${new Date().toISOString().slice(0, 10)}.zip`);
       toast('Your data is downloading.');
     } catch (e) {
@@ -1150,7 +1151,12 @@ export class App {
       danger: true,
     });
     if (!ok) return;
-    if (this.store instanceof LocalStore) this.store.clearAll();
+    try {
+      if (this.store instanceof LocalStore) await this.store.clearAll();
+    } catch (e) {
+      toast('Could not delete everything: ' + (e as Error).message, 'error');
+      return;
+    }
     try {
       for (const k of Object.keys(localStorage)) if (k.startsWith('lb-')) localStorage.removeItem(k);
     } catch {

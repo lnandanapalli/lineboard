@@ -287,9 +287,16 @@ export class SupabaseStore implements Store {
   }
 
   async listNotes(): Promise<NoteMeta[]> {
-    const { data, error } = await this.sb.from('notes').select(this.noteCols()).order('updated_at', { ascending: false });
-    check(error);
-    return Promise.all(((data ?? []) as unknown as NoteRow[]).map((r) => this.decodeNote(r)));
+    // Page through: the API returns at most 1000 rows per request, and an account may have more notes.
+    const rows: NoteRow[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('notes').select(this.noteCols()).order('updated_at', { ascending: false }).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      const page = (data ?? []) as unknown as NoteRow[];
+      rows.push(...page);
+      if (page.length < PAGE) break;
+    }
+    return Promise.all(rows.map((r) => this.decodeNote(r)));
   }
 
   async createNote(title: string, notebookId: string): Promise<NoteMeta> {
