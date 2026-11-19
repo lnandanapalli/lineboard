@@ -34,6 +34,12 @@ export interface SettingsHost {
   account?: AccountSecurity;
   /** Guest mode: a "Sign in to save" button. */
   signInButton?: () => HTMLElement;
+  /** Download every notebook, note, picture and setting as a zip. */
+  exportData: () => Promise<void>;
+  /** Signed in: delete the account and everything in it. */
+  deleteAccount?: () => Promise<void>;
+  /** No account: delete everything kept in this browser. */
+  deleteLocalData?: () => Promise<void>;
 }
 
 /** The settings window: a sidebar of sections (account, page, stylus, security, about). */
@@ -189,7 +195,39 @@ export class SettingsPanel {
     const where = signOut
       ? 'Your notebooks sync to your account, so they are on every device you sign in to.'
       : 'Notes stay in this browser on this device.';
-    return [this.card(null, account), this.card('Storage', h('p', { class: 'muted' }, where), h('p', { class: 'muted' }, store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : ''))];
+    // Your data: a copy of everything (portability), and erasing it.
+    const exportBtn = h('button', { class: 'btn', type: 'button' }, 'Download my data') as HTMLButtonElement;
+    exportBtn.addEventListener('click', async () => {
+      exportBtn.disabled = true;
+      try {
+        await this.host.exportData();
+      } finally {
+        exportBtn.disabled = false;
+      }
+    });
+    const erase = this.host.deleteAccount ?? this.host.deleteLocalData;
+    const eraseBtn = erase ? (h('button', { class: 'btn danger', type: 'button' }, this.host.deleteAccount ? 'Delete account' : 'Delete everything on this device') as HTMLButtonElement) : null;
+    eraseBtn?.addEventListener('click', () => void erase!());
+    const dataCard = this.card(
+      'Your data',
+      h('p', { class: 'muted' }, 'Download a copy of all your notebooks, notes, pictures and settings (a zip with a JSON file and the picture files).'),
+      h('div', { class: 'row-actions' }, exportBtn),
+      eraseBtn
+        ? h(
+            'p',
+            { class: 'muted' },
+            this.host.deleteAccount
+              ? 'Deleting your account removes it and everything in it from our servers, permanently.'
+              : 'Deleting removes every note and picture saved in this browser, permanently.',
+          )
+        : null,
+      eraseBtn ? h('div', { class: 'row-actions' }, eraseBtn) : null,
+    );
+    return [
+      this.card(null, account),
+      this.card('Storage', h('p', { class: 'muted' }, where), h('p', { class: 'muted' }, store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : '')),
+      dataCard,
+    ];
   }
 
   // ----------------------------- sign-in & devices -----------------------------

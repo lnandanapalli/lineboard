@@ -205,6 +205,34 @@ export class AccountSecurity {
     return data.nextLevel === 'aal2' && data.currentLevel !== 'aal2';
   }
 
+  // ----------------------------- deleting the account -----------------------------
+
+  /**
+   * Delete the account for good: its picture files first (the database cannot remove storage
+   * files), then the user, which removes every notebook, note, stroke, setting, key, passkey,
+   * authenticator and device with it. The caller confirms identity first (confirmItsYou).
+   */
+  async deleteAccount(userId: string) {
+    const bucket = this.sb.storage.from('images');
+    for (let round = 0; round < 1000; round++) {
+      const { data, error } = await bucket.list(userId, { limit: 1000 });
+      if (error) {
+        if (/bucket not found/i.test(error.message ?? '')) break; // pictures were never set up
+        fail(error as AnyErr, 'Could not remove your pictures');
+      }
+      const names = (data ?? []).filter((f) => f.name && f.id !== null).map((f) => `${userId}/${f.name}`);
+      if (!names.length) break;
+      const { error: re } = await bucket.remove(names);
+      if (re) fail(re as AnyErr, 'Could not remove your pictures');
+    }
+    const { error } = await this.sb.rpc('delete_my_account');
+    if (error) {
+      if (/function .*delete_my_account|PGRST202/i.test(`${error.message} ${(error as AnyErr)?.code}`))
+        throw new AccountError('Account deletion needs a database update: the site operator re-runs supabase/schema.sql.');
+      fail(error, 'Could not delete your account');
+    }
+  }
+
   // ----------------------------- passkeys -----------------------------
 
   async passkeys(): Promise<Passkey[]> {

@@ -21,6 +21,8 @@ export async function setup(page: Page): Promise<{ cdp: CDPSession; geo: Geo }> 
 /** Wait for the board on the current page and return touch helpers for it. */
 export async function attachBoard(page: Page): Promise<{ cdp: CDPSession; geo: Geo }> {
   await page.locator('.canvas-area canvas.live').waitFor();
+  // A note is open and its ink has loaded (the board takes no input before that).
+  await page.locator('.canvas-area[data-note]:not([data-note=""]):not([aria-busy])').waitFor();
   const hint = page.locator('.hint .link');
   if (await hint.isVisible()) await hint.click();
   const cdp = await page.context().newCDPSession(page);

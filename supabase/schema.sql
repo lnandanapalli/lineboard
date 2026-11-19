@@ -221,8 +221,20 @@ begin
   return found;
 end $$;
 
-revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) from anon, public;
-grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid) to authenticated;
+-- Delete the signed-in user's account (right to erasure). Removing the auth user removes every
+-- row that references it (notebooks, notes, strokes, settings, keys, sessions, factors, passkeys).
+-- The app deletes the user's picture files through the Storage API first.
+create or replace function public.delete_my_account() returns void
+language plpgsql volatile security definer set search_path = '' as $$
+begin
+  if not public.access_ok() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  delete from auth.users where id = (select auth.uid());
+end $$;
+
+revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account() from anon, public;
+grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account() to authenticated;
 
 -- ------------- Pictures -------------
 -- An 'image' stroke points at a file in this private bucket, at <user id>/<image id>. Files of

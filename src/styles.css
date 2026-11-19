@@ -152,6 +152,7 @@ button { font: inherit; color: inherit; }
 .btn svg { width: 18px; height: 18px; }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
 .btn.wide { width: 100%; }
 .btn:disabled { opacity: 0.6; }
 .link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }

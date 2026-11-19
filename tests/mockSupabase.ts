@@ -26,6 +26,8 @@ export interface MockDb {
   password: string;
   /** Supabase Storage: path within the bucket -> bytes and content type. */
   images?: Map<string, { body: Buffer; type: string }>;
+  /** Set once delete_my_account ran: the user no longer exists. */
+  deleted?: boolean;
 }
 
 export interface Session {
@@ -153,7 +155,7 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
         if (!existing) return authError(route, 400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
         return json(route, 200, tokenResponse(existing));
       }
-      if (grant === 'password' && body()?.password !== db.password) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
+      if (grant === 'password' && (db.deleted || body()?.password !== db.password)) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
       return json(route, 200, tokenResponse(newSession(ua)));
     }
     if (path === '/auth/v1/user') {
@@ -252,6 +254,30 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
       return json(route, 200, p ?? null);
     }
     if (path.startsWith('/auth/v1/')) return route.fulfill({ status: 204, headers: cors });
+
+    // ---- storage (pictures): list a folder, remove files ----
+    if (path === '/storage/v1/object/list/images' && method === 'POST') {
+      db.images ??= new Map();
+      const prefix = String(body()?.prefix ?? '').replace(/\/$/, '');
+      if (!accessOk() || prefix !== USER_ID) return json(route, 200, []);
+      const limit = Number(body()?.limit ?? 100);
+      const names = [...db.images.keys()].filter((k) => k.startsWith(prefix + '/')).map((k) => k.slice(prefix.length + 1));
+      return json(route, 200, names.slice(0, limit).map((name) => ({ name, id: crypto.randomUUID(), metadata: { size: db.images!.get(`${prefix}/${name}`)!.body.length } })));
+    }
+    if (path === '/storage/v1/object/images' && method === 'DELETE') {
+      db.images ??= new Map();
+      if (!accessOk()) return json(route, 403, { statusCode: '403', error: 'Unauthorized', message: 'Not allowed' });
+      const prefixes = (body()?.prefixes ?? []) as string[];
+      const removed = prefixes.filter((k) => k.startsWith(USER_ID + '/') && db.images!.delete(k));
+      return json(route, 200, removed.map((name) => ({ name })));
+    }
+
+    // ---- deleting the account ----
+    if (path === '/rest/v1/rpc/delete_my_account') {
+      if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
+      Object.assign(db, { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], deleted: true });
+      return route.fulfill({ status: 204, headers: cors, body: '' });
+    }
 
     // ---- storage (pictures) ----
     const so = /^\/storage\/v1\/object\/images\/(.+)$/.exec(path);
