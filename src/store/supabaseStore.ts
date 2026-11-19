@@ -41,6 +41,11 @@ function imageError(error: { message?: string; statusCode?: string | number; sta
   return new StoreError(msg, false);
 }
 
+/** The file is simply not there (as opposed to a network or server failure, which should be retried). */
+function isMissing(error: { message?: string; statusCode?: string | number; status?: number }) {
+  return String(error.statusCode) === '404' || error.status === 404 || /not.?found/i.test(error.message ?? '');
+}
+
 const ctx = {
   image: (id: string) => `image:${id}`,
   stroke: (id: string) => `stroke:${id}`,
@@ -355,23 +360,34 @@ export class SupabaseStore implements Store {
 
   /** Upload an image. With encryption on, only ciphertext leaves the device. */
   async putImage(id: string, file: Blob) {
+    // Storage cannot tell ciphertext from plaintext, so (unlike stroke rows) a stale "off" would not be
+    // refused there: check the account's state with the server before sending a file unencrypted.
+    if (this.vault && !this.vault.writeEncrypted) await this.vault.refresh();
     const key = await this.writeKey();
-    const bytes = new Uint8Array(await file.arrayBuffer());
     // Raw bytes with an explicit type (a Blob would be sent as a multipart form).
-    const body = key ? await sealBytes(key, ctx.image(id), bytes) : bytes;
-    const contentType = key ? 'application/octet-stream' : file.type || 'application/octet-stream';
-    const { error } = await this.sb.storage.from(IMAGE_BUCKET).upload(this.imagePath(id), body.buffer, { upsert: true, contentType });
-    if (error) throw imageError(error);
+    await this.storeImage(id, new Uint8Array(await file.arrayBuffer()), file.type, key);
   }
 
   async getImage(id: string, type = 'image/png'): Promise<Blob> {
     const { data, error } = await this.sb.storage.from(IMAGE_BUCKET).download(this.imagePath(id));
     if (error || !data) throw imageError(error);
     const bytes = new Uint8Array(await data.arrayBuffer());
-    if (!isSealedBytes(bytes)) return new Blob([bytes], { type });
+    const sealed = isSealedBytes(bytes);
     const key = this.vault?.key;
-    if (!key) throw new StoreError('This image is encrypted; unlock encryption to see it', false);
-    return new Blob([await openBytes(key, ctx.image(id), bytes)], { type });
+    if (sealed && !key) throw new StoreError('This image is encrypted; unlock encryption to see it', false);
+    const plain = sealed ? await openBytes(key!, ctx.image(id), bytes) : bytes;
+    // A file in the wrong form (uploaded by a device that had not yet noticed encryption changing)
+    // is put right the first time it is opened.
+    if (key && this.vault && sealed !== this.vault.writeEncrypted) void this.storeImage(id, plain, type, this.vault.writeEncrypted ? key : null).catch(() => {});
+    return new Blob([plain], { type });
+  }
+
+  /** Upload plaintext bytes, sealing them first when a key is given. */
+  private async storeImage(id: string, bytes: Uint8Array<ArrayBuffer>, type: string, key: CryptoKey | null) {
+    const body = key ? await sealBytes(key, ctx.image(id), bytes) : bytes;
+    const contentType = key ? 'application/octet-stream' : type || 'application/octet-stream';
+    const { error } = await this.sb.storage.from(IMAGE_BUCKET).upload(this.imagePath(id), body.buffer, { upsert: true, contentType });
+    if (error) throw imageError(error);
   }
 
   /** Re-upload an image encrypted or decrypted, to match the account (used by convertAll). */
@@ -380,14 +396,14 @@ export class SupabaseStore implements Store {
     const key = this.vault?.key;
     if (!id || !key) return;
     const { data, error } = await this.sb.storage.from(IMAGE_BUCKET).download(this.imagePath(id));
-    if (error || !data) return; // missing image: nothing to convert
+    if (error && isMissing(error)) return; // the file is gone: nothing to convert
+    // Any other failure stops the pass before the stroke row is converted, so it is retried later.
+    if (error || !data) throw imageError(error);
     const bytes = new Uint8Array(await data.arrayBuffer());
-    if (isSealedBytes(bytes) === encrypt) return;
-    const out = encrypt ? await sealBytes(key, ctx.image(id), bytes) : await openBytes(key, ctx.image(id), bytes);
-    const { error: up } = await this.sb.storage
-      .from(IMAGE_BUCKET)
-      .upload(this.imagePath(id), out.buffer, { upsert: true, contentType: encrypt ? 'application/octet-stream' : s.color || 'image/png' });
-    if (up) throw imageError(up);
+    const sealed = isSealedBytes(bytes);
+    if (sealed === encrypt) return;
+    const plain = sealed ? await openBytes(key, ctx.image(id), bytes) : bytes;
+    await this.storeImage(id, plain, s.color || 'image/png', encrypt ? key : null);
   }
 
   // ----------------------------- settings -----------------------------

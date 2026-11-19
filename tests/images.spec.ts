@@ -125,7 +125,7 @@ async function signIn(page: Page, waitForBoard = true) {
   if (waitForBoard) await page.locator('.canvas-area canvas.live').waitFor();
 }
 
-async function turnOnEncryption(page: Page) {
+async function turnOnEncryption(page: Page, expectDone = 'Your notes are encrypted') {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.locator('.settings-tab', { hasText: 'Encryption' }).click();
   await page.getByRole('switch', { name: 'End-to-end encryption' }).click();
@@ -142,8 +142,8 @@ async function turnOnEncryption(page: Page) {
   await dlg.getByLabel('Last 4 characters of the recovery key').fill(key.slice(-4));
   await dlg.locator('input[type=checkbox]').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
-  await expect(dlg).toContainText('Your notes are encrypted', { timeout: 20_000 });
-  await dlg.getByRole('button', { name: 'Done' }).click();
+  await expect(dlg).toContainText(expectDone, { timeout: 20_000 });
+  await dlg.getByRole('button', { name: expectDone === 'Your notes are encrypted' ? 'Done' : /Close|Done|OK/ }).first().click();
   await page.locator('.settings-close').click();
 }
 
@@ -199,4 +199,42 @@ test('pictures upload to the account; with encryption only ciphertext is stored,
       { timeout: 10_000 },
     )
     .toBe(true);
+});
+
+test('a picture that cannot be downloaded while turning encryption on is retried later, not skipped', async ({ page }) => {
+  test.setTimeout(60_000);
+  const db = await mockSupabase(page);
+  await signIn(page);
+  await insertPicture(page);
+  await expect.poll(() => db.strokes.length).toBe(1);
+  const key = [...db.images!.keys()][0];
+  // The storage server fails the first download.
+  let failed = false;
+  await page.route('**/storage/v1/object/images/**', (route) => {
+    if (!failed && route.request().method() === 'GET') {
+      failed = true;
+      return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ statusCode: '500', error: 'internal', message: 'Storage is down' }) });
+    }
+    return route.fallback();
+  });
+  await turnOnEncryption(page, 'Encryption is not finished yet');
+  expect(db.images!.get(key)!.body.subarray(1, 4).toString()).toBe('PNG');
+  expect(db.strokes[0].enc).toBeFalsy(); // still marked as needing conversion
+  // Opening the app again finishes the job.
+  await page.reload();
+  await expect.poll(() => db.images!.get(key)!.body.subarray(0, 4).toString(), { timeout: 15_000 }).toBe('LBE1');
+  await expect.poll(() => !!db.strokes[0].enc).toBe(true);
+});
+
+test('a device that has not noticed encryption was turned on elsewhere does not upload a plaintext picture', async ({ page, browser }) => {
+  test.setTimeout(60_000);
+  const db = await mockSupabase(page);
+  await signIn(page);
+  const other = await otherDevice(browser, db);
+  await signIn(other);
+  await turnOnEncryption(other);
+  await insertPicture(page);
+  // This device learns that encryption is on and asks to unlock instead of sending the file.
+  await expect(page.getByRole('heading', { name: 'Your notes are encrypted.' })).toBeVisible({ timeout: 15_000 });
+  for (const f of db.images?.values() ?? []) expect(f.body.subarray(0, 4).toString()).toBe('LBE1');
 });
