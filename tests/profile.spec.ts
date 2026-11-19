@@ -117,3 +117,37 @@ test('the account menu at the bottom of the sidebar opens upwards, fully on scre
   expect(box.y + box.height).toBeLessThanOrEqual(chipBox.y);
   expect(box.y).toBeGreaterThanOrEqual(0);
 });
+
+test('turning encryption on also encrypts a profile picture added before', async ({ page }) => {
+  test.setTimeout(60_000);
+  const db = await mockSupabase(page);
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await attachBoard(page);
+  await openProfile(page);
+  await page.locator('.profile-edit input[type=file]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
+  await expect.poll(() => db.images?.has(`${USER_ID}/profile-picture`)).toBe(true);
+  expect(db.images!.get(`${USER_ID}/profile-picture`)!.body.subarray(0, 4).toString()).not.toBe('LBE1');
+  expect(db.images!.get(`${USER_ID}/profile-picture`)!.body.length).toBeGreaterThan(100);
+
+  await page.locator('.settings-tab', { hasText: 'Encryption' }).click();
+  await page.getByRole('switch', { name: 'End-to-end encryption' }).click();
+  const confirm = page.locator('dialog.confirm-dialog');
+  await confirm.locator('input[type=password]').fill('secret123');
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  const dlg = page.locator('dialog.enc-wizard');
+  await dlg.locator('input[type=checkbox]').check();
+  await dlg.getByRole('button', { name: 'Continue' }).click();
+  await dlg.locator('input[type=password]').nth(0).fill('correct horse battery');
+  await dlg.locator('input[type=password]').nth(1).fill('correct horse battery');
+  await dlg.getByRole('button', { name: 'Create keys' }).click();
+  const key = (await dlg.locator('.recovery-key').textContent())!;
+  await dlg.getByLabel('Last 4 characters of the recovery key').fill(key.slice(-4));
+  await dlg.locator('input[type=checkbox]').check();
+  await dlg.getByRole('button', { name: 'Continue' }).click();
+  await expect(dlg).toContainText('Your notes are encrypted', { timeout: 20_000 });
+  // Only ciphertext is stored now ("LBE1" marks an encrypted file).
+  expect(db.images!.get(`${USER_ID}/profile-picture`)!.body.subarray(0, 4).toString()).toBe('LBE1');
+});
