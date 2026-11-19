@@ -232,3 +232,48 @@ test('an account keeps text formatting: saved with the box and read back after a
   await expect(bar(page).getByRole('radio', { name: 'Mono' })).toHaveAttribute('aria-checked', 'true');
   await expect(bar(page).getByRole('radio', { name: 'Align right' })).toHaveAttribute('aria-checked', 'true');
 });
+
+for (const align of ['Align left', 'Align centre', 'Align right']) {
+test(`the box being typed in never clips leaning letters (${align}): it shows as much as the saved text`, async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.keyboard.press('t');
+  const x = geo.areaX + 300, y = stripY(geo, 0);
+  await tap(cdp, x, y);
+  await bar(page).getByRole('radio', { name: 'Handwriting' }).click();
+  await bar(page).getByRole('button', { name: 'Italic' }).click();
+  await bar(page).getByRole('button', { name: 'Larger text' }).click();
+  await bar(page).getByRole('radio', { name: align }).click();
+  await page.keyboard.type('Hello wolf');
+  await page.waitForTimeout(300); // the handwriting font is in
+  // The rightmost and leftmost dark (ink) pixels in a band around the text.
+  const clip = { x: geo.areaX, y: y - 40, width: 700, height: 80 };
+  const inkSpan = async () => {
+    const png = (await page.screenshot({ clip })).toString('base64');
+    return page.evaluate(async (src) => {
+      const img = new Image();
+      img.src = 'data:image/png;base64,' + src;
+      await img.decode();
+      const c = document.createElement('canvas');
+      [c.width, c.height] = [img.width, img.height];
+      const g = c.getContext('2d')!;
+      g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      let min = Infinity, max = -Infinity;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] < 90 && d[i + 1] < 90 && d[i + 2] < 110) { // dark ink, not the blue outline
+          const px = (i / 4) % c.width;
+          min = Math.min(min, px);
+          max = Math.max(max, px);
+        }
+      }
+      return [min, max];
+    }, png);
+  };
+  const typing = await inkSpan();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('textarea.text-editor')).toHaveCount(0);
+  const saved = await inkSpan();
+  expect(Math.abs(typing[1] - saved[1])).toBeLessThanOrEqual(3);
+  expect(Math.abs(typing[0] - saved[0])).toBeLessThanOrEqual(3);
+});
+}

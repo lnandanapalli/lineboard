@@ -243,6 +243,8 @@ export class Board {
 
     this.applyMarginSide();
     this.bindInput();
+    // Text measured while its font was still loading is measured again once it arrives.
+    document.fonts?.addEventListener?.('loadingdone', () => this.remeasureText());
     new ResizeObserver(() => this.resize()).observe(this.area);
     this.resize();
   }
@@ -960,16 +962,20 @@ export class Board {
     const s = this.scale;
     const st = ed.style;
     const b = textBox(ed.el.value || ' ', ed.size, st);
-    // The text itself is exactly as wide as on the page, so alignment matches; the room to type
-    // into goes on the side the text grows towards.
+    // The text itself is exactly as wide as on the page, so alignment matches. Around it: a margin
+    // on both sides, because italic and handwritten letters lean past their measured width (and the
+    // box clips whatever is outside it), plus room to type into on the side the text grows towards.
     const room = ed.size;
-    const padL = st.align === 'right' ? room : st.align === 'center' ? room / 2 : 0;
+    const edge = ed.size * 0.4;
+    const k = st.align === 'right' ? 1 : st.align === 'center' ? 0.5 : 0;
+    const padL = edge + room * k;
+    const padR = edge + room * (1 - k);
     Object.assign(ed.el.style, {
       boxSizing: 'content-box',
       left: `${(ed.x - padL - this.scrollX) * s}px`,
       top: `${(ed.y - this.scrollY) * s}px`,
       paddingLeft: `${padL * s}px`,
-      paddingRight: `${(room - padL) * s}px`,
+      paddingRight: `${padR * s}px`,
       font: fontCss(st, ed.size * s),
       lineHeight: String(TEXT_LINE),
       textAlign: st.align ?? 'left',
