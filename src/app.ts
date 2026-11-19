@@ -317,7 +317,7 @@ export class App {
     this.noteList = h('ul', { class: 'note-list' });
     const newBtn = h('button', { class: 'btn primary', type: 'button' });
     newBtn.innerHTML = `${icons.plus}<span>New note</span>`;
-    newBtn.addEventListener('click', () => void this.newNote());
+    newBtn.addEventListener('click', () => void this.newNote(true));
     this.sidebar = h(
       'aside',
       { class: 'sidebar' },
@@ -905,11 +905,21 @@ export class App {
     }
   }
 
-  private async newNote() {
+  /**
+   * Create a note. Asked for by the user (`ask`): name it first, starting from the default name,
+   * selected so typing replaces it. Made by the app (a notebook with no notes left): the default.
+   */
+  private async newNote(ask = false) {
     const d = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date());
+    let title = `Note ${d}`;
+    if (ask) {
+      const name = await dialog({ title: 'New note', input: title, ok: 'Create' });
+      if (name === null) return;
+      title = name.trim().slice(0, 200) || title;
+    }
     try {
       if (!this.currentBook) return;
-      const n = await this.store.createNote(`Note ${d}`, this.currentBook.id);
+      const n = await this.store.createNote(title, this.currentBook.id);
       this.notes.unshift(n);
       await this.openNote(n);
     } catch (e) {

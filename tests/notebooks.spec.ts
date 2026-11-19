@@ -157,3 +157,35 @@ test('guest notebooks move into the account, merging into a same-named notebook'
   const notebookOf = (strokeIdx: number) => db.notes.find((n) => n.id === db.strokes[strokeIdx].note_id)!.notebook_id;
   expect([notebookOf(0), notebookOf(1)].sort()).toEqual([USER_ID, physics.id].sort());
 });
+
+test('New note asks for a name, starting from the default (selected, so typing replaces it)', async ({ page }) => {
+  await setup(page);
+  await openSidebar(page);
+  const before = await noteTitles(page).count();
+  await page.getByRole('button', { name: 'New note' }).click();
+  const dlg = page.locator('dialog[open]');
+  await expect(dlg).toContainText('New note');
+  const input = dlg.locator('input.dlg-input');
+  await expect(input).toHaveValue(/^Note /);
+  expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, (await input.inputValue()).length]);
+  // Typing replaces the default; Enter creates it.
+  await page.keyboard.type('Physics lecture');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.title-input')).toHaveValue('Physics lecture');
+  await expect(noteTitles(page)).toHaveCount(before + 1);
+
+  // Cancel creates nothing.
+  const newNote = page.getByRole('button', { name: 'New note' });
+  if (!(await newNote.isVisible())) await openSidebar(page);
+  await newNote.click();
+  await answerDialog(page, 'Cancel');
+  await expect(noteTitles(page)).toHaveCount(before + 1);
+  await expect(page.locator('.title-input')).toHaveValue('Physics lecture');
+
+  // Keeping the default works too.
+  if (!(await newNote.isVisible())) await openSidebar(page);
+  await newNote.click();
+  await answerDialog(page, 'Create');
+  await expect(page.locator('.title-input')).toHaveValue(/^Note /);
+  await expect(noteTitles(page)).toHaveCount(before + 2);
+});
