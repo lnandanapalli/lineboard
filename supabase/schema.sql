@@ -59,6 +59,8 @@ alter table public.strokes add constraint strokes_payload_present check (
 -- Text boxes: a stroke with tool 'text' keeps its text here (or inside the ciphertext when encrypted);
 -- its points are the top-left corner and its width is the font size.
 alter table public.strokes add column if not exists text text check (char_length(text) <= 10000);
+-- Dashed and dotted shapes (null: solid). Inside the ciphertext when encrypted.
+alter table public.strokes add column if not exists dash text check (dash in ('dashed', 'dotted'));
 alter table public.strokes drop constraint if exists strokes_tool_check;
 alter table public.strokes drop constraint if exists strokes_tool_valid;
 alter table public.strokes add constraint strokes_tool_valid check (tool in ('pen', 'highlighter', 'text', 'image'));

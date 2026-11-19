@@ -26,9 +26,9 @@ function check(error: PgErr | null) {
 /** Shown when a title or name cannot be decrypted on this device. */
 export const LOCKED_TITLE = 'Encrypted';
 
-type StrokeRow = Omit<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text'> &
-  Partial<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>> & { enc?: string | null; text?: string | null };
-type StrokePayload = Pick<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text'>;
+type StrokeRow = Omit<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text' | 'dash'> &
+  Partial<Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>> & { enc?: string | null; text?: string | null; dash?: Stroke['dash'] | null };
+type StrokePayload = Pick<Stroke, 'tool' | 'color' | 'width' | 'points' | 'text' | 'dash'>;
 type NoteRow = NoteMeta & { title_enc?: string | null };
 type BookRow = Notebook & { name_enc?: string | null };
 
@@ -77,11 +77,13 @@ export class SupabaseStore implements Store {
     return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '');
   }
   private strokeCols() {
-    return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '') + (this.textCol ? ',text' : '');
+    return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '') + (this.textCol ? ',text' : '') + (this.dashCol ? ',dash' : '');
   }
 
   /** Whether the database has the strokes.text column (text boxes); older schemas don't. */
   private textCol = false;
+  /** Likewise strokes.dash (dashed and dotted shapes). Without it, shapes are saved solid. */
+  private dashCol = false;
   private textProbe: Promise<boolean> | null = null;
   supportsText(): Promise<boolean> {
     this.textProbe ??= (async () => {
@@ -92,6 +94,8 @@ export class SupabaseStore implements Store {
         this.textProbe = null;
         this.textCol = true;
       }
+      const { error: de } = await this.sb.from('strokes').select('dash').limit(1);
+      this.dashCol = !de || (de.code !== '42703' && !/dash/.test(de.message ?? ''));
       return this.textCol;
     })();
     return this.textProbe;
@@ -152,12 +156,12 @@ export class SupabaseStore implements Store {
   }
   /** Null when the stroke is encrypted and cannot be read here. */
   private async decodeStroke(r: StrokeRow): Promise<Stroke | null> {
-    if (!r.enc) return { id: r.id, note_id: r.note_id, tool: r.tool!, color: r.color!, width: r.width!, points: r.points!, ...(r.text != null ? { text: r.text } : {}), created_at: r.created_at };
+    if (!r.enc) return { id: r.id, note_id: r.note_id, tool: r.tool!, color: r.color!, width: r.width!, points: r.points!, ...(r.text != null ? { text: r.text } : {}), ...(r.dash ? { dash: r.dash } : {}), created_at: r.created_at };
     const key = this.vault?.key;
     if (!key) return null;
     try {
       const p = await open<StrokePayload>(key, ctx.stroke(r.id), r.enc);
-      return { id: r.id, note_id: r.note_id, tool: p.tool, color: p.color, width: p.width, points: p.points, ...(p.text != null ? { text: p.text } : {}), created_at: r.created_at };
+      return { id: r.id, note_id: r.note_id, tool: p.tool, color: p.color, width: p.width, points: p.points, ...(p.text != null ? { text: p.text } : {}), ...(p.dash ? { dash: p.dash } : {}), created_at: r.created_at };
     } catch (e) {
       console.warn(e);
       return null;
@@ -173,10 +177,11 @@ export class SupabaseStore implements Store {
   private async encodeStroke(key: CryptoKey | null, s: Stroke) {
     const base = { id: s.id, note_id: s.note_id, user_id: this.userId, created_at: s.created_at };
     const text = s.tool === 'text' || s.tool === 'image' ? (s.text ?? '') : null;
-    if (!key) return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}), ...(this.textCol ? { text } : {}) };
-    const payload: StrokePayload = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(text != null ? { text } : {}) };
+    const dash = s.dash ?? null;
+    if (!key) return { ...base, tool: s.tool, color: s.color, width: s.width, points: s.points, ...(this.encCols ? { enc: null } : {}), ...(this.textCol ? { text } : {}), ...(this.dashCol ? { dash } : {}) };
+    const payload: StrokePayload = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(text != null ? { text } : {}), ...(dash ? { dash } : {}) };
     const enc = await seal(key, ctx.stroke(s.id), payload);
-    return { ...base, tool: null, color: null, width: null, points: null, enc, ...(this.textCol ? { text: null } : {}) };
+    return { ...base, tool: null, color: null, width: null, points: null, enc, ...(this.textCol ? { text: null } : {}), ...(this.dashCol ? { dash: null } : {}) };
   }
 
   // ----------------------------- notebooks -----------------------------

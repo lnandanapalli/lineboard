@@ -1,5 +1,6 @@
 import { expect, test, type CDPSession, type Page } from '@playwright/test';
-import { drag, expectStrokes, setup, stripY } from './helpers';
+import { attachBoard, drag, expectStrokes, setup, stripY } from './helpers';
+import { mockSupabase } from './mockSupabase';
 
 /** Shapes come from a palette and are saved as pen strokes that trace the outline. No keyboard needed. */
 
@@ -38,7 +39,7 @@ test('the palette offers every shape, and each one draws', async ({ page }) => {
   const { draw } = await freeBoard(page);
   await page.locator('.shape-btn').click();
   const cells = page.locator('.shape-grid [role=radio]');
-  await expect(cells).toHaveCount(18);
+  await expect(cells).toHaveCount(19);
   const names = await cells.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')!));
   await page.keyboard.press('Escape');
   let n = 0;
@@ -131,4 +132,93 @@ test('on a short screen the palette scrolls so every shape and the switch can be
   await expect(lock).toHaveAttribute('aria-checked', 'true');
   await page.locator('.shape-grid').getByRole('radio', { name: 'Arrow line', exact: true }).click();
   await expect(page.locator('.shape-btn')).toHaveAttribute('aria-label', 'Shapes: Arrow line');
+});
+
+test('shapes can be dashed or dotted and thin to extra bold; the choice is saved with the shape', async ({ page }) => {
+  const { draw } = await freeBoard(page);
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radiogroup', { name: 'Line style' }).getByRole('radio', { name: 'Dashed' }).click();
+  await page.getByRole('radiogroup', { name: 'Thickness' }).getByRole('radio', { name: 'Bold', exact: true }).click();
+  await expect(page.getByRole('radio', { name: 'Dashed' })).toHaveAttribute('aria-checked', 'true');
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Line', exact: true }).click();
+  await draw(100, 300, 900, 300);
+  await expectStrokes(page, 1);
+  let s = (await all(page)).at(-1)! as { width: number; dash?: string };
+  expect(s).toMatchObject({ width: 6, dash: 'dashed' });
+
+  // The line really has gaps: on the ink canvas, the row through it is part ink, part blank.
+  const gaps = () =>
+    page.evaluate(() => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[1];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      let best = { ink: 0, blank: 0 };
+      for (let y = 0; y < c.height; y++) {
+        let ink = 0;
+        for (let x = Math.round(c.width * 0.25); x < Math.round(c.width * 0.75); x++) if (d[(y * c.width + x) * 4 + 3] > 128) ink++;
+        if (ink > best.ink) best = { ink, blank: Math.round(c.width * 0.5) - ink };
+      }
+      return best;
+    });
+  await expect.poll(async () => (await gaps()).ink).toBeGreaterThan(50);
+  const g = await gaps();
+  expect(g.blank).toBeGreaterThan(50);
+
+  // Dotted, extra bold.
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Dotted' }).click();
+  await page.getByRole('radio', { name: 'Extra bold' }).click();
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Double arrow line', exact: true }).click();
+  await draw(100, 500, 900, 500);
+  await expectStrokes(page, 2);
+  s = (await all(page)).at(-1)! as { width: number; dash?: string };
+  expect(s).toMatchObject({ width: 10, dash: 'dotted' });
+
+  // Solid again: no dash saved. The choices are remembered after a reload.
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Solid' }).click();
+  await page.keyboard.press('Escape');
+  await draw(100, 700, 400, 800);
+  await expectStrokes(page, 3);
+  expect((await all(page)).at(-1)).not.toHaveProperty('dash');
+  await page.reload();
+  await page.locator('.shape-btn').click();
+  await expect(page.getByRole('radio', { name: 'Solid' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('radio', { name: 'Extra bold' })).toHaveAttribute('aria-checked', 'true');
+});
+
+test('an account keeps the line style: saved with the stroke and read back on another load', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  const { cdp, geo } = await attachBoard(page);
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Dotted' }).click();
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Line', exact: true }).click();
+  await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 400, stripY(geo, 0));
+  await expect.poll(() => db.strokes.length).toBe(1);
+  expect(db.strokes[0].dash).toBe('dotted');
+  // Loaded back from the server, it is still drawn dotted: the row through it switches between
+  // ink and blank many times (a solid line would switch twice).
+  await page.reload();
+  await page.locator('.canvas-area canvas.live').waitFor();
+  const switches = () =>
+    page.evaluate(() => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[1];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      let best = 0, bestInk = 0;
+      for (let y = 0; y < c.height; y++) {
+        let ink = 0, sw = 0, prev = false;
+        for (let x = 0; x < c.width; x++) {
+          const on = d[(y * c.width + x) * 4 + 3] > 128;
+          if (on) ink++;
+          if (on !== prev) sw++;
+          prev = on;
+        }
+        if (ink > bestInk) [bestInk, best] = [ink, sw];
+      }
+      return best;
+    });
+  await expect.poll(switches).toBeGreaterThan(20);
 });

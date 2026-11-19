@@ -38,6 +38,8 @@ interface Cached {
   maxY: number;
   variable: boolean;
   path: Path2D | null;
+  /** Dashed strokes: the outline split at its corners, each piece with its length. */
+  pieces?: { path: Path2D; len: number }[];
 }
 
 interface ActiveInput {
@@ -1222,6 +1224,12 @@ export class Board {
     this.selectBar.style.top = `${Math.max(8, top - 46)}px`;
   }
 
+  /** A shape outline as a pen stroke, in the palette's colour, thickness and line style. */
+  private shapeStroke(points: number[]): Stroke {
+    const dash = this.settings.shapeDash;
+    return { id: '', note_id: '', tool: 'pen', color: this.settings.penColor, width: this.settings.shapeWidth, points, ...(dash !== 'solid' ? { dash } : {}) };
+  }
+
   /** The strokes of the shape being dragged (the proportions switch or Shift keeps it square). */
   private shapeOf(a: ActiveInput): number[][] {
     const sh = a.shape!;
@@ -1266,7 +1274,7 @@ export class Board {
       // Shapes are pen strokes (see shapes.ts); some, like a crossed box, are several.
       const parts = this.shapeOf(a).filter((p) => p.length);
       const now = new Date().toISOString();
-      const made = parts.map((points): Stroke => ({ id: uuid(), note_id: this.noteId, tool: 'pen', color: this.settings.penColor, width: this.settings.penWidth, points, created_at: now }));
+      const made = parts.map((points): Stroke => ({ ...this.shapeStroke(points), id: uuid(), note_id: this.noteId, created_at: now }));
       for (const st of made) this.cache(st);
       if (made.length) this.cb.onStrokesAdded(made); // one undo step for the whole shape
       return;
@@ -1504,6 +1512,16 @@ export class Board {
         ctx.lineTo(p[i], p[i + 1]);
         ctx.stroke();
       }
+    } else if (s.dash) {
+      // Each side starts a fresh pattern, so corners are drawn; short pieces (arrowheads, the
+      // sides of a tiny shape) stay solid rather than breaking up.
+      ctx.lineWidth = s.width;
+      const pattern = s.dash === 'dotted' ? [0, s.width * 1.8 + 2] : [s.width * 2.5 + 4, s.width * 2 + 3];
+      const solidBelow = Math.max(30, pattern[0] * 2 + pattern[1]); // arrowheads are at most 28 long
+      for (const pc of (c.pieces ??= dashPieces(s.points))) {
+        ctx.setLineDash(pc.len < solidBelow ? [] : pattern);
+        ctx.stroke(pc.path);
+      }
     } else {
       if (!c.path) c.path = buildPath(s.points);
       ctx.lineWidth = s.width;
@@ -1523,8 +1541,7 @@ export class Board {
     if (a?.shape) {
       for (const points of this.shapeOf(a)) {
         if (!points.length) continue;
-        const tmp: Stroke = { id: '', note_id: '', tool: 'pen', color: this.settings.penColor, width: this.settings.penWidth, points };
-        this.drawStroke(ctx, { s: tmp, minX: 0, minY: 0, maxX: 0, maxY: 0, variable: false, path: null });
+        this.drawStroke(ctx, { s: this.shapeStroke(points), minX: 0, minY: 0, maxX: 0, maxY: 0, variable: false, path: null });
       }
     } else if (a && a.kind === 'draw' && a.points.length) {
       const isHL = this.tool === 'highlighter';
@@ -1665,6 +1682,25 @@ export class Board {
     }
     this.margin.replaceChildren(frag);
   }
+}
+
+/** Split a stroke at its corners (a repeated point, see shapes.ts) into separately dashed pieces. */
+function dashPieces(p: number[]): { path: Path2D; len: number }[] {
+  const out: { path: Path2D; len: number }[] = [];
+  let start = 0;
+  const n = p.length / 3;
+  for (let i = 1; i <= n; i++) {
+    const corner = i === n || (p[i * 3] === p[(i - 1) * 3] && p[i * 3 + 1] === p[(i - 1) * 3 + 1]);
+    if (!corner) continue;
+    const piece = p.slice(start * 3, i * 3);
+    if (piece.length >= 6) {
+      let len = 0;
+      for (let k = 3; k < piece.length; k += 3) len += Math.hypot(piece[k] - piece[k - 3], piece[k + 1] - piece[k - 2]);
+      out.push({ path: buildPath(piece), len });
+    }
+    start = i;
+  }
+  return out;
 }
 
 function buildPath(p: number[]): Path2D {

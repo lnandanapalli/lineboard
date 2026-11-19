@@ -485,6 +485,13 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 .shape-cell svg { width: 26px; height: 26px; }
 .shape-cell:hover { background: var(--bg); }
 .shape-cell[aria-checked=true] { background: var(--accent-soft); color: var(--accent); }
+.line-options { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.line-choices { display: flex; gap: 6px; }
+.line-choice {
+  flex: 1; height: 36px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; cursor: pointer; color: var(--ink);
+}
+.line-choice:hover { background: var(--bg); }
+.line-choice[aria-checked=true] { background: var(--accent-soft); color: var(--accent); }
 .shape-foot { display: flex; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .shape-foot b { flex: 1; font-size: 14px; font-weight: 600; }
 

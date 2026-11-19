@@ -5,7 +5,7 @@ import { icons } from './icons';
 import { logo } from './brand';
 import type { Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import { SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
+import { LINE_STYLE_NAMES, LINE_STYLES, LINE_WIDTHS, SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
 import { IMAGE_TYPES, prepareImage } from './images';
 import { withDefaults, type AppUser, type BoardMode, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
@@ -687,7 +687,46 @@ export class App {
       h('b', {}, 'Keep proportions'),
       lock,
     );
-    ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, foot), { label: 'Shapes' }));
+    ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, this.lineOptions(), foot), { label: 'Shapes' }));
+  }
+
+  /** Line style (solid, dashed, dotted) and thickness for shapes: two rows of icon choices. */
+  private lineOptions() {
+    const line = (attrs: string) =>
+      `<svg viewBox="0 0 32 16" width="32" height="16" aria-hidden="true"><path d="M3 8h26" fill="none" stroke="currentColor" stroke-linecap="round" ${attrs}/></svg>`;
+    const group = <T>(label: string, items: { value: T; name: string; icon: string }[], get: () => T, set: (v: T) => void) => {
+      const row = h('div', { class: 'line-choices', role: 'radiogroup', 'aria-label': label });
+      const paint = () => row.querySelectorAll<HTMLButtonElement>('button').forEach((b, i) => b.setAttribute('aria-checked', String(items[i].value === get())));
+      for (const it of items) {
+        const b = h('button', { class: 'line-choice', type: 'button', role: 'radio', 'aria-label': it.name, title: it.name });
+        b.innerHTML = it.icon;
+        b.addEventListener('click', () => {
+          set(it.value);
+          this.settingsChanged();
+          paint();
+        });
+        row.append(b);
+      }
+      paint();
+      return row;
+    };
+    const dashAttr = { solid: '', dashed: 'stroke-dasharray="6 5"', dotted: 'stroke-dasharray="0 5"' };
+    return h(
+      'div',
+      { class: 'line-options' },
+      group(
+        'Line style',
+        LINE_STYLES.map((v) => ({ value: v, name: LINE_STYLE_NAMES[v], icon: line(`stroke-width="2.4" ${dashAttr[v]}`) })),
+        () => this.settings.shapeDash,
+        (v) => (this.settings.shapeDash = v),
+      ),
+      group(
+        'Thickness',
+        LINE_WIDTHS.map((w) => ({ value: w.width as number, name: w.name, icon: line(`stroke-width="${Math.min(7, 1 + w.width * 0.6).toFixed(1)}"`) })),
+        () => this.settings.shapeWidth,
+        (v) => (this.settings.shapeWidth = v),
+      ),
+    );
   }
 
   private settingsChanged() {

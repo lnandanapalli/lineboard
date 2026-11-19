@@ -1,4 +1,4 @@
-import { SHAPES, type ShapeKind } from './shapes';
+import { LINE_STYLES, SHAPES, type LineStyle, type ShapeKind } from './shapes';
 
 export type Tool = 'pen' | 'highlighter' | 'eraser' | 'shape' | 'text' | 'select';
 
@@ -28,6 +28,8 @@ export interface Stroke {
   points: number[];
   /** Text boxes: the text. Images: the image id. */
   text?: string;
+  /** Pen strokes (shapes): drawn dashed or dotted instead of solid. */
+  dash?: 'dashed' | 'dotted';
   created_at?: string;
 }
 
@@ -69,6 +71,10 @@ export interface Settings {
   shape: ShapeKind;
   /** Shapes keep equal sides (square, circle...) and lines snap to 45°. */
   shapeLock: boolean;
+  /** Shape outlines: solid, dashed or dotted. */
+  shapeDash: LineStyle;
+  /** Shape outline thickness (page units). */
+  shapeWidth: number;
   /** How the Select tool picks: a free-hand loop or a dragged rectangle. */
   selectMode: 'lasso' | 'rect';
   /** Font size for new text boxes (page units). */
@@ -96,6 +102,8 @@ export const DEFAULT_SETTINGS: Settings = {
   smoothing: 0.25,
   shape: 'rectangle',
   shapeLock: false,
+  shapeDash: 'solid',
+  shapeWidth: 3.5,
   selectMode: 'lasso',
   textSize: 28,
   splitRatio: 0.5,
@@ -112,6 +120,8 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
   if (!(SHAPES as readonly string[]).includes(out.shape)) out.shape = 'rectangle';
+  if (!LINE_STYLES.includes(out.shapeDash)) out.shapeDash = 'solid';
+  if (!(out.shapeWidth >= 1 && out.shapeWidth <= 20)) out.shapeWidth = DEFAULT_SETTINGS.shapeWidth;
   if (out.selectMode !== 'rect') out.selectMode = 'lasso';
   if (!PAPERS.includes(out.paper)) out.paper = 'plain';
   return out;
