@@ -11,7 +11,7 @@ import { IMAGE_TYPES, prepareImage } from './images';
 import { withDefaults, type AppUser, type BoardMode, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool } from './types';
 import { actionMenu, closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
-import { appViewport, attachOrientation, clientToApp, detachOrientation, orientation } from './orientation';
+import { appRect, appViewport, attachOrientation, clientToApp, detachOrientation, orientation } from './orientation';
 import { attachNameTips } from './nameTip';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
 import { buildExport } from './dataExport';
@@ -48,9 +48,10 @@ export interface AppOptions {
 /** Said when an export could not include every picture. */
 /** Is a colour light (dark marks show better on it)? Relative luminance, as in WCAG. */
 function isLight(color: string) {
-  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})/i.exec(color);
+  // The whole value: #rgb or #rrggbb, with an optional alpha (#rgba, #rrggbbaa) that is ignored.
+  const m = /^#(?:([0-9a-f]{6})(?:[0-9a-f]{2})?|([0-9a-f]{3})[0-9a-f]?)$/i.exec(color);
   if (!m) return true;
-  const hex = m[1].length === 3 ? [...m[1]].map((x) => x + x).join('') : m[1];
+  const hex = m[1] ?? [...m[2]].map((x) => x + x).join('');
   const [r, g, b] = [0, 2, 4].map((i) => {
     const v = parseInt(hex.slice(i, i + 2), 16) / 255;
     return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
@@ -564,7 +565,8 @@ export class App {
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       handle.setPointerCapture(e.pointerId);
-      drag = { id: e.pointerId, x0: clientToApp(e.clientX, e.clientY).x, w0: this.sidebar.getBoundingClientRect().width };
+      // In the app's own coordinates: with the app turned 90°, the on-screen width is its height.
+      drag = { id: e.pointerId, x0: clientToApp(e.clientX, e.clientY).x, w0: appRect(this.sidebar).width };
       this.sidebar.classList.add('resizing');
     });
     handle.addEventListener('pointermove', (e) => {
@@ -583,7 +585,7 @@ export class App {
       save();
     });
     handle.addEventListener('keydown', (e) => {
-      const w = this.sidebar.getBoundingClientRect().width;
+      const w = appRect(this.sidebar).width;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') apply(w + (e.key === 'ArrowRight' ? 24 : -24));
       else if (e.key === 'Home') apply(null);
       else return;

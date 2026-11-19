@@ -128,3 +128,28 @@ test('signed in, the sidebar does not show the email address', async ({ page }) 
   await expect(page.locator('.sidebar')).not.toContainText('friend@example.com');
   await expect(page.locator('.sidebar-foot')).toContainText('Synced to your account');
 });
+
+test('the check on a custom colour reads the whole colour (dark on bright green, light on dark green)', async ({ page }) => {
+  await setup(page);
+  await page.locator('.color-input').fill('#00ff00');
+  await expect(page.locator('.swatch[aria-pressed=true] svg')).toHaveCSS('color', 'rgb(17, 24, 39)');
+  await page.locator('.color-input').fill('#004000');
+  await expect(page.locator('.swatch[aria-pressed=true] svg')).toHaveCSS('color', 'rgb(255, 255, 255)');
+});
+
+test('with the app turned 90°, resizing the sidebar follows the app, not the screen', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await setup(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Page & writing' }).click();
+  await page.getByRole('switch', { name: 'Manual orientation' }).click();
+  await page.locator('.settings-close').click();
+  await page.getByRole('button', { name: 'Rotate right' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-rotation', '90');
+  await openSidebar(page);
+  const handle = page.getByRole('separator', { name: 'Resize the sidebar' });
+  await handle.focus();
+  await page.keyboard.press('ArrowRight');
+  // One step wider (320 + 24), not straight to the limit.
+  await expect(handle).toHaveAttribute('aria-valuenow', '344');
+});
