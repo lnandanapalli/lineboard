@@ -16,14 +16,14 @@ export async function buildExport(
   user: AppUser,
   settings: Settings,
   pending: (noteId: string, saved: Stroke[]) => Stroke[] = (_, saved) => saved,
-): Promise<Blob> {
+): Promise<{ blob: Blob; missingPictures: number }> {
   const enc = new TextEncoder();
   const [books, notes] = await Promise.all([store.listNotebooks(), store.listNotes()]);
   const groups = books.map((notebook) => ({ notebook, notes: notes.filter((n) => n.notebook_id === notebook.id) }));
   // Notes not in any notebook (older data, from before notebooks existed).
   const unfiled = notes.filter((n) => !books.some((b) => b.id === n.notebook_id));
   if (unfiled.length) groups.push({ notebook: { id: '', name: 'Unfiled notes', created_at: '', updated_at: '' }, notes: unfiled });
-  const lbd = await buildLbd(store, groups, pending);
+  const { blob: lbd, missingPictures } = await buildLbd(store, groups, pending);
 
   const account = {
     format: 'lineboard-account',
@@ -42,11 +42,13 @@ export async function buildExport(
     '               each note (strokes as x, y, pressure points; text; shapes) and pictures/ the pictures.',
     '               The format is described at https://github.com/lnandanapalli/lineboard/blob/main/docs/file-format.md',
     '',
+    ...(missingPictures ? ['', `${missingPictures} picture(s) could not be read when this was exported and are not included.`] : []),
     `Exported ${new Date().toUTCString()}.`,
   ].join('\n');
-  return zip([
+  const blob = await zip([
     { name: 'README.txt', data: enc.encode(readme), compress: true },
     { name: 'account.json', data: enc.encode(JSON.stringify(account, null, 2)), compress: true },
     { name: 'notes.lbd', data: new Uint8Array(await lbd.arrayBuffer()) },
   ]);
+  return { blob, missingPictures };
 }

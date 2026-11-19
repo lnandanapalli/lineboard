@@ -69,6 +69,10 @@ What `points` means depends on the tool:
 - **`image`**: two points, the top-left and bottom-right corners.
   - `picture` is the path of the picture in the archive, e.g. `"pictures/3f2a….png"`.
 
+If a picture could not be read when the file was made, its stroke keeps its place and size with
+`"missing": true` and no `picture`. The manifest then has `"missing_pictures": <count>`, and Lineboard says
+so when exporting. Importing leaves such strokes out and counts them.
+
 Notes and strokes have no ids in the file. Importing gives them new ones, so an import never replaces
 existing notes.
 

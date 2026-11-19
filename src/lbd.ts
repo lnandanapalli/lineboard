@@ -36,6 +36,8 @@ export interface LbdStroke {
   dash?: Stroke['dash'];
   font?: Stroke['font'];
   picture?: string;
+  /** An image stroke whose picture could not be read at export time (the file says so, see below). */
+  missing?: true;
   created_at?: string;
 }
 export interface LbdNote {
@@ -68,7 +70,8 @@ export async function buildLbd(
   groups: { notebook: Pick<Notebook, 'name'>; notes: NoteMeta[] }[],
   pending: (noteId: string, saved: Stroke[]) => Stroke[] = (_, s) => s,
   onProgress: (done: number, total: number) => void = () => {},
-): Promise<Blob> {
+): Promise<{ blob: Blob; missingPictures: number }> {
+  let missingPictures = 0;
   const enc = new TextEncoder();
   const files: ZipEntry[] = [];
   const total = groups.reduce((n, g) => n + g.notes.length, 0);
@@ -83,13 +86,20 @@ export async function buildLbd(
         const base: LbdStroke = { tool: s.tool, color: s.color, width: s.width, points: s.points, ...(s.created_at ? { created_at: s.created_at } : {}) };
         if (s.tool === 'image') {
           if (!s.text) continue;
-          try {
-            const blob = await store.getImage(s.text, s.color);
-            const path = `pictures/${s.text}.${PICTURE_EXT[s.color] ?? 'png'}`;
-            if (!files.some((f) => f.name === path)) files.push({ name: path, data: new Uint8Array(await blob.arrayBuffer()) });
+          const path = `pictures/${s.text}.${PICTURE_EXT[s.color] ?? 'png'}`;
+          if (files.some((f) => f.name === path)) {
             out.push({ ...base, picture: path });
-          } catch {
-            /* the picture could not be read (deleted, or encrypted and locked): leave it out */
+            continue;
+          }
+          // One retry for a passing network error; a picture that still cannot be read is kept as a
+          // marked stroke (where it was, how big) and counted, so the export never hides the loss.
+          const blob = await store.getImage(s.text, s.color).catch(() => store.getImage(s.text!, s.color).catch(() => null));
+          if (blob) {
+            files.push({ name: path, data: new Uint8Array(await blob.arrayBuffer()) });
+            out.push({ ...base, picture: path });
+          } else {
+            missingPictures++;
+            out.push({ ...base, missing: true });
           }
           continue;
         }
@@ -104,14 +114,17 @@ export async function buildLbd(
     }
     manifest.notebooks.push(book);
   }
+  if (missingPictures) Object.assign(manifest, { missing_pictures: missingPictures });
   files.unshift({ name: 'lineboard.json', data: enc.encode(JSON.stringify(manifest, null, 2)), compress: true });
-  return zip(files, LBD_TYPE);
+  return { blob: await zip(files, LBD_TYPE), missingPictures };
 }
 
 // ----------------------------- reading -----------------------------
 
 /** Files come from anywhere: generous limits for real notes, refusals for anything bigger. */
 const LIMITS = { maxEntries: 30_000, maxTotal: 1_500_000_000, maxEntry: 60_000_000 };
+/** A zip of .lbd files: each entry is a whole document (checked with LIMITS when it is read). */
+const OUTER_LIMITS = { maxEntries: 1_000, maxTotal: 1_500_000_000, maxEntry: 1_500_000_000 };
 const MAX_NOTES = 20_000;
 const MAX_STROKES = 50_000;
 const MAX_POINTS = 60_000; // numbers in one stroke's points (20,000 x, y, pressure triples)
@@ -212,7 +225,7 @@ export async function readNotesFile(file: Blob): Promise<LbdDocument> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!isZip(bytes)) throw new LbdError('This is not a Lineboard file (.lbd) or a zip of them.');
   try {
-    const top = await unzip(bytes, LIMITS);
+    const top = await unzip(bytes, OUTER_LIMITS);
     if (top.has('lineboard.json')) return await readLbd(bytes);
     // A zip of .lbd files: read each, and put them together.
     const inner = [...top].filter(([name]) => name.toLowerCase().endsWith(LBD_EXT));

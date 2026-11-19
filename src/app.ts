@@ -42,6 +42,10 @@ export interface AppOptions {
   onAccountDeleted?: () => Promise<void>;
 }
 
+/** Said when an export could not include every picture. */
+const missingNote = (n: number) =>
+  `Downloaded, but ${n === 1 ? '1 picture' : `${n} pictures`} could not be read and ${n === 1 ? 'is' : 'are'} not in the file. Check your connection and export again.`;
+
 export class App {
   private settings: Settings;
   private board!: Board;
@@ -1164,8 +1168,9 @@ export class App {
       const count = groups.reduce((n, g) => n + g.notes.length, 0);
       if (!count) return toast('There are no notes to export.', 'error');
       toast(count > 1 ? `Exporting ${count} notes...` : 'Exporting...');
-      const blob = await buildLbd(this.store, groups, (id, saved) => this.queue.overlay(id, saved));
+      const { blob, missingPictures } = await buildLbd(this.store, groups, (id, saved) => this.queue.overlay(id, saved));
       this.download(blob, fileName(name));
+      if (missingPictures) toast(missingNote(missingPictures), 'error');
     } catch (e) {
       toast('Export failed: ' + (e as Error).message, 'error');
     }
@@ -1236,9 +1241,10 @@ export class App {
       this.board.finishText();
       toast('Preparing your data...');
       // Include changes still waiting to be saved (and leave out strokes waiting to be deleted).
-      const blob = await buildExport(this.store, this.user, this.settings, (noteId, saved) => this.queue.overlay(noteId, saved));
+      const { blob, missingPictures } = await buildExport(this.store, this.user, this.settings, (noteId, saved) => this.queue.overlay(noteId, saved));
       this.download(blob, `lineboard-data-${new Date().toISOString().slice(0, 10)}.zip`);
-      toast('Your data is downloading.');
+      if (missingPictures) toast(missingNote(missingPictures), 'error');
+      else toast('Your data is downloading.');
     } catch (e) {
       toast('Could not prepare your data: ' + (e as Error).message, 'error');
     }

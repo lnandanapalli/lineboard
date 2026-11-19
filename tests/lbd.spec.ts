@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { expect, test, type Page } from '@playwright/test';
 import { attachBoard, drag, PEN, send, setup, stripY, tp } from './helpers';
@@ -277,4 +278,46 @@ test('with an account: import uploads the pictures, and "Export all notes" asks 
   expect(d.suggestedFilename()).toMatch(/^Lineboard notes \d{4}-\d{2}-\d{2}\.lbd$/);
   const parts = unzip(readFileSync((await d.path())!));
   expect([...parts.keys()].some((k) => k.startsWith('pictures/'))).toBe(true);
+});
+
+test('a picture that cannot be read is reported, and kept in the file as a marked stroke', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await attachBoard(page);
+  await page.locator('input[type=file][accept^="image/"]').setInputFiles({ name: 'p.png', mimeType: 'image/png', buffer: PNG });
+  await expect.poll(() => db.strokes.length).toBe(1);
+  // From now on the storage server fails every download.
+  await page.route('**/storage/v1/object/images/**', (r) => (r.request().method() === 'GET' ? r.fulfill({ status: 500, body: '{}' }) : r.fallback()));
+  await openSidebar(page);
+  const row = page.locator('.note-list li').first();
+  const file = await downloaded(page, () => row.getByRole('button', { name: 'Export note' }).click());
+  await expect(page.locator('#toast')).toContainText('1 picture could not be read');
+  const parts = unzip(file.bytes);
+  expect(JSON.parse(parts.get('lineboard.json')!.toString()).missing_pictures).toBe(1);
+  const note = JSON.parse(parts.get('notes/0001.json')!.toString());
+  expect(note.strokes[0]).toMatchObject({ tool: 'image', missing: true });
+});
+
+test('a large "Download my data" archive (a notes.lbd over 60 MB) can be imported', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  await setup(page);
+  // Five pictures of 13 MB each: no single entry too big, the whole notes.lbd about 65 MB.
+  const pics: [string, Buffer][] = Array.from({ length: 5 }, (_, i) => [`pictures/p${i}.png`, randomBytes(13_000_000)]); // incompressible
+  const notes = lbd(
+    [{ title: 'Big', strokes: [{ tool: 'pen', color: '#111827', width: 3, points: [10, 10, 0.5, 50, 10, 0.5] }] }],
+    {},
+    pics,
+  );
+  const archive = makeZip([['README.txt', Buffer.from('x')], ['account.json', Buffer.from('{}')], ['notes.lbd', notes]]);
+  // Too big to hand over in memory: write it out, as a real download would be.
+  const path = testInfo.outputPath('lineboard-data.zip');
+  writeFileSync(path, archive);
+  await openSidebar(page);
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Import', exact: true }).click();
+  await (await chooser).setFiles(path);
+  await expect(page.locator('#toast')).toContainText('Imported “Big”', { timeout: 60_000 });
 });
