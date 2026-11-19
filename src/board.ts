@@ -198,6 +198,9 @@ export class Board {
   private eraserCursor: { x: number; y: number } | null = null;
   /** Pictures for 'image' strokes, by image id. */
   private images = new Map<string, ImageBitmap | 'loading' | 'error'>();
+  /** Pictures being added (prepared, encrypted, uploaded): a placeholder box shows where each will go. */
+  private pending = new Map<number, { l: number; t: number; w: number; h: number; offset: number }>();
+  private pendingSeq = 0;
   /** Select tool: the selected strokes, and the Delete / Duplicate bar shown above them. */
   private selection = new Set<Cached>();
   private selectBar: HTMLElement | null = null;
@@ -1097,20 +1100,48 @@ export class Board {
 
   // ----------------------------- pictures -----------------------------
 
-  /** Place a picture in the middle of the view, at most 600 page units wide, and select it. */
-  insertImage(id: string, type: string, bitmap: ImageBitmap): Stroke {
-    this.commitText();
-    let w = Math.min(600, (bitmap.width * PAGE_W) / Math.max(1, this.viewW));
-    let h = (w * bitmap.height) / bitmap.width;
+  /** Where a picture of this pixel size goes: centred in the view, at most 600 wide and 80% of the view tall. */
+  private placeBox(pxW: number, pxH: number, offset = 0) {
+    let w = Math.min(600, (pxW * PAGE_W) / Math.max(1, this.viewW));
+    let h = (w * pxH) / Math.max(1, pxW);
     const maxH = (this.viewH / this.scale) * 0.8;
     if (h > maxH) {
       w *= maxH / h;
       h = maxH;
     }
-    const cx = this.scrollX + this.viewW / this.scale / 2;
-    const cy = this.scrollY + this.viewH / this.scale / 2;
-    const l = Math.max(4, Math.min(PAGE_W - w - 4, cx - w / 2));
-    const t = Math.max(4, cy - h / 2);
+    const cx = this.scrollX + this.viewW / this.scale / 2 + offset;
+    const cy = this.scrollY + this.viewH / this.scale / 2 + offset;
+    return { l: Math.max(4, Math.min(PAGE_W - w - 4, cx - w / 2)), t: Math.max(4, cy - h / 2), w, h };
+  }
+
+  /**
+   * Show a placeholder where a picture is about to appear, before it is ready (preparing, encrypting
+   * and uploading can take a moment). The size is a guess until `sizePending` gives the real one.
+   */
+  addPending(): number {
+    const key = ++this.pendingSeq;
+    const offset = this.pending.size * 24; // several at once step down-right, like a stack
+    this.pending.set(key, { ...this.placeBox(800, 600, offset), offset });
+    this.area.setAttribute('aria-busy', 'true');
+    this.invalidate('live');
+    return key;
+  }
+  sizePending(key: number, pxW: number, pxH: number) {
+    const p = this.pending.get(key);
+    if (!p) return;
+    this.pending.set(key, { ...this.placeBox(pxW, pxH, p.offset), offset: p.offset });
+    this.invalidate('live');
+  }
+  removePending(key: number) {
+    this.pending.delete(key);
+    if (!this.pending.size) this.area.removeAttribute('aria-busy');
+    this.invalidate('live');
+  }
+
+  /** Place a picture in the middle of the view, at most 600 page units wide, and select it. */
+  insertImage(id: string, type: string, bitmap: ImageBitmap): Stroke {
+    this.commitText();
+    const { l, t, w, h } = this.placeBox(bitmap.width, bitmap.height);
     const r1 = (v: number) => Math.round(v * 10) / 10;
     const stroke: Stroke = {
       id: uuid(),
@@ -1335,6 +1366,8 @@ export class Board {
     if (d.live) this.drawLive();
     if (d.margin) this.drawMargin();
     this.dirty = { bg: false, ink: false, live: false, margin: false };
+    // Placeholders for pictures being added shimmer, so keep drawing while any are shown.
+    if (this.pending.size && !REDUCED_MOTION()) this.invalidate('live');
   }
 
   private visibleStrips(): [number, number] {
@@ -1468,19 +1501,7 @@ export class Board {
         ctx.drawImage(img, c.minX, c.minY, w, h);
         return;
       }
-      ctx.save();
-      ctx.fillStyle = '#f1f5f9';
-      ctx.fillRect(c.minX, c.minY, w, h);
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(c.minX, c.minY, w, h);
-      if (img === 'error') {
-        ctx.fillStyle = '#64748b';
-        ctx.font = `14px ${TEXT_FONT}`;
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Picture unavailable', c.minX + 10, c.minY + h / 2);
-      }
-      ctx.restore();
+      drawSkeleton(ctx, c.minX, c.minY, w, h, img === 'error' ? 'Picture unavailable' : 'Loading picture…', null, this.scale);
       return;
     }
     if (s.tool === 'text') {
@@ -1538,6 +1559,8 @@ export class Board {
     if (this.split) this.drawSplitOverlay(ctx);
     this.setPageTransform(ctx);
     const a = this.active;
+    const phase = REDUCED_MOTION() ? null : (performance.now() % 1400) / 1400;
+    for (const p of this.pending.values()) drawSkeleton(ctx, p.l, p.t, p.w, p.h, 'Adding picture…', phase, this.scale);
     if (a?.shape) {
       for (const points of this.shapeOf(a)) {
         if (!points.length) continue;
@@ -1682,6 +1705,47 @@ export class Board {
     }
     this.margin.replaceChildren(frag);
   }
+}
+
+const REDUCED_MOTION = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/**
+ * A grey box standing in for a picture that is not there yet, with a label in the middle. With a
+ * `phase` (0..1) a light band sweeps across it, so it reads as something in progress.
+ */
+function drawSkeleton(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, label: string, phase: number | null, scale: number) {
+  ctx.save();
+  const r = Math.min(10, w / 4, h / 4);
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fillStyle = '#eef2f7';
+  ctx.fill();
+  if (phase != null) {
+    ctx.save();
+    ctx.clip();
+    const band = Math.max(60, w * 0.35);
+    const bx = x - band + (w + 2 * band) * phase;
+    const g = ctx.createLinearGradient(bx, 0, bx + band, 0);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0.85)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+  }
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.lineWidth = 1 / scale;
+  ctx.stroke();
+  // The label stays a readable size on screen, and is left out when the box is too small for it.
+  const font = 14 / scale;
+  ctx.font = `${font}px ${TEXT_FONT}`;
+  if (ctx.measureText(label).width < w - 16 / scale && font * 2 < h) {
+    ctx.fillStyle = '#64748b';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + w / 2, y + h / 2);
+  }
+  ctx.restore();
 }
 
 /** Split a stroke at its corners (a repeated point, see shapes.ts) into separately dashed pieces. */

@@ -88,9 +88,13 @@ export class App {
     this.root = root;
     this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
-    this.queue.onState = (s) => this.renderStatus(s);
+    this.queue.onState = (s) => {
+      this.syncState = s;
+      this.renderStatus();
+    };
     this.build();
-    this.renderStatus(this.queue.pending ? 'saving' : 'saved');
+    this.syncState = this.queue.pending ? 'saving' : 'saved';
+    this.renderStatus();
     window.addEventListener(
       'beforeunload',
       (e) => {
@@ -645,15 +649,24 @@ export class App {
     await this.ready; // a picture pasted right after the page opened waits for the note
     if (!this.current) return toast('Open a note first.', 'error');
     let last: Stroke | null = null;
-    for (const file of pics) {
+    // A placeholder for each picture shows at once, where it will land, until it is saved.
+    const slots = pics.map(() => this.board.addPending());
+    this.picturesInFlight += pics.length;
+    this.renderStatus();
+    for (const [i, file] of pics.entries()) {
       try {
         const img = await prepareImage(file);
+        const bitmap = await createImageBitmap(img.blob);
+        this.board.sizePending(slots[i], bitmap.width, bitmap.height);
         const id = uuid();
         await this.store.putImage(id, img.blob);
-        const bitmap = await createImageBitmap(img.blob);
         last = this.board.insertImage(id, img.type, bitmap);
       } catch (e) {
         toast('Could not add the picture: ' + (e as Error).message, 'error');
+      } finally {
+        this.board.removePending(slots[i]);
+        this.picturesInFlight--;
+        this.renderStatus();
       }
     }
     if (last) {
@@ -805,7 +818,12 @@ export class App {
     this.redoBtn.disabled = !this.redoStack.length;
   }
 
-  private renderStatus(s: SyncState) {
+  /** Pictures still being prepared and uploaded: the status says "Saving..." until they are done. */
+  private picturesInFlight = 0;
+  private syncState: SyncState = 'saved';
+
+  private renderStatus() {
+    const s: SyncState = this.picturesInFlight && this.syncState === 'saved' ? 'saving' : this.syncState;
     const local = this.store.mode === 'local';
     const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: 'Offline, will retry' }[s];
     // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.
