@@ -59,3 +59,21 @@ test('a save refused by a fair-use limit is explained, not silently lost', async
   await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));
   await expect(page.locator('#toast')).toContainText('Not saved: An account can have at most 50000 strokes in one note; start a new note.');
 });
+
+test('new passwords need at least 8 characters; signing in still takes an older, shorter one', async ({ page }) => {
+  const db = await mockSupabase(page);
+  let signups = 0;
+  page.on('request', (r) => r.url().includes('/auth/v1/signup') && signups++);
+  await page.goto('/signup');
+  await page.getByLabel('Email', { exact: true }).fill('new@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('abc1234'); // 7 characters
+  await page.getByRole('button', { name: 'Create account' }).click();
+  expect(await page.getByLabel('Password', { exact: true }).evaluate((el: HTMLInputElement) => el.validity.tooShort)).toBe(true);
+  await page.waitForTimeout(300);
+  expect(signups).toBe(0);
+  // An account whose password predates the rule can still sign in.
+  db.password = 'old123';
+  await page.goto('/login');
+  await fillSignIn(page, 'old123');
+  await attachBoard(page);
+});

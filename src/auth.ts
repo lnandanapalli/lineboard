@@ -6,6 +6,8 @@ import { passkeysSupported } from './account';
 import { Captcha } from './captcha';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
+/** Shortest password accepted for new passwords; keep in step with the project's Auth setting. */
+export const MIN_PASSWORD = 8;
 
 export interface AuthOptions {
   initialMode?: 'signin' | 'signup';
@@ -22,7 +24,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
 
   const msg = h('p', { class: 'auth-msg', role: 'status' });
   const email = h('input', { type: 'email', placeholder: 'Email', autocomplete: 'email', required: true }) as HTMLInputElement;
-  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', minlength: '6' }) as HTMLInputElement;
+  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' }) as HTMLInputElement;
   const submit = h('button', { class: 'btn primary wide', type: 'submit' });
   const tabs = h('div', { class: 'auth-switch' });
   const heading = h('h1', { class: 'auth-heading' });
@@ -59,6 +61,10 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     pass.style.display = mode === 'magic' || mode === 'reset' ? 'none' : '';
     pass.required = mode === 'signin' || mode === 'signup';
     pass.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+    // New passwords: at least MIN_PASSWORD (as in the Supabase project's settings). Signing in takes
+    // any length, so older, shorter passwords keep working.
+    if (mode === 'signup') pass.minLength = MIN_PASSWORD;
+    else pass.removeAttribute('minlength');
     submit.textContent = { signin: 'Sign in', signup: 'Create account', magic: 'Send sign-in link', reset: 'Send reset link' }[mode];
     extra.replaceChildren();
     passkeyBtn.hidden = mode !== 'signin' || !passkeysSupported();
@@ -180,7 +186,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
 
 /** Shown after following a password-reset link. */
 export function renderNewPassword(root: HTMLElement, sb: SupabaseClient, done: () => void) {
-  const pass = h('input', { type: 'password', placeholder: 'New password', autocomplete: 'new-password', minlength: '6', required: true }) as HTMLInputElement;
+  const pass = h('input', { type: 'password', placeholder: `New password (at least ${MIN_PASSWORD} characters)`, autocomplete: 'new-password', minlength: String(MIN_PASSWORD), required: true }) as HTMLInputElement;
   const msg = h('p', { class: 'auth-msg' });
   const form = h('form', { class: 'auth-form' }, pass, h('button', { class: 'btn primary wide', type: 'submit' }, 'Set new password'));
   const others = h('input', { type: 'checkbox', checked: true }) as HTMLInputElement;

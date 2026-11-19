@@ -1,4 +1,5 @@
 import type { Factor } from '@supabase/supabase-js';
+import { MIN_PASSWORD } from './auth';
 import { AccountError, describeDevice, passkeysSupported, type AccountSecurity, type DeviceSession } from './account';
 import { Captcha } from './captcha';
 import { logo } from './brand';
@@ -10,7 +11,6 @@ import { dialog, h, toast } from './util';
  * the second-step screen shown after signing in when two-step verification is on.
  */
 
-const MIN_PASSWORD = 8;
 
 const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
 const rel = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
