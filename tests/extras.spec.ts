@@ -36,7 +36,7 @@ test('lasso selects, drags, duplicates and deletes strokes, with undo', async ({
   await expectStrokes(page, 3);
 
   await page.keyboard.press('v');
-  await expect(page.locator('.select-btn')).toHaveClass(/active/);
+  await expect(page.locator('.select-tool')).toHaveClass(/active/);
   await loop(cdp, b.x + 200, (y1 + y2) / 2, 160, 90);
   const bar = page.locator('.select-bar');
   await expect(bar).toBeVisible();
@@ -99,7 +99,7 @@ test('rectangle select picks what is inside the box', async ({ page }) => {
   await drag(cdp, b.x + 100, y3, b.x + 300, y3);
   await page.locator('.select-btn').click();
   await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
-  await expect(page.locator('.select-btn')).toHaveClass(/active/);
+  await expect(page.locator('.select-tool')).toHaveClass(/active/);
   await drag(cdp, b.x + 60, y1 - 40, b.x + 360, y2 + 40); // a box around the first two
   const bar = page.locator('.select-bar');
   await expect(bar).toBeVisible();

@@ -61,6 +61,8 @@ export class App {
   private redoBtn!: HTMLButtonElement;
   private modeMenu!: Dropdown<BoardMode>;
   private shapeBtn!: HTMLButtonElement;
+  private shapeMain!: HTMLButtonElement;
+  private shapeTool!: HTMLElement;
   private selectMenu!: Dropdown<'lasso' | 'rect'>;
   /** The last strip mode, so F (free on/off) returns to it. */
   private lastStripMode: BoardMode = 'strips';
@@ -212,9 +214,11 @@ export class App {
     // Select: a free-hand loop or a dragged rectangle.
     this.selectMenu = dropdown<'lasso' | 'rect'>({
       name: 'Select',
-      className: 'tool-dropdown select-btn',
+      className: 'select-btn',
       value: this.settings.selectMode,
       reselect: true,
+      // The icon picks the Select tool as last used; the arrow chooses lasso or rectangle.
+      split: { className: 'select-tool', onMain: () => this.setTool('select'), title: (t) => withShortcut(t, 'V') },
       onSelect: (m) => {
         this.settings.selectMode = m;
         this.settingsChanged();
@@ -226,10 +230,14 @@ export class App {
       ],
     });
     tools.append(this.selectMenu.el);
-    // Shapes: a palette of shapes, opened from one button.
-    this.shapeBtn = h('button', { class: 'dropdown-btn tool-dropdown shape-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
+    // Shapes: the icon draws the last shape picked; the arrow opens the palette.
+    this.shapeMain = h('button', { class: 'split-main', type: 'button' }) as HTMLButtonElement;
+    this.shapeMain.addEventListener('click', () => this.setTool('shape'));
+    this.shapeBtn = h('button', { class: 'split-arrow shape-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-label': 'Shape options', title: 'Shape options' }) as HTMLButtonElement;
+    this.shapeBtn.innerHTML = icons.chevron;
     this.shapeBtn.addEventListener('click', () => this.openShapePalette());
-    tools.append(this.shapeBtn);
+    this.shapeTool = h('div', { class: 'split-btn shape-tool', role: 'group', 'aria-label': 'Shapes' }, this.shapeMain, this.shapeBtn);
+    tools.append(this.shapeTool);
     // Insert a picture (also: paste, or drop a file on the page).
     const filePick = h('input', { type: 'file', accept: IMAGE_TYPES, multiple: true, hidden: true, 'aria-hidden': 'true' }) as HTMLInputElement;
     filePick.addEventListener('change', () => {
@@ -494,10 +502,10 @@ export class App {
 
   private renderToolOptions() {
     for (const [t, b] of this.toolBtns) b.classList.toggle('active', t === this.tool);
-    this.shapeBtn.classList.toggle('active', this.tool === 'shape');
-    this.shapeBtn.innerHTML = `${SHAPE_ICONS[this.settings.shape]}${icons.chevron}`;
-    this.shapeBtn.setAttribute('aria-label', `Shapes: ${SHAPE_NAMES[this.settings.shape]}`);
-    this.shapeBtn.title = withShortcut(`Shapes: ${SHAPE_NAMES[this.settings.shape]}`, 'S');
+    this.shapeTool.classList.toggle('active', this.tool === 'shape');
+    this.shapeMain.innerHTML = SHAPE_ICONS[this.settings.shape];
+    this.shapeMain.setAttribute('aria-label', `Shapes: ${SHAPE_NAMES[this.settings.shape]}`);
+    this.shapeMain.title = withShortcut(`Shapes: ${SHAPE_NAMES[this.settings.shape]}`, 'S');
     this.selectMenu.el.classList.toggle('active', this.tool === 'select');
     this.selectMenu.set(this.settings.selectMode);
     const isHL = this.tool === 'highlighter';

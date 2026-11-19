@@ -35,7 +35,7 @@ test('insert a picture, draw on it, move and resize it; the eraser leaves it alo
   await expectStrokes(page, 1);
   let img = (await strokes(page))[0];
   expect(img.tool).toBe('image');
-  await expect(page.locator('.select-btn')).toHaveClass(/active/); // selected, ready to move
+  await expect(page.locator('.select-tool')).toHaveClass(/active/); // selected, ready to move
   await expect(page.locator('.select-bar')).toBeVisible();
 
   // Draw across the picture with the pen: ink goes on top of it.

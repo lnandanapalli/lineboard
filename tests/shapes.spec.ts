@@ -55,7 +55,7 @@ test('the palette offers every shape, and each one draws', async ({ page }) => {
 test('rectangles have exact corners; nearly-square boxes snap to squares without a keyboard', async ({ page }) => {
   const { draw } = await freeBoard(page);
   await pickShape(page, 'Rectangle');
-  await expect(page.locator('.shape-btn')).toHaveClass(/active/);
+  await expect(page.locator('.shape-tool')).toHaveClass(/active/);
   await draw(100, 100, 300, 200);
   await expectStrokes(page, 1);
   let s = (await all(page)).at(-1)!;
@@ -113,7 +113,7 @@ test('a crossed box is one undo step, and a tap draws nothing', async ({ page })
 test('S picks the shape tool, which uses the pen colour and size', async ({ page }) => {
   const { cdp, geo } = await setup(page);
   await page.keyboard.press('s');
-  await expect(page.locator('.shape-btn')).toHaveClass(/active/);
+  await expect(page.locator('.shape-tool')).toHaveClass(/active/);
   await expect(page.locator('.size-btn')).toHaveAttribute('aria-label', /^Pen size/);
   await drag(cdp, geo.areaX + 100, stripY(geo, 0) - 20, geo.areaX + 300, stripY(geo, 0) + 20);
   await expectStrokes(page, 1);
@@ -131,7 +131,7 @@ test('on a short screen the palette scrolls so every shape and the switch can be
   await lock.click();
   await expect(lock).toHaveAttribute('aria-checked', 'true');
   await page.locator('.shape-grid').getByRole('radio', { name: 'Arrow line', exact: true }).click();
-  await expect(page.locator('.shape-btn')).toHaveAttribute('aria-label', 'Shapes: Arrow line');
+  await expect(page.locator('.shape-tool .split-main')).toHaveAttribute('aria-label', 'Shapes: Arrow line');
 });
 
 test('shapes can be dashed or dotted and thin to extra bold; the choice is saved with the shape', async ({ page }) => {
@@ -260,4 +260,29 @@ test('resizing a dashed shape previews it at the new size while dragging', async
     }, 0.55);
   await expect.poll(inkRight).toBeGreaterThan(200);
   await send(cdp, 'touchEnd', []);
+});
+
+test('the Select and Shapes icons pick the tool with the last choice; only the arrow opens the menu', async ({ page }) => {
+  const { draw } = await freeBoard(page);
+  // Choose the star once from the palette, then switch to the pen.
+  await pickShape(page, 'Star');
+  await page.keyboard.press('p');
+  await expect(page.locator('.shape-tool')).not.toHaveClass(/active/);
+  // Pressing the star icon itself goes straight back to drawing stars, with no palette.
+  await page.getByRole('button', { name: 'Shapes: Star' }).click();
+  await expect(page.locator('.shape-tool')).toHaveClass(/active/);
+  await expect(page.locator('.shape-palette')).toHaveCount(0);
+  await draw(300, 300, 500, 500);
+  await expectStrokes(page, 1);
+
+  // Same for Select: pick Rectangle select from the menu once, leave, then press the icon.
+  await page.locator('.select-btn').click();
+  await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
+  await page.keyboard.press('p');
+  await page.getByRole('button', { name: 'Select: Rectangle select' }).click();
+  await expect(page.locator('.select-tool')).toHaveClass(/active/);
+  await expect(page.locator('.dropdown-menu')).toHaveCount(0);
+  // A dragged box selects the star.
+  await draw(250, 250, 550, 550);
+  await expect(page.locator('.select-bar')).toBeVisible();
 });
