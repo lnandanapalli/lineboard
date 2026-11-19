@@ -120,6 +120,8 @@ export function dialog(opts: {
   choices?: { value: string; label: string }[];
   ok?: string;
   danger?: boolean;
+  /** A checkbox under the field; its state is written back to `value` when the dialog is confirmed. */
+  check?: { label: string; value: boolean; hint?: string };
 }): Promise<string | null> {
   return new Promise((resolve) => {
     const input = opts.input !== undefined ? (h('input', { type: 'text', class: 'dlg-input' }) as HTMLInputElement) : null;
@@ -127,6 +129,9 @@ export function dialog(opts: {
     const select = opts.choices
       ? (h('select', { class: 'dlg-input' }, ...opts.choices.map((c) => h('option', { value: c.value }, c.label))) as HTMLSelectElement)
       : null;
+    const box = opts.check ? (h('input', { type: 'checkbox' }) as HTMLInputElement) : null;
+    if (box) box.checked = opts.check!.value;
+    const check = box ? h('label', { class: 'dlg-check' }, box, h('span', {}, opts.check!.label, opts.check!.hint ? h('small', {}, opts.check!.hint) : null)) : null;
     const okBtn = h('button', { class: 'btn ' + (opts.danger ? 'danger' : 'primary'), type: 'submit' }, opts.ok ?? 'OK');
     const cancelBtn = h('button', { class: 'btn', type: 'button' }, 'Cancel');
     const form = h(
@@ -136,6 +141,7 @@ export function dialog(opts: {
       opts.message ? h('p', {}, opts.message) : null,
       input,
       select,
+      check,
       h('div', { class: 'dlg-actions' }, cancelBtn, okBtn),
     );
     const d = h('dialog', { class: 'modal small' }, form);
@@ -152,6 +158,7 @@ export function dialog(opts: {
     });
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      if (box) opts.check!.value = box.checked;
       done(input ? input.value : select ? select.value : 'ok');
     });
     d.showModal();

@@ -21,11 +21,14 @@ const GUEST_APP_KEYS = ['lb-settings-local', 'lb-queue-local', 'lb-last-note-loc
 export const isGuestActive = () => lsGet<boolean>(GUEST_ACTIVE, false);
 export const setGuestActive = (on: boolean) => (on ? lsSet(GUEST_ACTIVE, true) : lsDel(GUEST_ACTIVE));
 
-/** Notes on this device that have ink in them (empty notes are not worth moving). */
+/**
+ * Notes on this device worth moving: those with ink, or with a version history (a note erased to
+ * empty can still hold named versions). Untouched empty notes are left behind.
+ */
 export async function guestNotesWithInk(local: LocalStore): Promise<NoteMeta[]> {
   const out: NoteMeta[] = [];
   for (const n of await local.listNotes()) {
-    if ((await local.loadStrokes(n.id)).length) out.push(n);
+    if ((await local.loadStrokes(n.id)).length || (await local.listVersions(n.id).catch(() => [])).length) out.push(n);
   }
   return out;
 }
@@ -67,6 +70,15 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
     // Pictures go to the account's image storage first, so the strokes never point at nothing.
     for (const st of strokes) if (st.tool === 'image' && st.text) await cloud.putImage(st.text, await local.getImage(st.text));
     await cloud.upsertStrokes(strokes);
+    // Version history comes along (same ids, so a second run overwrites rather than duplicates).
+    // Pictures only an old version uses are moved too; one no longer on the device is left out.
+    if (await cloud.supportsHistory()) {
+      for (const v of await local.listVersions(n.id).catch(() => [])) {
+        const snap = await local.loadVersion(v);
+        for (const st of snap) if (st.tool === 'image' && st.text && !strokes.some((x) => x.text === st.text)) await local.getImage(st.text).then((b) => cloud.putImage(st.text!, b), () => {});
+        await cloud.saveVersion(v, snap);
+      }
+    }
   }
 
   // Carry the guest's settings (stylus calibration, strip height...) over if the account has none yet.

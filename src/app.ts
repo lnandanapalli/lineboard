@@ -17,6 +17,7 @@ import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
 import { LocalStore } from './store/localStore';
+import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
 
 
 
@@ -85,6 +86,11 @@ export class App {
   private appEl!: HTMLElement;
   private settingsPanel!: SettingsPanel;
   private hint!: HTMLElement;
+  private toolbarEl!: HTMLElement;
+  private historyBtn!: HTMLButtonElement;
+  /** Saves versions of notes as they change (version history). */
+  private history: VersionRecorder;
+  private historyPanel: HistoryPanel | null = null;
 
   private saveSettingsDebounced = debounce(() => {
     this.store.saveSettings(this.settings).catch((e) => console.warn('Settings not saved', e));
@@ -99,6 +105,11 @@ export class App {
     this.root = root;
     this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
+    this.history = new VersionRecorder(store, this.lsKey('history'), async (id) => {
+      // The open note: what is on the board (null while it is still loading).
+      if (id === this.current?.id) return this.loadedNote === id ? this.board.allStrokes() : null;
+      return this.queue.overlay(id, await this.store.loadStrokes(id));
+    });
     this.queue.onDropped = (m) => toast('Not saved: ' + m, 'error');
     this.queue.onState = (s) => {
       this.syncState = s;
@@ -126,6 +137,7 @@ export class App {
       () => {
         this.board.finishText();
         this.saveSettingsDebounced.flush();
+        if (this.current && this.loadedNote === this.current.id) this.history.leave(this.current.id, this.board.allStrokes());
       },
       { signal: this.abort.signal },
     );
@@ -149,6 +161,8 @@ export class App {
   /** Tear down before switching user. */
   destroy() {
     this.abort.abort();
+    this.historyPanel?.close();
+    this.history.stop();
     this.queue.stop();
     detachOrientation(this.appEl);
     this.settingsPanel.destroy();
@@ -176,6 +190,8 @@ export class App {
     const lastBookId = lastNote?.notebook_id ?? lsGet<string | null>(this.lsKey('last-notebook'), null);
     const book = this.notebooks.find((b) => b.id === lastBookId) ?? this.notebooks[0];
     if (book) await this.switchNotebook(book, lastNote);
+    // Versions left to save from an earlier visit (a closed tab, a reload).
+    void this.history.catchUp(this.current?.id ?? null, (id) => this.notes.some((n) => n.id === id));
   }
 
   /** Load notebooks and notes; create the default notebook and file older, notebook-less notes into it. */
@@ -287,7 +303,7 @@ export class App {
     this.status = h('div', { class: 'status', title: '' });
     this.rotateBtn = this.iconBtn(icons.rotate, 'Rotate right', () => orientation.rotateRight(), 'rotate-btn');
 
-    const toolbar = h(
+    const toolbar = (this.toolbarEl = h(
       'header',
       { class: 'toolbar' },
       this.iconBtn(icons.menu, 'Notes', () => this.toggleSidebar()),
@@ -311,9 +327,10 @@ export class App {
       this.opts.signIn ? this.signInButton('toolbar') : null,
       this.status,
       this.rotateBtn,
+      (this.historyBtn = this.iconBtn(icons.history, 'Version history', () => void this.openHistory())),
       (this.exportBtn = this.iconBtn(icons.download, 'Export', () => this.openExportMenu())),
       this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
-    );
+    ));
 
     // Sidebar
     this.bookButton = h('button', { class: 'book-button', type: 'button', 'aria-expanded': 'false', title: 'Switch notebook' }) as HTMLButtonElement;
@@ -437,7 +454,7 @@ export class App {
 
   private bindKeys() {
     window.addEventListener('keydown', (e) => {
-      if (e.defaultPrevented) return; // already handled (an open menu, a text box...)
+      if (e.defaultPrevented || this.historyPanel) return; // already handled (an open menu, a text box...), or looking at history
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const mod = e.ctrlKey || e.metaKey;
@@ -820,6 +837,7 @@ export class App {
       this.queue.remove(a.strokes.map((s) => s.id));
     }
     this.bumpCurrent();
+    if (this.current) this.history.changed(this.current.id);
   }
 
   private invert(a: Action): Action {
@@ -896,8 +914,18 @@ export class App {
     this.renderNotebooks(); // keep the per-notebook note counts current
   }
 
+  /** The note whose strokes are on the board (null while one is loading). */
+  private loadedNote: string | null = null;
+
   private async openNote(n: NoteMeta) {
     const token = ++this.loadToken;
+    this.historyPanel?.close();
+    // Leaving a note: its changes get their version now (from what was on the board).
+    if (this.current && this.loadedNote === this.current.id && this.current.id !== n.id) {
+      this.board.finishText();
+      this.history.leave(this.current.id, this.board.allStrokes());
+    }
+    this.loadedNote = null;
     this.current = n;
     this.titleInput.value = n.title;
     lsSet(this.lsKey('last-note'), n.id);
@@ -910,7 +938,10 @@ export class App {
     try {
       const loaded = await this.store.loadStrokes(n.id);
       if (token !== this.loadToken) return;
-      this.board.setStrokes(n.id, this.queue.overlay(n.id, loaded));
+      const strokes = this.queue.overlay(n.id, loaded);
+      this.board.setStrokes(n.id, strokes);
+      this.loadedNote = n.id;
+      void this.history.opened(n.id, strokes);
     } catch (e) {
       if (token !== this.loadToken) return;
       // Offline: show whatever is still waiting to be saved for this note.
@@ -976,6 +1007,7 @@ export class App {
     try {
       this.queue.dropNote(n.id);
       await this.store.deleteNote(n.id);
+      this.history.forget(n.id);
       this.notes = this.notes.filter((x) => x.id !== n.id);
       if (this.current?.id === n.id) {
         this.current = null;
@@ -1131,6 +1163,55 @@ export class App {
 
   // ----------------------------- Lineboard files (.lbd) -----------------------------
 
+  // ----------------------------- version history -----------------------------
+
+  private async openHistory() {
+    if (this.historyPanel) return this.historyPanel.close();
+    await this.ready;
+    const note = this.current;
+    if (!note || this.loadedNote !== note.id) return toast('Open a note first.', 'error');
+    if (!(await this.history.enabled)) return toast(HISTORY_NEEDS_UPDATE, 'error');
+    this.board.finishText();
+    this.toggleSidebar(false);
+    this.historyBtn.classList.add('active');
+    this.historyPanel = new HistoryPanel(
+      {
+        store: this.store,
+        board: this.board,
+        recorder: this.history,
+        setBusy: (on) => {
+          this.toolbarEl.inert = on;
+          this.sidebar.inert = on;
+          this.appEl.classList.toggle('history-open', on);
+        },
+        replaceStrokes: (remove, add) => {
+          const a: Action = { type: 'replace', from: remove, to: add.map((s) => ({ ...s, note_id: note.id })) };
+          this.undoStack.push(a);
+          this.redoStack = [];
+          this.apply(a, true);
+          this.renderUndo();
+        },
+        createNote: async (source, title, strokes) => {
+          const book = source.notebook_id ?? this.currentBook?.id;
+          if (!book) throw new Error('Open a notebook first.');
+          const n = await this.store.createNote(title, book);
+          // The copy's strokes keep their order: their times stay as they were.
+          await this.store.upsertStrokes(strokes.map((s) => ({ ...s, note_id: n.id })));
+          this.notes.unshift(n);
+          this.renderNoteList();
+          return n;
+        },
+        openNote: (n) => this.openNote(n),
+      },
+      note,
+      this.appEl.querySelector('.main')!,
+      () => {
+        this.historyPanel = null;
+        this.historyBtn.classList.remove('active');
+      },
+    );
+  }
+
   private exportBtn!: HTMLButtonElement;
 
   /** The toolbar's export button: this note as a picture, or as a Lineboard file. */
@@ -1162,13 +1243,13 @@ export class App {
   }
 
   /** Make an .lbd from notebooks of notes and download it. */
-  private async exportLbd(groups: { notebook: Notebook; notes: NoteMeta[] }[], name: string) {
+  private async exportLbd(groups: { notebook: Notebook; notes: NoteMeta[] }[], name: string, withHistory = false) {
     try {
       this.board.finishText();
       const count = groups.reduce((n, g) => n + g.notes.length, 0);
       if (!count) return toast('There are no notes to export.', 'error');
       toast(count > 1 ? `Exporting ${count} notes...` : 'Exporting...');
-      const { blob, missingPictures } = await buildLbd(this.store, groups, (id, saved) => this.queue.overlay(id, saved));
+      const { blob, missingPictures } = await buildLbd(this.store, groups, (id, saved) => this.queue.overlay(id, saved), undefined, withHistory);
       this.download(blob, fileName(name));
       if (missingPictures) toast(missingNote(missingPictures), 'error');
     } catch (e) {
@@ -1192,6 +1273,7 @@ export class App {
     await this.exportLbd(
       this.notebooks.map((notebook) => ({ notebook, notes: this.notes.filter((n) => n.notebook_id === notebook.id) })),
       `Lineboard notes ${new Date().toISOString().slice(0, 10)}`,
+      true, // a backup: with each note's version history
     );
   }
 

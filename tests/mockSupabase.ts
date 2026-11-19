@@ -15,6 +15,10 @@ export interface MockDb {
   notebooks: Row[];
   notes: Row[];
   strokes: Row[];
+  /** note_versions (version history). */
+  versions?: Row[];
+  /** Set to make the database look as if schema.sql predates version history. */
+  noHistory?: boolean;
   settings: Row | null;
   keys: Row | null;
   /** Auth server state: signed-in sessions, MFA factors, passkeys, password changes. */
@@ -298,7 +302,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     // ---- deleting the account ----
     if (path === '/rest/v1/rpc/delete_my_account') {
       if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
-      Object.assign(db, { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], deleted: true });
+      Object.assign(db, { notebooks: [], notes: [], strokes: [], versions: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], deleted: true });
       return route.fulfill({ status: 204, headers: cors, body: '' });
     }
 
@@ -349,6 +353,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     const cascadeNotes = (ids: unknown[]) => {
       db.notes = db.notes.filter((n) => !ids.includes(n.id));
       db.strokes = db.strokes.filter((s) => !ids.includes(s.note_id));
+      db.versions = (db.versions ?? []).filter((v) => !ids.includes(v.note_id));
     };
 
     // ---- notebooks / notes ----
@@ -407,6 +412,37 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       }
       if (method === 'DELETE') {
         db.strokes = db.strokes.filter((s) => !match(s));
+        return route.fulfill({ status: 204, headers: cors });
+      }
+    }
+
+    // ---- note_versions ----
+    if (path === '/rest/v1/note_versions') {
+      if (db.noHistory) return json(route, 404, { code: 'PGRST205', message: "Could not find the table 'public.note_versions' in the schema cache" });
+      db.versions ??= [];
+      // The schema's policy: with encryption on, the snapshot must be encrypted and the name too.
+      const ok = (r: Row) => (!encryptionRequired() || (!!r.data_enc && r.name == null)) && db.notes.some((n) => n.id === r.note_id);
+      if (method === 'GET') {
+        const byId = (url.searchParams.get('order') ?? '').startsWith('id');
+        const rows = db.versions.filter(match).sort((a, b) => (byId ? String(a.id).localeCompare(String(b.id)) : String(b.created_at).localeCompare(String(a.created_at))));
+        if (wantsObject) return rows[0] ? json(route, 200, rows[0]) : json(route, 406, { code: 'PGRST116', message: 'no rows' });
+        return json(route, 200, paginate(url, rows));
+      }
+      if (method === 'POST') {
+        const incoming = [body()].flat() as Row[];
+        if (incoming.some((r) => !ok(r))) return denied(route);
+        for (const r of incoming) db.versions = db.versions.filter((v) => v.id !== r.id).concat({ created_at: now(), ...r });
+        return route.fulfill({ status: 201, headers: cors });
+      }
+      if (method === 'PATCH') {
+        const patch = body();
+        const next = db.versions.map((v) => (match(v) ? { ...v, ...patch } : v));
+        if (next.some((v, i) => v !== db.versions![i] && !ok(v))) return denied(route);
+        db.versions = next;
+        return route.fulfill({ status: 204, headers: cors });
+      }
+      if (method === 'DELETE') {
+        db.versions = db.versions.filter((v) => !match(v));
         return route.fulfill({ status: 204, headers: cors });
       }
     }

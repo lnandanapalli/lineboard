@@ -38,9 +38,31 @@ pictures/<name>.png     the pictures the notes use (PNG or JPEG)
   "title": "Waves",
   "created_at": "2026-11-19T10:00:00.000Z",
   "updated_at": "2026-11-19T11:30:00.000Z",
+  "strokes": [ ... ],
+  "history": [ ... ]
+}
+```
+
+`history` is optional: the note's earlier versions, **oldest first**. Backups ("Export all notes" and
+"Download my data") include it; a single note or notebook exported to share has only its current content.
+
+```json
+{
+  "created_at": "2026-11-19T10:05:00.000Z",
+  "name": "First draft",
+  "kind": "restore",
+  "restored_from": "2026-11-18T16:00:00.000Z",
   "strokes": [ ... ]
 }
 ```
+
+- **`created_at`**: when the version was saved.
+- **`name`**: optional; named versions are kept until the name is removed.
+- **`kind`**: optional. `"restore"` means the version brought back the one saved at `restored_from`.
+- **`strokes`**: the whole note as it was then, in the same form as the note's own strokes.
+
+Each version is a full copy, not a change list, so any one of them can be read on its own. Pictures used only
+by old versions are in `pictures/` too.
 
 ## Strokes
 
@@ -86,12 +108,13 @@ Lineboard imports:
 Where imported notes go:
 
 - A file with **one note** goes into the open notebook.
+- A note's **history** is imported with it, keeping each version's date and name.
 - Otherwise, each notebook's notes go into the notebook with the **same name**, which is created if it doesn't exist.
 
 Files are treated as untrusted:
 
-- **Size limits:** at most 20,000 notes, 50,000 strokes per note, 20,000 points per stroke, 10,000 characters per text box and 15 MB per picture.
-- **One budget per import:** the limits count across everything in one import, so a zip of many `.lbd` files gets the same allowance as a single file: 20,000 notes, 2,000,000 strokes and 1.5 GB unpacked in total.
+- **Size limits:** at most 20,000 notes, 500 versions per note, 50,000 strokes per note or version, 20,000 points per stroke, 10,000 characters per text box and 15 MB per picture.
+- **One budget per import:** the limits count across everything in one import, so a zip of many `.lbd` files gets the same allowance as a single file: 20,000 notes, 5,000,000 strokes (versions included) and 1.5 GB unpacked in total.
 - **No deep nesting:** a zip is opened once and only the `.lbd` files directly in it are read; an `.lbd` is opened once and only its manifest, notes and pictures are used. Archives inside an `.lbd`, and zips inside a zip, are ignored. Every entry must unpack to exactly its declared size and CRC, and encrypted, multi-part and zip64 archives are refused.
 - **Strokes that don't follow this description** are left out, and the import reports how many.
 - **Pictures** are decoded and re-encoded before they are stored.

@@ -218,9 +218,9 @@ export class SettingsPanel {
     eraseBtn?.addEventListener('click', () => void erase!());
     const dataCard = this.card(
       'Your data',
-      h('p', { class: 'muted' }, 'Download a copy of everything: your account details and settings, and all your notebooks, notes and pictures as a Lineboard file (.lbd) you can import again.'),
+      h('p', { class: 'muted' }, 'Download a copy of everything: your account details and settings, and all your notebooks, notes (with their version history) and pictures as a Lineboard file (.lbd) you can import again.'),
       h('div', { class: 'row-actions' }, exportBtn),
-      h('p', { class: 'muted' }, 'Move notes between accounts or devices: export them as a Lineboard file (.lbd), then import it. Single notes and notebooks can be exported from the Notes list.'),
+      h('p', { class: 'muted' }, 'Move notes between accounts or devices: export them as a Lineboard file (.lbd), then import it. Exporting all notes keeps their version history; a single note or notebook, exported from the Notes list to share, has only its current content.'),
       h('div', { class: 'row-actions' }, allBtn, importBtn),
       eraseBtn
         ? h(
