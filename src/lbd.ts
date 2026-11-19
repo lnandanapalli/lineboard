@@ -3,7 +3,7 @@ import type { Store } from './store/store';
 import { cleanStyle, isPlain } from './textStyle';
 import type { Notebook, NoteMeta, Stroke } from './types';
 import { uuid } from './util';
-import { isZip, unzip, zip, ZipError, type ZipEntry } from './zip';
+import { isZip, unzip, zip, ZipError, type UnzipBudget, type ZipEntry } from './zip';
 
 /**
  * The Lineboard document (.lbd): notes as a file, to keep, share or move between accounts.
@@ -127,6 +127,17 @@ const LIMITS = { maxEntries: 30_000, maxTotal: 1_500_000_000, maxEntry: 60_000_0
 const OUTER_LIMITS = { maxEntries: 1_000, maxTotal: 1_500_000_000, maxEntry: 1_500_000_000 };
 const MAX_NOTES = 20_000;
 const MAX_STROKES = 50_000;
+const MAX_ALL_STROKES = 2_000_000;
+
+/**
+ * One allowance for a whole import, shared by every .lbd in it, so splitting content across many
+ * files (or a zip of them) cannot multiply the limits above.
+ */
+interface Budget extends UnzipBudget {
+  notes: number;
+  strokes: number;
+}
+const newBudget = (): Budget => ({ bytes: LIMITS.maxTotal, notes: MAX_NOTES, strokes: MAX_ALL_STROKES });
 const MAX_POINTS = 60_000; // numbers in one stroke's points (20,000 x, y, pressure triples)
 const MAX_PICTURE = 15 * 1024 * 1024;
 const TOOLS = new Set(['pen', 'highlighter', 'text', 'image']);
@@ -163,8 +174,8 @@ function readStroke(raw: unknown, pictures: Map<string, Blob>): LbdStroke | null
 }
 
 /** Read one .lbd archive. */
-async function readLbd(bytes: Uint8Array): Promise<LbdDocument> {
-  const files = await unzip(bytes, LIMITS);
+async function readLbd(bytes: Uint8Array, budget: Budget): Promise<LbdDocument> {
+  const files = await unzip(bytes, LIMITS, budget);
   const manifestBytes = files.get('lineboard.json');
   if (!manifestBytes) throw new LbdError('This is not a Lineboard file (lineboard.json is missing).');
   let manifest: { format?: unknown; version?: unknown; notebooks?: unknown };
@@ -186,13 +197,12 @@ async function readLbd(bytes: Uint8Array): Promise<LbdDocument> {
   }
 
   const doc: LbdDocument = { notebooks: [], pictures, skipped: 0 };
-  let noteCount = 0;
   for (const rawBook of manifest.notebooks) {
     if (!rawBook || typeof rawBook !== 'object') continue;
     const b = rawBook as { name?: unknown; notes?: unknown };
     const book = { name: str(b.name, 120).trim() || 'Imported notes', notes: [] as LbdNote[] };
     for (const ref of Array.isArray(b.notes) ? b.notes : []) {
-      if (++noteCount > MAX_NOTES) throw new LbdError(`This file has more than ${MAX_NOTES.toLocaleString()} notes.`);
+      if (--budget.notes < 0) throw new LbdError(`This has more than ${MAX_NOTES.toLocaleString()} notes. Import them in smaller batches.`);
       const path = (ref as { file?: unknown })?.file;
       const data = typeof path === 'string' ? files.get(path) : undefined;
       if (!data) throw new LbdError('This Lineboard file is damaged (a note is missing).');
@@ -204,6 +214,7 @@ async function readLbd(bytes: Uint8Array): Promise<LbdDocument> {
       }
       const list = Array.isArray(raw.strokes) ? raw.strokes : [];
       if (list.length > MAX_STROKES) throw new LbdError(`A note in this file has more than ${MAX_STROKES.toLocaleString()} strokes.`);
+      if ((budget.strokes -= list.length) < 0) throw new LbdError(`This has more than ${MAX_ALL_STROKES.toLocaleString()} strokes. Import it in smaller batches.`);
       const strokes: LbdStroke[] = [];
       for (const s of list) {
         const ok = readStroke(s, pictures);
@@ -224,15 +235,16 @@ async function readLbd(bytes: Uint8Array): Promise<LbdDocument> {
 export async function readNotesFile(file: Blob): Promise<LbdDocument> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!isZip(bytes)) throw new LbdError('This is not a Lineboard file (.lbd) or a zip of them.');
+  const budget = newBudget();
   try {
     const top = await unzip(bytes, OUTER_LIMITS);
-    if (top.has('lineboard.json')) return await readLbd(bytes);
+    if (top.has('lineboard.json')) return await readLbd(bytes, budget);
     // A zip of .lbd files: read each, and put them together.
     const inner = [...top].filter(([name]) => name.toLowerCase().endsWith(LBD_EXT));
     if (!inner.length) throw new LbdError('This zip has no Lineboard files (.lbd) in it.');
     const all: LbdDocument = { notebooks: [], pictures: new Map(), skipped: 0 };
     for (const [name, data] of inner) {
-      const doc = await readLbd(data).catch((e: Error) => {
+      const doc = await readLbd(data, budget).catch((e: Error) => {
         throw new LbdError(`${name.split('/').pop()}: ${e.message}`);
       });
       // Picture paths are per file: give each file's pictures their own prefix.

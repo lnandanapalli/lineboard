@@ -249,6 +249,16 @@ test('bad files are refused with a reason, and damaged strokes are left out', as
   expect(mixed.strokes).toHaveLength(1);
 });
 
+test('the limits cover the whole import: splitting notes across many .lbd files does not get around them', async ({ page }) => {
+  await setup(page);
+  const before = (await localState(page)).notes.length;
+  // Each file is under the 20,000-note limit; together they are over it.
+  const part = lbd(Array.from({ length: 7_000 }, (_, i) => ({ title: `N${i}`, strokes: [] })));
+  await importBytes(page, 'many.zip', makeZip([['a.lbd', part], ['b.lbd', part], ['c.lbd', part]]));
+  await expect(page.locator('#toast')).toContainText('more than 20,000 notes', { timeout: 30_000 });
+  expect((await localState(page)).notes.length).toBe(before);
+});
+
 test('with an account: import uploads the pictures, and "Export all notes" asks who you are', async ({ page }) => {
   const db = await mockSupabase(page);
   await page.goto('/login');

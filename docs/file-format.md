@@ -91,6 +91,8 @@ Where imported notes go:
 Files are treated as untrusted:
 
 - **Size limits:** at most 20,000 notes, 50,000 strokes per note, 20,000 points per stroke, 10,000 characters per text box and 15 MB per picture.
+- **One budget per import:** the limits count across everything in one import, so a zip of many `.lbd` files gets the same allowance as a single file: 20,000 notes, 2,000,000 strokes and 1.5 GB unpacked in total.
+- **No deep nesting:** a zip is opened once and only the `.lbd` files directly in it are read; an `.lbd` is opened once and only its manifest, notes and pictures are used. Archives inside an `.lbd`, and zips inside a zip, are ignored. Every entry must unpack to exactly its declared size and CRC, and encrypted, multi-part and zip64 archives are refused.
 - **Strokes that don't follow this description** are left out, and the import reports how many.
 - **Pictures** are decoded and re-encoded before they are stored.
 - **Zip archives** are rejected if they are encrypted, split into parts, use zip64, or unpack to more than they declare.

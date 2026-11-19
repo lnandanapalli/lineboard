@@ -126,7 +126,12 @@ export interface UnzipLimits {
 export const isZip = (b: Uint8Array) => b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
 
 /** Read a zip archive into name -> bytes. Folders and macOS resource forks are skipped. */
-export async function unzip(buf: Uint8Array, limits: UnzipLimits): Promise<Map<string, Uint8Array>> {
+/** Unpacked bytes left for a whole import that reads several archives (one inside another). */
+export interface UnzipBudget {
+  bytes: number;
+}
+
+export async function unzip(buf: Uint8Array, limits: UnzipLimits, budget?: UnzipBudget): Promise<Map<string, Uint8Array>> {
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   // End of central directory: the last 22 bytes, or up to 64 KiB earlier with a comment.
   let eocd = -1;
@@ -167,6 +172,7 @@ export async function unzip(buf: Uint8Array, limits: UnzipLimits): Promise<Map<s
     if (size > limits.maxEntry) throw new ZipError(`"${name}" is too large.`);
     total += size;
     if (total > limits.maxTotal) throw new ZipError('The archive is too large to import.');
+    if (budget && (budget.bytes -= size) < 0) throw new ZipError('The archive is too large to import.');
     if (localAt + 30 > buf.length || v.getUint32(localAt, true) !== 0x04034b50) throw new ZipError('The archive is damaged.');
     const start = localAt + 30 + v.getUint16(localAt + 26, true) + v.getUint16(localAt + 28, true);
     if (start + packed > buf.length) throw new ZipError('The archive is damaged.');
