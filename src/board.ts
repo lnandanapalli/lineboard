@@ -9,6 +9,9 @@ import { createTextBar, type TextFormatPatch } from './textBar';
 const REMOVED_INK = '#dc2626';
 const ADDED_GLOW = 'rgba(34, 197, 94, 0.35)';
 
+/** Points in one stroke, at most (x, y, pressure each): 60,000 numbers, as the database and files accept. */
+export const MAX_STROKE_POINTS = 20_000;
+
 /** Logical page width. All stroke coordinates live in this space. */
 export const PAGE_W = 1000;
 /** A stroke that ends within this many ms with almost no movement, via pointercancel, is discarded. */
@@ -958,6 +961,17 @@ export class Board {
     if (a.kind === 'erase') {
       this.eraserCursor = { x, y };
       this.eraseAt(x, y, a);
+      // The eraser's path is not kept: only the last few points matter.
+      if (pts.length > 30) pts.splice(0, pts.length - 30);
+    }
+    // A stroke has at most MAX_STROKE_POINTS points (what the database and files accept). A longer
+    // one is saved as it reaches the limit and carries on as a new stroke from the same point, so
+    // the line looks unbroken and nothing is refused later.
+    if (a.kind === 'draw' && pts.length >= MAX_STROKE_POINTS * 3) {
+      const last = pts.slice(-3);
+      a.raw = null;
+      this.finish();
+      this.active = { ...a, start: performance.now(), points: last, erased: [], raw: null };
     }
     this.invalidate('live');
   }

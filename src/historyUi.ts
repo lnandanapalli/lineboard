@@ -5,6 +5,7 @@ import type { Store } from './store/store';
 import { StoreError } from './store/store';
 import type { NoteMeta, Stroke } from './types';
 import { dialog, h, lsGet, lsSet, toast, uuid } from './util';
+import { clip, MAX_NOTE_TITLE, MAX_VERSION_NAME } from './limits';
 
 /** Shown when the cloud database does not have version history yet. */
 export const HISTORY_NEEDS_UPDATE = 'Version history needs a database update: the site operator re-runs supabase/schema.sql.';
@@ -474,10 +475,10 @@ export class HistoryPanel {
   private async copy(v?: VersionMeta) {
     const when = v ? whenFmt.format(new Date(v.created_at)) : null;
     const keep = { label: v ? 'Keep the history up to this version' : 'Keep the history', value: false, hint: 'Otherwise the copy starts with no earlier versions.' };
-    const title = await dialog({ title: v ? 'Copy this version' : 'Copy this note', message: v ? `A new note with the content from ${when}.` : 'A new note with the same content.', input: `${this.note.title || 'Untitled'} (copy)`, ok: 'Make a copy', check: keep });
+    const title = await dialog({ title: v ? 'Copy this version' : 'Copy this note', message: v ? `A new note with the content from ${when}.` : 'A new note with the same content.', input: clip(`${this.note.title || 'Untitled'} (copy)`, MAX_NOTE_TITLE), ok: 'Make a copy', check: keep, maxLength: MAX_NOTE_TITLE });
     if (title === null) return;
     const strokes = v ? await this.snap(v) : this.host.board.allStrokes().map(toSnap);
-    const copy = await this.host.createNote(this.note, title.trim().slice(0, 200) || 'Untitled', strokes.map((s) => fromSnap(s, '', uuid())));
+    const copy = await this.host.createNote(this.note, clip(title, MAX_NOTE_TITLE) || 'Untitled', strokes.map((s) => fromSnap(s, '', uuid())));
     if (keep.value) {
       // The versions up to this one (or all), oldest first, with their dates.
       const from = v ? this.versions.findIndex((x) => x.id === v.id) : 0;
@@ -497,9 +498,9 @@ export class HistoryPanel {
   }
 
   private async nameCurrent() {
-    const name = await dialog({ title: 'Name current version', input: '', ok: 'Save' });
+    const name = await dialog({ title: 'Name current version', input: '', ok: 'Save', maxLength: MAX_VERSION_NAME });
     if (!name?.trim()) return;
-    const n = name.trim().slice(0, 120);
+    const n = clip(name, MAX_VERSION_NAME);
     // Unchanged since the newest version: name that one (as with saving a name for "now").
     if (this.versions.length && !(await this.currentIsNew())) {
       await this.host.store.renameVersion(this.versions[0], n);
@@ -510,9 +511,9 @@ export class HistoryPanel {
   }
 
   private async rename(v: VersionMeta) {
-    const name = await dialog({ title: v.name ? 'Rename version' : 'Name this version', message: 'Named versions are kept until you remove the name.', input: v.name ?? '', ok: 'Save' });
+    const name = await dialog({ title: v.name ? 'Rename version' : 'Name this version', message: 'Named versions are kept until you remove the name.', input: v.name ?? '', ok: 'Save', maxLength: MAX_VERSION_NAME });
     if (name === null) return;
-    await this.host.store.renameVersion(v, name.trim().slice(0, 120) || null);
+    await this.host.store.renameVersion(v, clip(name, MAX_VERSION_NAME) || null);
     await this.reload();
   }
 

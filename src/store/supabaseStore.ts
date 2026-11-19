@@ -6,6 +6,7 @@ import type { KeyVault } from '../crypto/vault';
 import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { uuid } from '../util';
 import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
+import { MAX_SNAPSHOT_BYTES } from '../limits';
 import { StoreError, type Store } from './store';
 
 const PAGE = 1000; // PostgREST default max rows per request
@@ -30,7 +31,7 @@ function check(error: PgErr | null) {
 function readable(message: string): string {
   const limit = /Lineboard limit: (.*)$/.exec(message);
   if (limit) return limit[1].charAt(0).toUpperCase() + limit[1].slice(1) + '.';
-  if (/strokes_points_size|strokes_enc_size/.test(message)) return 'That stroke is too long to save; draw it in shorter pieces.';
+  if (/strokes_points_size|strokes_points_count|strokes_enc_size/.test(message)) return 'That stroke is too long to save; draw it in shorter pieces.';
   if (/user_settings_size/.test(message)) return 'Your settings are too large to save.';
   return message;
 }
@@ -524,6 +525,7 @@ export class SupabaseStore implements Store {
 
   async saveVersion(v: VersionMeta, strokes: SnapStroke[]) {
     const bytes = await encodeSnapshot(strokes);
+    if (bytes.length > MAX_SNAPSHOT_BYTES) throw new StoreError('This note is too large to keep in its version history.', true);
     await this.write(async (key) => {
       const { error } = await this.sb.from('note_versions').upsert(await this.encodeVersion(key, v, bytes), { onConflict: 'id' });
       return error;

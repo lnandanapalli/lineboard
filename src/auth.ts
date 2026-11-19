@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { MAX_EMAIL, MAX_PASSWORD } from './limits';
 import { h, withReveal } from './util';
 import { publicFooter } from './public';
 import { logo } from './brand';
@@ -23,8 +24,8 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   const redirectTo = window.location.origin + '/';
 
   const msg = h('p', { class: 'auth-msg', role: 'status' });
-  const email = h('input', { type: 'email', placeholder: 'Email', autocomplete: 'email', required: true }) as HTMLInputElement;
-  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' }) as HTMLInputElement;
+  const email = h('input', { type: 'email', placeholder: 'Email', autocomplete: 'email', required: true, maxlength: String(MAX_EMAIL) }) as HTMLInputElement;
+  const pass = h('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password', maxlength: String(MAX_PASSWORD) }) as HTMLInputElement;
   const submit = h('button', { class: 'btn primary wide', type: 'submit' });
   const tabs = h('div', { class: 'auth-switch' });
   const heading = h('h1', { class: 'auth-heading' });
@@ -186,7 +187,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
 
 /** Shown after following a password-reset link. */
 export function renderNewPassword(root: HTMLElement, sb: SupabaseClient, done: () => void) {
-  const pass = h('input', { type: 'password', placeholder: `New password (at least ${MIN_PASSWORD} characters)`, autocomplete: 'new-password', minlength: String(MIN_PASSWORD), required: true }) as HTMLInputElement;
+  const pass = h('input', { type: 'password', placeholder: `New password (at least ${MIN_PASSWORD} characters)`, autocomplete: 'new-password', minlength: String(MIN_PASSWORD), maxlength: String(MAX_PASSWORD), required: true }) as HTMLInputElement;
   const msg = h('p', { class: 'auth-msg' });
   const form = h('form', { class: 'auth-form' }, h('label', {}, 'New password', withReveal(pass)), h('button', { class: 'btn primary wide', type: 'submit' }, 'Set new password'));
   const others = h('input', { type: 'checkbox', checked: true }) as HTMLInputElement;

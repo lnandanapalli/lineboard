@@ -1,5 +1,6 @@
 import type { Factor } from '@supabase/supabase-js';
 import { MIN_PASSWORD } from './auth';
+import { MAX_PASSWORD } from './limits';
 import { AccountError, describeDevice, passkeysSupported, type AccountSecurity, type DeviceSession } from './account';
 import { Captcha } from './captcha';
 import { logo } from './brand';
@@ -319,7 +320,7 @@ export async function confirmItsYou(account: AccountSecurity, email: string | nu
   const heading = (n: number) => h('h3', {}, steps > 1 ? `Confirm it’s you (step ${n} of 2)` : 'Confirm it’s you');
 
   const withPassword = () => {
-    const pass = passInput('current-password');
+    const pass = passInput('current-password', '', MAX_PASSWORD);
     const err = errorLine();
     const captcha = new Captcha();
     const go = button(
@@ -378,9 +379,9 @@ export async function confirmItsYou(account: AccountSecurity, email: string | nu
 
 export async function changePasswordDialog(account: AccountSecurity, email: string | null) {
   const d = new StepDialog();
-  const current = passInput('current-password');
-  const a = passInput('new-password');
-  const b = passInput('new-password');
+  const current = passInput('current-password', '', MAX_PASSWORD);
+  const a = passInput('new-password', '', MAX_PASSWORD);
+  const b = passInput('new-password', '', MAX_PASSWORD);
   const others = check('Sign out all other devices', true);
   const code = codeInput();
   code.setAttribute('aria-label', 'Confirmation code from your email');
@@ -417,6 +418,7 @@ export async function changePasswordDialog(account: AccountSecurity, email: stri
     () => {
       if (!byEmail && !current.value) return err.set('Enter your current password.');
       if (a.value.length < MIN_PASSWORD) return err.set(`Use at least ${MIN_PASSWORD} characters.`);
+      if (a.value.length > MAX_PASSWORD) return err.set(`Use at most ${MAX_PASSWORD} characters.`);
       if (a.value !== b.value) return err.set('The two new passwords do not match.');
       if (!codeField.hidden && !/^\d{6,10}$/.test(cleanCode(code.value))) return err.set('Enter the code from the email.');
       const totpProblem = factors.length ? codeProblem(totp.value) : null;
