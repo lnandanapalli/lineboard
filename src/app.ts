@@ -20,6 +20,8 @@ const SIZES = {
   pen: { min: 1, max: 24, step: 0.5, presets: [2, 3.5, 6] },
   highlighter: { min: 6, max: 60, step: 1, presets: [14, 22, 32] },
   text: { min: 10, max: 100, step: 1, presets: [20, 28, 44] },
+  // Same range the settings accept; the presets match the palette's thickness choices.
+  shape: { min: 1, max: 20, step: 0.5, presets: [2, 3.5, 6, 10] },
 };
 
 type Action = { type: 'add' | 'remove'; strokes: Stroke[] } | { type: 'replace'; from: Stroke[]; to: Stroke[] };
@@ -538,20 +540,21 @@ export class App {
     this.sizeBtn.style.display = hide ? 'none' : '';
   }
 
-  /** The size of the pen or highlighter (whichever is in use). */
-  private get sizeTool(): 'pen' | 'highlighter' | 'text' {
-    return this.tool === 'highlighter' || this.tool === 'text' ? this.tool : 'pen';
+  /** The size of the tool in use: pen, highlighter, text, or shape outline thickness. */
+  private get sizeTool(): 'pen' | 'highlighter' | 'text' | 'shape' {
+    return this.tool === 'highlighter' || this.tool === 'text' || this.tool === 'shape' ? this.tool : 'pen';
   }
   private get size() {
-    return { pen: this.settings.penWidth, highlighter: this.settings.highlighterWidth, text: this.settings.textSize }[this.sizeTool];
+    return { pen: this.settings.penWidth, highlighter: this.settings.highlighterWidth, text: this.settings.textSize, shape: this.settings.shapeWidth }[this.sizeTool];
   }
   private set size(w: number) {
     if (this.sizeTool === 'highlighter') this.settings.highlighterWidth = w;
     else if (this.sizeTool === 'text') this.settings.textSize = w;
+    else if (this.sizeTool === 'shape') this.settings.shapeWidth = w;
     else this.settings.penWidth = w;
   }
   private get sizeName() {
-    return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text' }[this.sizeTool];
+    return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text', shape: 'Shape outline' }[this.sizeTool];
   }
 
   /** Toolbar button: a dot drawn at the current size (capped so it fits). */
@@ -625,7 +628,8 @@ export class App {
       'div',
       { class: 'size-presets' },
       ...cfg.presets.map((w, i) => {
-        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, ['Thin', 'Medium', 'Thick'][i]);
+        const names = tool === 'shape' ? LINE_WIDTHS.map((x) => x.name) : ['Thin', 'Medium', 'Thick'];
+        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, names[i]);
         b.addEventListener('click', () => set(w));
         return b;
       }),
@@ -732,7 +736,10 @@ export class App {
         'Thickness',
         LINE_WIDTHS.map((w) => ({ value: w.width as number, name: w.name, icon: line(`stroke-width="${Math.min(7, 1 + w.width * 0.6).toFixed(1)}"`) })),
         () => this.settings.shapeWidth,
-        (v) => (this.settings.shapeWidth = v),
+        (v) => {
+          this.settings.shapeWidth = v;
+          this.renderSizeButton(); // the toolbar's size button shows the same thickness
+        },
       ),
     );
   }

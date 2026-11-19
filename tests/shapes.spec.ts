@@ -110,13 +110,33 @@ test('a crossed box is one undo step, and a tap draws nothing', async ({ page })
   await expectStrokes(page, 0);
 });
 
-test('S picks the shape tool, which uses the pen colour and size', async ({ page }) => {
+test('S picks the shape tool; the toolbar size sets the outline thickness, in step with the palette', async ({ page }) => {
   const { cdp, geo } = await setup(page);
   await page.keyboard.press('s');
   await expect(page.locator('.shape-tool')).toHaveClass(/active/);
-  await expect(page.locator('.size-btn')).toHaveAttribute('aria-label', /^Pen size/);
+  const sizeBtn = page.locator('.size-btn');
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Shape outline size: 3.5');
+  // The toolbar's size picker changes the shape thickness (not the pen's)...
+  await sizeBtn.click();
+  await page.locator('.size-presets').getByRole('button', { name: 'Extra bold' }).click();
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Shape outline size: 10');
+  await page.keyboard.press('Escape');
   await drag(cdp, geo.areaX + 100, stripY(geo, 0) - 20, geo.areaX + 300, stripY(geo, 0) + 20);
   await expectStrokes(page, 1);
+  const last = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
+    return (JSON.parse(localStorage[k]) as { width: number }[]).at(-1)!.width;
+  });
+  expect(last).toBe(10);
+  // ...the palette shows the same choice, and picking one there updates the toolbar.
+  await page.locator('.shape-btn').click();
+  await expect(page.getByRole('radiogroup', { name: 'Thickness' }).getByRole('radio', { name: 'Extra bold' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('radiogroup', { name: 'Thickness' }).getByRole('radio', { name: 'Thin' }).click();
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Shape outline size: 2');
+  // The pen keeps its own size.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('p');
+  await expect(sizeBtn).toHaveAttribute('aria-label', 'Pen size: 3.5');
 });
 
 test('on a short screen the palette scrolls so every shape and the switch can be reached', async ({ page }) => {
