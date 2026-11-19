@@ -705,6 +705,13 @@ export class SupabaseStore implements Store {
     // Anything written meanwhile by another device (notes made after the list above was read).
     await this.convertStrokes(target, encrypting, null);
     await this.convertVersions(target, encrypting, null);
+    await this.convertProfilePicture(encrypting);
+  }
+
+  /** The profile picture is a picture no stroke points at: bring it in line with the account too. */
+  private async convertProfilePicture(encrypt: boolean) {
+    const p = await this.loadProfile();
+    if (p.picture) await this.convertImage({ text: SupabaseStore.PICTURE_ID, color: p.pictureType ?? 'image/jpeg' } as Stroke, encrypt);
   }
 
   /**
@@ -737,6 +744,7 @@ export class SupabaseStore implements Store {
     }
     await this.convertStrokes(target, encrypting, null);
     await this.convertVersions(target, encrypting, null);
+    await this.convertProfilePicture(encrypting);
   }
 
   /** Convert one note's strokes (or every remaining one, with noteId null). Returns how many changed. */
