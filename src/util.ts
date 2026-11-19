@@ -23,6 +23,9 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+/** Sent on a form whose submit button runs its action itself (no native submit event). */
+export const FORM_SENT = 'lb-form-sent';
+
 /**
  * A password field with a show / hide button (the eye), so a typing mistake can be checked.
  * Pressing it keeps the caret in the field; the field goes back to hidden when the form is sent.
@@ -42,12 +45,15 @@ export function withReveal(input: HTMLInputElement): HTMLElement {
     paint();
   });
   // Never leave a password showing once it has been used (the field joins its form right after).
-  queueMicrotask(() =>
-    input.form?.addEventListener('submit', () => {
-      input.type = 'password';
-      paint();
-    }),
-  );
+  // Forms that run their action in a click handler send FORM_SENT instead of a submit event.
+  const hide = () => {
+    input.type = 'password';
+    paint();
+  };
+  queueMicrotask(() => {
+    input.form?.addEventListener('submit', hide);
+    input.form?.addEventListener(FORM_SENT, hide);
+  });
   paint();
   return h('span', { class: 'reveal' }, input, btn);
 }
