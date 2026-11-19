@@ -1590,7 +1590,7 @@ export class Board {
     if (box && a?.scale) {
       // Resizing: draw the selection at its new size (pictures underneath ink, as on the page).
       const { ax, ay, f } = a.scale;
-      const preview = [...this.selection].map((c) => ({ ...c, s: scaled(c.s, ax, ay, f), path: null }));
+      const preview = [...this.selection].map((c) => ({ ...c, s: scaled(c.s, ax, ay, f), path: null, pieces: undefined }));
       for (const pass of [true, false])
         for (const c of preview) {
           if ((c.s.tool === 'image') !== pass) continue;

@@ -1,5 +1,5 @@
 import { expect, test, type CDPSession, type Page } from '@playwright/test';
-import { attachBoard, drag, expectStrokes, setup, stripY } from './helpers';
+import { PEN, attachBoard, drag, expectStrokes, send, setup, stripY, tp } from './helpers';
 import { mockSupabase } from './mockSupabase';
 
 /** Shapes come from a palette and are saved as pen strokes that trace the outline. No keyboard needed. */
@@ -221,4 +221,43 @@ test('an account keeps the line style: saved with the stroke and read back on an
       return best;
     });
   await expect.poll(switches).toBeGreaterThan(20);
+});
+
+test('resizing a dashed shape previews it at the new size while dragging', async ({ page }) => {
+  const { cdp, draw } = await freeBoard(page);
+  await page.locator('.shape-btn').click();
+  await page.getByRole('radio', { name: 'Dashed' }).click();
+  await page.locator('.shape-grid').getByRole('radio', { name: 'Rectangle', exact: true }).click();
+  await draw(200, 200, 400, 350);
+  await expectStrokes(page, 1);
+  // Select it with a box, then hold the resize handle and drag it out without letting go.
+  await page.locator('.select-btn').click();
+  await page.getByRole('menuitemradio', { name: /^Rectangle select/ }).click();
+  await draw(150, 150, 450, 400);
+  await expect(page.locator('.select-bar')).toBeVisible();
+  const area = (await page.locator('.canvas-area').boundingBox())!;
+  const k = area.width / 1000;
+  const at = (x: number, y: number) => [area.x + x * k, area.y + y * k] as const;
+  const [hx, hy] = at(407, 357);
+  await send(cdp, 'touchStart', [tp(hx, hy, PEN, 1)]);
+  for (let i = 1; i <= 8; i++) {
+    const [x, y] = at(407 + i * 40, 357 + i * 30);
+    await send(cdp, 'touchMove', [tp(x, y, PEN, 1)]);
+  }
+  // The preview (live layer) has the shape's ink well beyond its old right edge.
+  const inkRight = () =>
+    page.evaluate((edge) => {
+      const c = document.querySelectorAll<HTMLCanvasElement>('.canvas-area canvas')[2];
+      const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+      const x0 = Math.round(c.width * edge);
+      let n = 0;
+      for (let y = 0; y < c.height; y++)
+        for (let x = x0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          if (d[i + 3] > 128 && d[i + 2] < 100) n++; // dark ink, not the blue selection box
+        }
+      return n;
+    }, 0.55);
+  await expect.poll(inkRight).toBeGreaterThan(200);
+  await send(cdp, 'touchEnd', []);
 });
