@@ -24,6 +24,8 @@ export interface MockDb {
   passwordChanges: number;
   /** The account password (tests sign in with it). */
   password: string;
+  /** Supabase Storage: path within the bucket -> bytes and content type. */
+  images?: Map<string, { body: Buffer; type: string }>;
 }
 
 export interface Session {
@@ -250,6 +252,23 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
       return json(route, 200, p ?? null);
     }
     if (path.startsWith('/auth/v1/')) return route.fulfill({ status: 204, headers: cors });
+
+    // ---- storage (pictures) ----
+    const so = /^\/storage\/v1\/object\/images\/(.+)$/.exec(path);
+    if (so) {
+      db.images ??= new Map();
+      const key = decodeURIComponent(so[1]);
+      if (!accessOk() || !key.startsWith(USER_ID + '/')) return json(route, 403, { statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' });
+      if (method === 'POST' || method === 'PUT') {
+        db.images.set(key, { body: req.postDataBuffer() ?? Buffer.alloc(0), type: req.headers()['content-type'] ?? 'application/octet-stream' });
+        return json(route, 200, { Key: 'images/' + key, Id: crypto.randomUUID() });
+      }
+      if (method === 'GET') {
+        const f = db.images.get(key);
+        if (!f) return json(route, 400, { statusCode: '404', error: 'not_found', message: 'Object not found' });
+        return route.fulfill({ status: 200, headers: { ...cors, 'content-type': f.type }, body: f.body });
+      }
+    }
 
     // ---- signed-in devices (rpc) ----
     if (path === '/rest/v1/rpc/list_my_sessions' || path === '/rest/v1/rpc/revoke_my_session') {

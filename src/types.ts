@@ -16,13 +16,17 @@ export const BOARD_MODES: BoardMode[] = ['strips', 'multi', 'split', 'free'];
 export interface Stroke {
   id: string;
   note_id: string;
-  /** 'text': a text box. Its points are [x, y, 0] (top-left), width is the font size. */
-  tool: 'pen' | 'highlighter' | 'text';
+  /**
+   * 'text': a text box. Its points are [x, y, 0] (top-left), width is the font size.
+   * 'image': a picture. Its points are [left, top, 0, right, bottom, 0], `text` is the image's id in
+   * the image store and `color` its file type (e.g. "image/png").
+   */
+  tool: 'pen' | 'highlighter' | 'text' | 'image';
   color: string;
   width: number;
   /** Flat list: x0, y0, p0, x1, y1, p1, ... (p = pressure 0..1) */
   points: number[];
-  /** Text boxes only. */
+  /** Text boxes: the text. Images: the image id. */
   text?: string;
   created_at?: string;
 }
@@ -63,6 +67,10 @@ export interface Settings {
   smoothing: number;
   /** The shape the shape tool draws. */
   shape: ShapeKind;
+  /** Shapes keep equal sides (square, circle...) and lines snap to 45°. */
+  shapeLock: boolean;
+  /** How the Select tool picks: a free-hand loop or a dragged rectangle. */
+  selectMode: 'lasso' | 'rect';
   /** Font size for new text boxes (page units). */
   textSize: number;
   /** Split mode: where the divider sits, as a fraction of the board's height. */
@@ -87,6 +95,8 @@ export const DEFAULT_SETTINGS: Settings = {
   highlighterWidth: 22,
   smoothing: 0.25,
   shape: 'rectangle',
+  shapeLock: false,
+  selectMode: 'lasso',
   textSize: 28,
   splitRatio: 0.5,
   paper: 'plain',
@@ -101,7 +111,8 @@ export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } 
   const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
-  if (!SHAPES.includes(out.shape)) out.shape = 'rectangle';
+  if (!(SHAPES as readonly string[]).includes(out.shape)) out.shape = 'rectangle';
+  if (out.selectMode !== 'rect') out.selectMode = 'lasso';
   if (!PAPERS.includes(out.paper)) out.paper = 'plain';
   return out;
 }

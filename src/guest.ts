@@ -63,7 +63,10 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
   for (const n of notes) {
     // Notes without a (known) notebook stay unassigned; the app files them into the default notebook.
     await cloud.importNotes([{ ...n, notebook_id: (n.notebook_id && bookMap.get(n.notebook_id)) || null }]);
-    await cloud.upsertStrokes(await local.loadStrokes(n.id));
+    const strokes = await local.loadStrokes(n.id);
+    // Pictures go to the account's image storage first, so the strokes never point at nothing.
+    for (const st of strokes) if (st.tool === 'image' && st.text) await cloud.putImage(st.text, await local.getImage(st.text));
+    await cloud.upsertStrokes(strokes);
   }
 
   // Carry the guest's settings (stylus calibration, strip height...) over if the account has none yet.

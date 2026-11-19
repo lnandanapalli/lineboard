@@ -6,6 +6,13 @@ import { appRect, appViewport } from './orientation';
  * Menus and popovers go inside the app element, so they turn with it when the app is rotated
  * (a fixed-position child of a transformed element is placed in that element's coordinates).
  */
+/** Keep a popup inside the screen below its button; it scrolls when the screen is short (a phone sideways). */
+function fitBelow(el: HTMLElement, top: number) {
+  el.style.maxHeight = `${Math.max(120, appViewport().height - top - 8)}px`;
+  el.style.overflowY = 'auto';
+  el.style.overscrollBehavior = 'contain';
+}
+
 const popupHost = () => document.querySelector<HTMLElement>('.app') ?? document.body;
 
 /**
@@ -112,6 +119,7 @@ export function dropdown<T extends string>(opts: {
     const w = menu.offsetWidth;
     menu.style.top = `${r.bottom + 6}px`;
     menu.style.left = `${Math.max(8, Math.min(r.left, appViewport().width - w - 8))}px`;
+    fitBelow(menu, r.bottom + 6);
     btn.setAttribute('aria-expanded', 'true');
     document.addEventListener('pointerdown', onOutside, true);
     document.addEventListener('keydown', onKey, true);
@@ -149,6 +157,7 @@ export function popover(anchor: HTMLElement, content: HTMLElement, opts: { label
   const r = appRect(anchor);
   panel.style.top = `${r.bottom + 6}px`;
   panel.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - panel.offsetWidth / 2, appViewport().width - panel.offsetWidth - 8))}px`;
+  fitBelow(panel, r.bottom + 6);
   anchor.setAttribute('aria-expanded', 'true');
   const onOutside = (e: PointerEvent) => {
     if (!panel.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
