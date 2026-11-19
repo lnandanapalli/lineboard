@@ -36,6 +36,10 @@ export interface SettingsHost {
   signInButton?: () => HTMLElement;
   /** Download every notebook, note, picture and setting as a zip. */
   exportData: () => Promise<void>;
+  /** Every notebook and note as one Lineboard file (.lbd). */
+  exportAll: () => Promise<void>;
+  /** Import notes from a Lineboard file (.lbd) or a zip of them. */
+  importNotes: () => void;
   /** Signed in: delete the account and everything in it. */
   deleteAccount?: () => Promise<void>;
   /** No account: delete everything kept in this browser. */
@@ -205,13 +209,19 @@ export class SettingsPanel {
         exportBtn.disabled = false;
       }
     });
+    const allBtn = h('button', { class: 'btn', type: 'button' }, 'Export all notes (.lbd)') as HTMLButtonElement;
+    allBtn.addEventListener('click', () => void this.host.exportAll());
+    const importBtn = h('button', { class: 'btn', type: 'button' }, 'Import notes') as HTMLButtonElement;
+    importBtn.addEventListener('click', () => this.host.importNotes());
     const erase = this.host.deleteAccount ?? this.host.deleteLocalData;
     const eraseBtn = erase ? (h('button', { class: 'btn danger', type: 'button' }, this.host.deleteAccount ? 'Delete account' : 'Delete everything on this device') as HTMLButtonElement) : null;
     eraseBtn?.addEventListener('click', () => void erase!());
     const dataCard = this.card(
       'Your data',
-      h('p', { class: 'muted' }, 'Download a copy of all your notebooks, notes, pictures and settings (a zip with a JSON file and the picture files).'),
+      h('p', { class: 'muted' }, 'Download a copy of everything: your account details and settings, and all your notebooks, notes and pictures as a Lineboard file (.lbd) you can import again.'),
       h('div', { class: 'row-actions' }, exportBtn),
+      h('p', { class: 'muted' }, 'Move notes between accounts or devices: export them as a Lineboard file (.lbd), then import it. Single notes and notebooks can be exported from the Notes list.'),
+      h('div', { class: 'row-actions' }, allBtn, importBtn),
       eraseBtn
         ? h(
             'p',

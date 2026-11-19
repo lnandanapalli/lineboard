@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { inflateRawSync } from 'node:zlib';
 import { expect, test, type Page } from '@playwright/test';
 import { PEN, drag, expectStrokes, send, setup, stripY, tp } from './helpers';
 import { USER_ID, mockSupabase } from './mockSupabase';
@@ -7,20 +8,32 @@ import { USER_ID, mockSupabase } from './mockSupabase';
 
 const PNG = readFileSync(new URL('./fixture.png', import.meta.url));
 
-/** Read a zip made of stored (uncompressed) entries: name -> bytes. */
+/** Read a zip (stored or deflated entries, as Lineboard writes them): name -> bytes. */
 function unzip(buf: Buffer): Map<string, Buffer> {
   const out = new Map<string, Buffer>();
   let i = 0;
   while (buf.readUInt32LE(i) === 0x04034b50) {
-    const size = buf.readUInt32LE(i + 18);
+    const method = buf.readUInt16LE(i + 8);
+    const packed = buf.readUInt32LE(i + 18);
     const nameLen = buf.readUInt16LE(i + 26);
     const extra = buf.readUInt16LE(i + 28);
     const name = buf.subarray(i + 30, i + 30 + nameLen).toString('utf8');
     const start = i + 30 + nameLen + extra;
-    out.set(name, buf.subarray(start, start + size));
-    i = start + size;
+    const raw = buf.subarray(start, start + packed);
+    out.set(name, method === 8 ? inflateRawSync(raw) : raw);
+    i = start + packed;
   }
   return out;
+}
+
+type LbdNote = { title: string; strokes: { tool: string; text?: string; picture?: string; color?: string }[] };
+/** A "Download my data" zip: account.json, and notes.lbd unpacked into its notes. */
+function readExport(files: Map<string, Buffer>) {
+  const account = JSON.parse(files.get('account.json')!.toString('utf8'));
+  const lbd = unzip(files.get('notes.lbd')!);
+  const manifest = JSON.parse(lbd.get('lineboard.json')!.toString('utf8'));
+  const notes: LbdNote[] = manifest.notebooks.flatMap((b: { notes: { file: string }[] }) => b.notes.map((r) => JSON.parse(lbd.get(r.file)!.toString('utf8'))));
+  return { account, manifest, notes, lbd };
 }
 
 async function openAccountSettings(page: Page) {
@@ -66,16 +79,16 @@ test('without an account, "Download my data" gives a zip with every note, stroke
 
   await openAccountSettings(page);
   const files = await download(page);
-  expect([...files.keys()].sort()).toEqual(expect.arrayContaining(['README.txt', 'lineboard-data.json']));
-  const data = JSON.parse(files.get('lineboard-data.json')!.toString('utf8'));
-  expect(data).toMatchObject({ format: 'lineboard-export', version: 1, account: { local: true } });
-  const note = data.notebooks.flatMap((b: { notes: unknown[] }) => b.notes).find((n: { title: string }) => n.title === 'Lecture 1');
-  expect(note.strokes.map((s: { tool: string }) => s.tool).sort()).toEqual(['image', 'pen', 'text']);
-  expect(note.strokes.find((s: { tool: string }) => s.tool === 'text').text).toBe('Remember this');
-  const pic = note.strokes.find((s: { tool: string }) => s.tool === 'image');
-  const file = files.get(`pictures/${pic.text}.png`)!;
-  expect(file.subarray(1, 4).toString()).toBe('PNG');
-  expect(data.settings.penColor).toBeTruthy();
+  expect([...files.keys()].sort()).toEqual(['README.txt', 'account.json', 'notes.lbd']);
+  const { account, manifest, notes, lbd } = readExport(files);
+  expect(account).toMatchObject({ format: 'lineboard-account', version: 1, account: { local: true } });
+  expect(account.settings.penColor).toBeTruthy();
+  expect(manifest).toMatchObject({ format: 'lineboard', version: 1 });
+  const note = notes.find((n) => n.title === 'Lecture 1')!;
+  expect(note.strokes.map((s) => s.tool).sort()).toEqual(['image', 'pen', 'text']);
+  expect(note.strokes.find((s) => s.tool === 'text')!.text).toBe('Remember this');
+  const pic = note.strokes.find((s) => s.tool === 'image')!;
+  expect(lbd.get(pic.picture!)!.subarray(1, 4).toString()).toBe('PNG');
 });
 
 test('without an account, "Delete everything on this device" removes the notes and pictures after confirming', async ({ page }) => {
@@ -123,9 +136,9 @@ test('with an account: download my data, then delete the account and everything 
   await ask.locator('input[type=password]').fill('secret123');
   await ask.getByRole('button', { name: 'Confirm' }).click();
   const files = unzip(readFileSync((await (await wait).path())!));
-  const data = JSON.parse(files.get('lineboard-data.json')!.toString('utf8'));
-  expect(data.account).toEqual({ id: USER_ID, email: 'friend@example.com' });
-  expect([...files.keys()].some((k) => k.startsWith('pictures/'))).toBe(true);
+  const { account, lbd } = readExport(files);
+  expect(account.account).toEqual({ id: USER_ID, email: 'friend@example.com' });
+  expect([...lbd.keys()].some((k) => k.startsWith('pictures/'))).toBe(true);
 
   // A wrong confirmation word deletes nothing.
   await page.getByRole('button', { name: 'Delete account' }).click();
@@ -225,9 +238,8 @@ test('the export includes changes still waiting to be saved', async ({ page }) =
   await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));
   await expect(page.locator('.status')).toHaveText(/Saving|Offline/);
   await openAccountSettings(page);
-  const data = JSON.parse((await download(page, 'secret123')).get('lineboard-data.json')!.toString('utf8'));
-  const strokes = data.notebooks.flatMap((b: { notes: { strokes: unknown[] }[] }) => b.notes.flatMap((n) => n.strokes));
-  expect(strokes).toHaveLength(1);
+  const { notes } = readExport(await download(page, 'secret123'));
+  expect(notes.flatMap((n) => n.strokes)).toHaveLength(1);
 });
 
 test('an account with more than 1000 notes gets all of them (listed and exported)', async ({ page }) => {
@@ -241,8 +253,7 @@ test('an account with more than 1000 notes gets all of them (listed and exported
   }
   await signIn(page);
   await openAccountSettings(page);
-  const data = JSON.parse((await download(page, 'secret123')).get('lineboard-data.json')!.toString('utf8'));
-  const titles = data.notebooks.flatMap((b: { notes: { title: string }[] }) => b.notes.map((n) => n.title));
+  const titles = readExport(await download(page, 'secret123')).notes.map((n) => n.title);
   expect(titles).toHaveLength(1005);
   expect(titles).toContain('Note 0'); // the oldest, beyond the first page
 });
