@@ -47,6 +47,13 @@ jobs:
           curl -fsS http://localhost:8080/ | grep -q '<title>Lineboard</title>'
           curl -fsS http://localhost:8080/config.js | grep -q 'https://example.supabase.co'
           curl -fsSI http://localhost:8080/ | grep -qi 'content-security-policy'
+          curl -fsSI http://localhost:8080/ | grep -qi 'strict-transport-security'
+          # Only GET / HEAD, and a request flood from one client is slowed down.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d x=1 http://localhost:8080/app)" = 405
+          limited=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/app; done | grep -c 429 || true)
+          echo "429s in a burst of 250: $limited"; test "$limited" -gt 0
+          sleep 6
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/app)" = 200
           # No CANONICAL_HOST: www is served, not redirected.
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8080/app)" = 200
           docker rm -f lb

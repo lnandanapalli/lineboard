@@ -5,6 +5,11 @@ It reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` at start-up and writes them to `
 without them the app runs in local mode. Any host that runs Docker images works.
 Set `CANONICAL_HOST` (e.g. `example.com`) to send the other spelling of the address (`www.example.com`,
 or the reverse) to it with a permanent redirect; leave it unset to serve every hostname.
+Set `TURNSTILE_SITE_KEY` to turn on the bot check at sign-in and sign-up, together with the matching
+secret key in Supabase (see the README's *Security and abuse protection*).
+
+nginx limits each client to 20 requests per second (bursts up to 100) and answers floods with 429.
+Behind Azure App Service the client address comes from `X-Forwarded-For`.
 
 ## Included GitHub Actions
 
@@ -23,8 +28,9 @@ The deploy job signs in with OpenID Connect (no stored secrets) and points the w
 Azure side:
 
 1. Create a Linux web app that runs the published image, and set its `SUPABASE_URL` and
-   `SUPABASE_ANON_KEY` app settings. If both `example.com` and `www.example.com` are bound to it, also set
-   `CANONICAL_HOST` to the one you want to keep.
+   `SUPABASE_ANON_KEY` app settings (and `TURNSTILE_SITE_KEY` for the bot check). If both `example.com` and
+   `www.example.com` are bound to it, also set `CANONICAL_HOST` to the one you want to keep. Turn on
+   **HTTPS Only** (the site sends HSTS).
 2. Create a Microsoft Entra app registration with a federated credential for GitHub Actions, entity type
    **Environment**, environment `production`, for your repository.
 3. Grant that app registration the **Website Contributor** role on the web app only.

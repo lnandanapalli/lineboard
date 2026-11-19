@@ -98,17 +98,23 @@ export class AccountSecurity {
    * Check the account password without touching this device's session: sign in on the side, then
    * end that extra session straight away.
    */
-  async verifyPassword(email: string, password: string) {
+  async verifyPassword(email: string, password: string, captchaToken?: string) {
     const base = config.supabaseUrl.replace(/\/+$/, '') + '/auth/v1';
     const headers = { apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}`, 'Content-Type': 'application/json' };
     let res: Response;
     try {
-      res = await fetch(`${base}/token?grant_type=password`, { method: 'POST', headers, body: JSON.stringify({ email, password }) });
+      // With the bot check on, the server wants a token here too (see captcha.ts).
+      const body = { email, password, ...(captchaToken ? { gotrue_meta_security: { captcha_token: captchaToken } } : {}) };
+      res = await fetch(`${base}/token?grant_type=password`, { method: 'POST', headers, body: JSON.stringify(body) });
     } catch {
       throw new AccountError('Could not reach the server. Check your connection and try again.');
     }
     if (res.status === 429) throw new AccountError('Too many attempts. Wait a minute and try again.', 'over_request_rate_limit');
-    if (!res.ok) throw new AccountError('That password is not right.', 'invalid_credentials');
+    if (!res.ok) {
+      const code = ((await res.json().catch(() => ({}))) as { error_code?: string }).error_code;
+      if (code === 'captcha_failed') throw new AccountError('The bot check failed. Try again.', code);
+      throw new AccountError('That password is not right.', 'invalid_credentials');
+    }
     const { access_token } = (await res.json()) as { access_token?: string };
     if (access_token) {
       await fetch(`${base}/logout?scope=local`, { method: 'POST', headers: { ...headers, Authorization: `Bearer ${access_token}` } }).catch(() => {});
@@ -131,10 +137,10 @@ export class AccountSecurity {
    */
   async changePassword(
     password: string,
-    proof: { currentPassword: string; email: string } | { nonce: string },
+    proof: { currentPassword: string; email: string; captchaToken?: string } | { nonce: string },
     opts: { signOutOthers?: boolean } = {},
   ) {
-    if ('currentPassword' in proof) await this.verifyPassword(proof.email, proof.currentPassword);
+    if ('currentPassword' in proof) await this.verifyPassword(proof.email, proof.currentPassword, proof.captchaToken);
     const { error } = await this.sb.auth.updateUser(
       'currentPassword' in proof ? { password, current_password: proof.currentPassword } : { password, nonce: proof.nonce },
     );

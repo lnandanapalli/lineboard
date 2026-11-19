@@ -17,6 +17,8 @@ export class SyncQueue {
   private wake: (() => void) | null = null;
   state: SyncState = 'saved';
   onState: (s: SyncState) => void = () => {};
+  /** A change the server will never accept (e.g. a fair-use limit) was dropped: tell the user why. */
+  onDropped: (message: string) => void = () => {};
 
   constructor(
     private store: Store,
@@ -110,6 +112,7 @@ export class SyncQueue {
           console.error('Dropping unsavable change:', err.message);
           this.ops.shift();
           this.persist();
+          this.onDropped(err.message);
           continue;
         }
         console.warn('Save failed, will retry:', err);

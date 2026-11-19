@@ -243,6 +243,21 @@ insert into storage.buckets (id, name, public, file_size_limit)
 values ('images', 'images', false, 15728640)
 on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit;
 
+-- Pictures: only image files (or encrypted ones), at most 15 MB each, and per account at most
+-- 5000 files and 2 GB in all.
+update storage.buckets
+   set allowed_mime_types = array['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'application/octet-stream']
+ where id = 'images';
+
+create or replace function public.image_quota_ok() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select count(*) < 5000 and coalesce(sum((o.metadata ->> 'size')::bigint), 0) < 2147483648
+    from storage.objects o
+   where o.bucket_id = 'images' and (storage.foldername(o.name))[1] = (select auth.uid())::text
+$$;
+revoke execute on function public.image_quota_ok() from anon, public;
+grant execute on function public.image_quota_ok() to authenticated;
+
 drop policy if exists "own images: read" on storage.objects;
 drop policy if exists "own images: add" on storage.objects;
 drop policy if exists "own images: change" on storage.objects;
@@ -250,12 +265,65 @@ drop policy if exists "own images: remove" on storage.objects;
 create policy "own images: read" on storage.objects for select to authenticated
   using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
 create policy "own images: add" on storage.objects for insert to authenticated
-  with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
+  with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok())
+              and (select public.image_quota_ok()));
 create policy "own images: change" on storage.objects for update to authenticated
   using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()))
   with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
 create policy "own images: remove" on storage.objects for delete to authenticated
   using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
+
+-- ------------- Fair-use limits (abuse protection) -------------
+-- Generous ceilings that normal use never comes near; they stop a single account from flooding the
+-- database or file storage. A refused write raises "Lineboard limit: ..." (SQLSTATE 23514), which
+-- the app shows to the user instead of retrying.
+
+-- Size of one row's content. NOT VALID: existing rows are left alone, new and changed rows are checked.
+alter table public.strokes drop constraint if exists strokes_points_size;
+alter table public.strokes add constraint strokes_points_size check (points is null or octet_length(points::text) <= 400000) not valid;
+alter table public.strokes drop constraint if exists strokes_enc_size;
+alter table public.strokes add constraint strokes_enc_size check (enc is null or char_length(enc) <= 600000) not valid;
+alter table public.user_settings drop constraint if exists user_settings_size;
+alter table public.user_settings add constraint user_settings_size check (octet_length(settings::text) <= 20000) not valid;
+alter table public.user_keys drop constraint if exists user_keys_kdf_size;
+alter table public.user_keys add constraint user_keys_kdf_size check (octet_length(kdf::text) <= 1000) not valid;
+
+-- How many rows an account (or a note) may have. Checked once per statement, for the users and
+-- notes it touched, so a batch of strokes costs one count, not one per row.
+create or replace function public.enforce_row_limits() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare bad text;
+begin
+  if tg_table_name = 'notebooks' then
+    select format('%s notebooks', 500) into bad from (select distinct user_id from added) a
+     where (select count(*) from public.notebooks b where b.user_id = a.user_id) > 500 limit 1;
+  elsif tg_table_name = 'notes' then
+    select format('%s notes', 20000) into bad from (select distinct user_id from added) a
+     where (select count(*) from public.notes n where n.user_id = a.user_id) > 20000 limit 1;
+  elsif tg_table_name = 'strokes' then
+    select format('%s strokes in one note; start a new note', 50000) into bad from (select distinct note_id from added) a
+     where (select count(*) from public.strokes s where s.note_id = a.note_id) > 50000 limit 1;
+    if bad is null then
+      select format('%s strokes in all', 2000000) into bad from (select distinct user_id from added) a
+       where (select count(*) from public.strokes s where s.user_id = a.user_id) > 2000000 limit 1;
+    end if;
+  end if;
+  if bad is not null then
+    raise exception 'Lineboard limit: an account can have at most %', bad using errcode = '23514';
+  end if;
+  return null;
+end $$;
+revoke execute on function public.enforce_row_limits() from anon, authenticated, public;
+
+drop trigger if exists notebooks_row_limits on public.notebooks;
+create trigger notebooks_row_limits after insert on public.notebooks
+  referencing new table as added for each statement execute function public.enforce_row_limits();
+drop trigger if exists notes_row_limits on public.notes;
+create trigger notes_row_limits after insert on public.notes
+  referencing new table as added for each statement execute function public.enforce_row_limits();
+drop trigger if exists strokes_row_limits on public.strokes;
+create trigger strokes_row_limits after insert on public.strokes
+  referencing new table as added for each statement execute function public.enforce_row_limits();
 
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
 grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys to authenticated;

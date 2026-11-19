@@ -3,6 +3,7 @@ import { h } from './util';
 import { publicFooter } from './public';
 import { logo } from './brand';
 import { passkeysSupported } from './account';
+import { Captcha } from './captcha';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
 
@@ -28,7 +29,9 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   const description = h('p', { class: 'tagline' });
   const agreement = h('p', { class: 'auth-agreement' }, 'By creating an account, you confirm you are at least 13 and agree to the ', h('a', { href: '/terms', target: '_blank', rel: 'noopener' }, 'Terms of service'), ' and acknowledge the ', h('a', { href: '/privacy', target: '_blank', rel: 'noopener' }, 'Privacy policy'), '.');
   const extra = h('div', { class: 'auth-extra' });
-  const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', pass), agreement, submit);
+  // Bot check (only when configured): sign-in, sign-up, email links, resets and passkeys need a token.
+  const captcha = new Captcha();
+  const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', pass), agreement, captcha.el, submit);
 
   const setMsg = (t: string, kind: 'ok' | 'err' = 'ok') => {
     msg.textContent = t;
@@ -78,7 +81,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     passkeyBtn.disabled = true;
     setMsg('Follow your browser’s prompt...');
     try {
-      const { error } = await sb.auth.signInWithPasskey();
+      const { error } = await sb.auth.signInWithPasskey({ options: { captchaToken: await captcha.take() } });
       if (error) throw error;
       setMsg('');
     } catch (err) {
@@ -95,25 +98,27 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     setMsg('Please wait...');
     try {
       const em = email.value.trim();
+      const captchaToken = await captcha.take();
       if (mode === 'signin') {
-        const { error } = await sb.auth.signInWithPassword({ email: em, password: pass.value });
+        const { error } = await sb.auth.signInWithPassword({ email: em, password: pass.value, options: { captchaToken } });
         if (error) throw error;
         setMsg('');
       } else if (mode === 'signup') {
-        const { data, error } = await sb.auth.signUp({ email: em, password: pass.value, options: { emailRedirectTo: redirectTo } });
+        const { data, error } = await sb.auth.signUp({ email: em, password: pass.value, options: { emailRedirectTo: redirectTo, captchaToken } });
         if (error) throw error;
         if (!data.session) setMsg('Check your email to confirm your account, then come back here.');
       } else if (mode === 'magic') {
-        const { error } = await sb.auth.signInWithOtp({ email: em, options: { emailRedirectTo: redirectTo, shouldCreateUser: false } });
+        const { error } = await sb.auth.signInWithOtp({ email: em, options: { emailRedirectTo: redirectTo, shouldCreateUser: false, captchaToken } });
         if (error) throw error;
         setMsg('Sign-in link sent. Open it on this device.');
       } else {
-        const { error } = await sb.auth.resetPasswordForEmail(em, { redirectTo });
+        const { error } = await sb.auth.resetPasswordForEmail(em, { redirectTo, captchaToken });
         if (error) throw error;
         setMsg('Password reset link sent.');
       }
     } catch (err) {
-      setMsg((err as Error).message || 'Something went wrong', 'err');
+      const e = err as Error & { code?: string };
+      setMsg(e.code === 'captcha_failed' ? 'The bot check failed. Try again.' : e.message || 'Something went wrong', 'err');
     } finally {
       submit.disabled = false;
     }

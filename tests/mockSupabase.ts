@@ -28,6 +28,9 @@ export interface MockDb {
   images?: Map<string, { body: Buffer; type: string }>;
   /** Set once delete_my_account ran: the user no longer exists. */
   deleted?: boolean;
+  /** Bot check on (Supabase "CAPTCHA protection"): auth requests need a token; the ones received. */
+  captcha?: boolean;
+  captchaTokens?: string[];
 }
 
 export interface Session {
@@ -81,13 +84,24 @@ function paginate(url: URL, rows: Row[]) {
 }
 
 /** Pass `shared` to give a second browser context (another device) the same database. */
-export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb> {
+export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?: boolean } = {}): Promise<MockDb> {
   const db: MockDb = shared ?? { notebooks: [], notes: [], strokes: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], passwordChanges: 0, password: 'secret123' };
+  if (opts.captcha) db.captcha = true;
 
   await page.route('**/config.js', (r) =>
     r.fulfill({
       contentType: 'application/javascript',
-      body: `window.__LINEBOARD_CONFIG__ = { supabaseUrl: "${MOCK_URL}", supabaseAnonKey: "test-anon-key" };`,
+      body: `window.__LINEBOARD_CONFIG__ = { supabaseUrl: "${MOCK_URL}", supabaseAnonKey: "test-anon-key"${db.captcha ? ', turnstileSiteKey: "test-site-key"' : ''} };`,
+    }),
+  );
+  // A stand-in for Cloudflare Turnstile: passes at once, and gives a fresh token after each reset.
+  await page.route('https://challenges.cloudflare.com/**', (r) =>
+    r.fulfill({
+      contentType: 'application/javascript',
+      body: `window.turnstile = { n: 0, w: {},
+        render(el, o) { const id = 'w' + (++this.n); this.w[id] = o; setTimeout(() => o.callback('tok-' + id + '-1'), 20); return id; },
+        reset(id) { const o = this.w[id]; o.k = (o.k || 1) + 1; setTimeout(() => o.callback('tok-' + id + '-' + o.k), 20); },
+        remove(id) { delete this.w[id]; } };`,
     }),
   );
 
@@ -147,6 +161,14 @@ export async function mockSupabase(page: Page, shared?: MockDb): Promise<MockDb>
     const accessOk = () => !!session && (claims.aal === 'aal2' || !db.factors.some((f) => f.status === 'verified'));
 
     // ---- auth ----
+    // Bot check: sign-in, sign-up, email links and resets need a token (refreshes do not).
+    const needsCaptcha = (path === '/auth/v1/token' && url.searchParams.get('grant_type') !== 'refresh_token') || ['/auth/v1/signup', '/auth/v1/otp', '/auth/v1/recover'].includes(path);
+    if (db.captcha && needsCaptcha && method === 'POST') {
+      const tok = (body() as { gotrue_meta_security?: { captcha_token?: string } } | null)?.gotrue_meta_security?.captcha_token;
+      if (!tok) return authError(route, 400, 'captcha_failed', 'captcha protection: request disallowed (no captcha token)');
+      if ((db.captchaTokens ??= []).includes(tok)) return authError(route, 400, 'captcha_failed', 'captcha protection: token already used');
+      db.captchaTokens.push(tok);
+    }
     if (path === '/auth/v1/token') {
       const grant = url.searchParams.get('grant_type');
       if (grant === 'refresh_token') {

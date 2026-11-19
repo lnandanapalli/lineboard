@@ -94,6 +94,7 @@ export class App {
     this.root = root;
     this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
+    this.queue.onDropped = (m) => toast('Not saved: ' + m, 'error');
     this.queue.onState = (s) => {
       this.syncState = s;
       this.renderStatus();
