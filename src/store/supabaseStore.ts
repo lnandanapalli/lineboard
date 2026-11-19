@@ -3,7 +3,7 @@ import { cleanStyle, isPlain } from '../textStyle';
 import { fromB64, isSealedBytes, open, openBytes, seal, sealBytes, toB64 } from '../crypto/cipher';
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import type { KeyVault } from '../crypto/vault';
-import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
+import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { uuid } from '../util';
 import { StoreError, type Store } from './store';
 
@@ -97,10 +97,38 @@ export class SupabaseStore implements Store {
     return this.vault?.supported !== false;
   }
   private bookCols() {
-    return 'id,name,created_at,updated_at' + (this.encCols ? ',name_enc' : '');
+    return 'id,name,created_at,updated_at' + (this.encCols ? ',name_enc' : '') + (this.flagCols ? ',starred,archived_at' : '');
   }
   private noteCols() {
-    return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '');
+    return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '') + (this.flagCols ? ',starred,archived_at' : '');
+  }
+
+  /** Whether the database has the starred / archived_at columns (stars and the archive). */
+  private flagCols = false;
+  private flagProbe: Promise<boolean> | null = null;
+  supportsFlags(): Promise<boolean> {
+    this.flagProbe ??= (async () => {
+      const { error } = await this.sb.from('notes').select('starred,archived_at').limit(1);
+      const missing = !!error && (error.code === '42703' || /starred|archived_at/.test(error.message ?? ''));
+      if (error && !missing) this.flagProbe = null; // offline or similar: ask again next time
+      this.flagCols = !missing;
+      return this.flagCols;
+    })();
+    return this.flagProbe;
+  }
+  private flagsOf(r: { starred?: boolean | null; archived_at?: string | null }): Flags {
+    return { ...(r.starred ? { starred: true } : {}), ...(r.archived_at ? { archived_at: r.archived_at } : {}) };
+  }
+  private async writeFlags(table: 'notes' | 'notebooks', id: string, flags: Flags) {
+    if (!(await this.supportsFlags())) throw new StoreError('Stars and the archive need a database update: the site operator re-runs supabase/schema.sql.', true);
+    const { error } = await this.sb.from(table).update(flags).eq('id', id);
+    check(error);
+  }
+  setNoteFlags(id: string, flags: Flags) {
+    return this.writeFlags('notes', id, flags);
+  }
+  setNotebookFlags(id: string, flags: Flags) {
+    return this.writeFlags('notebooks', id, flags);
   }
   private strokeCols() {
     return 'id,note_id,tool,color,width,points,created_at' + (this.encCols ? ',enc' : '') + (this.textCol ? ',text' : '') + (this.dashCol ? ',dash' : '') + (this.fontCol ? ',font' : '');
@@ -173,7 +201,7 @@ export class SupabaseStore implements Store {
   }
 
   private async decodeBook(r: BookRow): Promise<Notebook> {
-    return { id: r.id, name: await this.readText(r.name, r.name_enc, ctx.book(r.id)), created_at: r.created_at, updated_at: r.updated_at };
+    return { id: r.id, name: await this.readText(r.name, r.name_enc, ctx.book(r.id)), created_at: r.created_at, updated_at: r.updated_at, ...this.flagsOf(r) };
   }
   private async decodeNote(r: NoteRow): Promise<NoteMeta> {
     return {
@@ -182,6 +210,7 @@ export class SupabaseStore implements Store {
       notebook_id: r.notebook_id,
       created_at: r.created_at,
       updated_at: r.updated_at,
+      ...this.flagsOf(r),
     };
   }
   /** Null when the stroke is encrypted and cannot be read here. */
@@ -219,6 +248,7 @@ export class SupabaseStore implements Store {
   // ----------------------------- notebooks -----------------------------
 
   async listNotebooks(): Promise<Notebook[]> {
+    await this.supportsFlags();
     const { data, error } = await this.sb.from('notebooks').select(this.bookCols()).order('created_at', { ascending: true });
     check(error);
     return Promise.all(((data ?? []) as unknown as BookRow[]).map((r) => this.decodeBook(r)));
@@ -238,6 +268,7 @@ export class SupabaseStore implements Store {
   }
 
   async createNotebook(name: string): Promise<Notebook> {
+    await this.supportsFlags();
     const id = uuid();
     let row: BookRow | null = null;
     await this.write(async (key) => {
@@ -270,6 +301,7 @@ export class SupabaseStore implements Store {
   /** Insert notebooks keeping their ids (used to move notebooks made without an account). Idempotent. */
   async importNotebooks(notebooks: Notebook[]) {
     if (!notebooks.length) return;
+    await this.supportsFlags();
     await this.write(async (key) => {
       const rows = await Promise.all(
         notebooks.map(async (b) => ({
@@ -278,6 +310,7 @@ export class SupabaseStore implements Store {
           ...(await this.encodeName(key, b.id, b.name)),
           created_at: b.created_at,
           updated_at: b.updated_at,
+          ...(this.flagCols ? { starred: !!b.starred, archived_at: b.archived_at ?? null } : {}),
         })),
       );
       const { error } = await this.sb.from('notebooks').upsert(rows, { onConflict: 'id' });
@@ -295,6 +328,7 @@ export class SupabaseStore implements Store {
   }
 
   async listNotes(): Promise<NoteMeta[]> {
+    await this.supportsFlags();
     // Page through: the API returns at most 1000 rows per request, and an account may have more notes.
     const rows: NoteRow[] = [];
     for (let from = 0; ; from += PAGE) {
@@ -308,6 +342,7 @@ export class SupabaseStore implements Store {
   }
 
   async createNote(title: string, notebookId: string): Promise<NoteMeta> {
+    await this.supportsFlags();
     const id = uuid();
     let row: NoteRow | null = null;
     await this.write(async (key) => {
@@ -325,6 +360,7 @@ export class SupabaseStore implements Store {
   /** Insert or update notes keeping their ids (used to move notes made without an account). Idempotent. */
   async importNotes(notes: NoteMeta[]) {
     if (!notes.length) return;
+    await this.supportsFlags();
     await this.write(async (key) => {
       const rows = await Promise.all(
         notes.map(async (n) => ({
@@ -334,6 +370,7 @@ export class SupabaseStore implements Store {
           notebook_id: n.notebook_id,
           created_at: n.created_at,
           updated_at: n.updated_at,
+          ...(this.flagCols ? { starred: !!n.starred, archived_at: n.archived_at ?? null } : {}),
         })),
       );
       const { error } = await this.sb.from('notes').upsert(rows, { onConflict: 'id' });

@@ -10,10 +10,11 @@ import { dialog, h, toast } from './util';
 import { isApple, shortcut } from './keys';
 import { orientation } from './orientation';
 
-type Section = 'account' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
+type Section = 'account' | 'data' | 'signin' | 'security' | 'writing' | 'stylus' | 'about';
 
 const SECTIONS: { id: Section; label: string; icon: string }[] = [
   { id: 'account', label: 'Account', icon: icons.user },
+  { id: 'data', label: 'Data controls', icon: icons.archive },
   { id: 'signin', label: 'Sign-in & devices', icon: icons.lockAll },
   { id: 'security', label: 'Encryption', icon: icons.shield },
   { id: 'writing', label: 'Page & writing', icon: icons.free },
@@ -44,6 +45,10 @@ export interface SettingsHost {
   deleteAccount?: () => Promise<void>;
   /** No account: delete everything kept in this browser. */
   deleteLocalData?: () => Promise<void>;
+  /** What is archived: notebooks (with how many notes) and notes in notebooks that are not. */
+  archived: () => { notebooks: { id: string; name: string; notes: number }[]; notes: { id: string; title: string; notebook: string }[] };
+  unarchive: (kind: 'note' | 'notebook', id: string) => Promise<void>;
+  deleteArchived: (kind: 'note' | 'notebook', id: string) => Promise<void>;
 }
 
 /** The settings window: a sidebar of sections (account, page, stylus, security, about). */
@@ -71,6 +76,7 @@ export class SettingsPanel {
     const content = h('div', { class: 'settings-content' });
     const builders: Record<Section, () => HTMLElement[]> = {
       account: () => this.accountPane(),
+      data: () => this.dataPane(),
       writing: () => this.writingPane(),
       stylus: () => this.stylusPane(),
       security: () => [this.securityBody],
@@ -115,6 +121,7 @@ export class SettingsPanel {
   open(section?: Section) {
     this.syncForm();
     this.renderSecurity();
+    this.renderArchived();
     if (section) this.show(section, true);
     this.dlg.showModal();
   }
@@ -168,6 +175,9 @@ export class SettingsPanel {
     return h('div', { class: 'set-switch' }, h('div', {}, h('div', { class: 'set-label' }, label), h('small', { class: 'muted' }, help)), sw);
   }
 
+  /** "Your data": built with the account pane, shown in Data controls. */
+  private dataCards: HTMLElement[] = [];
+
   private card(title: string | null, ...children: (Node | null)[]) {
     return h('div', { class: 'set-card' }, title ? h('h4', {}, title) : null, ...children);
   }
@@ -216,7 +226,7 @@ export class SettingsPanel {
     const erase = this.host.deleteAccount ?? this.host.deleteLocalData;
     const eraseBtn = erase ? (h('button', { class: 'btn danger', type: 'button' }, this.host.deleteAccount ? 'Delete account' : 'Delete everything on this device') as HTMLButtonElement) : null;
     eraseBtn?.addEventListener('click', () => void erase!());
-    const dataCard = this.card(
+    this.dataCards = [this.card(
       'Your data',
       h('p', { class: 'muted' }, 'Download a copy of everything: your account details and settings, and all your notebooks, notes (with their version history) and pictures as a Lineboard file (.lbd) you can import again.'),
       h('div', { class: 'row-actions' }, exportBtn),
@@ -232,12 +242,41 @@ export class SettingsPanel {
           )
         : null,
       eraseBtn ? h('div', { class: 'row-actions' }, eraseBtn) : null,
-    );
+    )];
     return [
       this.card(null, account),
       this.card('Storage', h('p', { class: 'muted' }, where), h('p', { class: 'muted' }, store.mode === 'cloud' ? 'Changes save in the background and wait while you are offline.' : '')),
-      dataCard,
     ];
+  }
+
+  /** Data controls: what is archived, a copy of everything, moving notes, and erasing it all. */
+  private dataPane(): HTMLElement[] {
+    return [this.card('Archived', h('p', { class: 'muted' }, 'Archived notes and notebooks are hidden from the sidebar and search. They are kept, with their history, until you restore or delete them.'), this.archivedBody), ...this.dataCards];
+  }
+  private archivedBody = h('div', { class: 'archived-list' });
+
+  /** List what is archived, each with Restore and Delete. */
+  private renderArchived() {
+    const { notebooks, notes } = this.host.archived();
+    const row = (kind: 'note' | 'notebook', id: string, name: string, sub: string) => {
+      const restore = h('button', { class: 'btn', type: 'button' }, 'Restore') as HTMLButtonElement;
+      restore.addEventListener('click', async () => {
+        restore.disabled = true;
+        await this.host.unarchive(kind, id);
+        this.renderArchived();
+      });
+      const del = h('button', { class: 'btn danger-text', type: 'button', 'aria-label': `Delete "${name}"` }, 'Delete') as HTMLButtonElement;
+      del.addEventListener('click', async () => {
+        await this.host.deleteArchived(kind, id);
+        this.renderArchived();
+      });
+      return h('li', {}, h('div', { class: 'archived-name' }, h('span', { class: 'archived-kind' }, kind === 'note' ? 'Note' : 'Notebook'), h('b', {}, name), h('small', {}, sub)), h('div', { class: 'row-actions' }, restore, del));
+    };
+    const items = [
+      ...notebooks.map((b) => row('notebook', b.id, b.name, b.notes === 1 ? '1 note' : `${b.notes} notes`)),
+      ...notes.map((n) => row('note', n.id, n.title || 'Untitled', `in ${n.notebook}`)),
+    ];
+    this.archivedBody.replaceChildren(items.length ? h('ul', { class: 'archived-items' }, ...items) : h('p', { class: 'muted' }, 'Nothing is archived. Use “Archive” in a note’s or notebook’s ⋯ menu.'));
   }
 
   // ----------------------------- sign-in & devices -----------------------------

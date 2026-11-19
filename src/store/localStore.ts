@@ -1,5 +1,5 @@
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
-import { DEFAULT_NOTEBOOK_NAME, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
+import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { lsGet, lsSet, uuid } from '../util';
 import type { Store } from './store';
 
@@ -159,6 +159,13 @@ export class LocalStore implements Store {
     const b = await imageTx<Blob | undefined>('readonly', (s) => s.get(id));
     if (!b) throw new Error('Image not found on this device');
     return b;
+  }
+
+  async setNoteFlags(id: string, flags: Flags) {
+    this.saveNotes(this.notes().map((m) => (m.id === id ? { ...m, ...flags } : m)));
+  }
+  async setNotebookFlags(id: string, flags: Flags) {
+    this.saveNotebooks(this.notebooks().map((b) => (b.id === id ? { ...b, ...flags } : b)));
   }
 
   async listVersions(noteId: string): Promise<VersionMeta[]> {

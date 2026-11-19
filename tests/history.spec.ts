@@ -179,7 +179,8 @@ test('signed in: versions are stored in the account; without the database update
   await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
   await page.getByLabel('Password', { exact: true }).fill(db.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  const { cdp, geo } = await setup(page);
+  // Wait for the signed-in board (loading /app again here could beat the sign-in and open device-only mode).
+  const { cdp, geo } = await attachBoard(page);
   await draw(cdp, geo, 50);
   await expect.poll(() => db.strokes.length).toBe(1);
   await page.getByRole('button', { name: 'Version history' }).click();
@@ -235,6 +236,7 @@ test('"Export all" keeps the history and importing it brings the versions back; 
 
   const wait = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
   await page.getByRole('button', { name: 'Export all notes (.lbd)' }).click();
   const file = readFileSync((await (await wait).path())!);
   await page.locator('.settings-close').click();
@@ -246,8 +248,8 @@ test('"Export all" keeps the history and importing it brings the versions back; 
 
   // A single note, shared: its content only.
   const one = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export', exact: true }).click();
-  await page.getByRole('button', { name: /Lineboard file/ }).click();
+  await page.getByRole('button', { name: 'Share or export', exact: true }).click();
+  await page.getByRole('button', { name: /^Lineboard file/ }).click();
   const single = JSON.parse(unzip(readFileSync((await (await one).path())!)).get('notes/0001.json')!.toString());
   expect(single.history).toBeUndefined();
 

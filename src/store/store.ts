@@ -1,5 +1,5 @@
 import type { SnapStroke, VersionMeta } from '../history';
-import type { Notebook, NoteMeta, Settings, Stroke } from '../types';
+import type { Flags, Notebook, NoteMeta, Settings, Stroke } from '../types';
 
 export class StoreError extends Error {
   /** Permanent errors (bad data, permission) are dropped from the sync queue instead of retried. */
@@ -34,6 +34,11 @@ export interface Store {
   putImage(id: string, file: Blob): Promise<void>;
   /** Load an image file saved with putImage (`type`: its file type, from the image stroke). */
   getImage(id: string, type?: string): Promise<Blob>;
+  /** Star / archive a note or notebook (its content and date are left alone). */
+  setNoteFlags(id: string, flags: Flags): Promise<void>;
+  setNotebookFlags(id: string, flags: Flags): Promise<void>;
+  /** False when the cloud database predates stars and the archive (schema not updated yet). */
+  supportsFlags?(): Promise<boolean>;
   /** A note's versions, newest first (without their content). */
   listVersions(noteId: string): Promise<VersionMeta[]>;
   /** One version's strokes. */

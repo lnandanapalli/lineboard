@@ -152,7 +152,7 @@ test('settings are split into sections', async ({ page }) => {
   await page.goto('/app');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const tabs = page.locator('.settings-tab');
-  await expect(tabs).toHaveText(['Account', 'Sign-in & devices', 'Encryption', 'Page & writing', 'Stylus & palm', 'About']);
+  await expect(tabs).toHaveText(['Account', 'Data controls', 'Sign-in & devices', 'Encryption', 'Page & writing', 'Stylus & palm', 'About']);
   await tabs.filter({ hasText: 'Stylus & palm' }).click();
   await expect(page.locator('.cal-pad')).toBeVisible();
   await expect(page.locator('.settings-pane[data-section="account"]')).toBeHidden();

@@ -410,6 +410,12 @@ export class Board {
 
   /** Render the whole note to a PNG. */
   async exportPNG(): Promise<Blob> {
+    const c = await this.renderPage();
+    return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Export failed'))), 'image/png'));
+  }
+
+  /** The whole note drawn on a white page (for pictures and PDFs). */
+  async renderPage(): Promise<HTMLCanvasElement> {
     const bottom = Math.max(this.contentBottom() + 40, 400);
     let s = 1.6;
     const maxH = 30000;
@@ -423,7 +429,7 @@ export class Board {
     ctx.setTransform(s, 0, 0, s, 0, 0);
     await this.allImagesLoaded();
     for (const pass of [true, false]) for (const cs of this.strokes) if ((cs.s.tool === 'image') === pass) this.drawStroke(ctx, cs);
-    return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Export failed'))), 'image/png'));
+    return c;
   }
 
   isEmpty() {
