@@ -11,6 +11,7 @@ import { isApple, shortcut } from './keys';
 import { orientation } from './orientation';
 import { avatar, MAX_NAME, type Profile } from './profile';
 import { infoButton, infoHeading } from './menu';
+import { setTheme, themeChoice, type ThemeChoice } from './theme';
 import { IMAGE_TYPES } from './images';
 
 /** What end-to-end encryption does, behind the ⓘ next to its switch. */
@@ -416,7 +417,26 @@ export class SettingsPanel {
       smoothVal.textContent = smoothText(s().smoothing);
     });
 
+    const theme = h(
+      'select',
+      { class: 'dlg-input' },
+      h('option', { value: 'system' }, 'Same as this device'),
+      h('option', { value: 'light' }, 'Light'),
+      h('option', { value: 'dark' }, 'Dark'),
+    ) as HTMLSelectElement;
+    theme.value = themeChoice();
+    theme.addEventListener('change', () => setTheme(theme.value as ThemeChoice));
+    this.addSync(() => (theme.value = themeChoice()));
+
     return [
+      this.card(
+        'Appearance',
+        this.row(
+          'Theme',
+          theme,
+          'Light or dark, or follow this device’s setting. In dark mode the page is dark too, and ink is shown in lighter colours so it stays readable; your notes, exports and PDFs keep their real colours. Saved on this device.',
+        ),
+      ),
       this.card(
         'Strips',
         this.row('Strip height', h('div', { class: 'range' }, strip, stripVal), 'Taller strips leave more room for big handwriting.'),

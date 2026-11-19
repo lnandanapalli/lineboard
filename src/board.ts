@@ -4,6 +4,16 @@ import { appRect, clientToApp, deltaToApp } from './orientation';
 import { shapeStrokes } from './shapes';
 import { cleanStyle, fontCss, isPlain, type TextStyle } from './textStyle';
 import { createTextBar, type TextFormatPatch } from './textBar';
+import { darkInk } from './theme';
+
+/** The page's own colours (paper, rules, locked strips...), for the light and the dark look. */
+const PALETTES = {
+  light: { paper: '#ffffff', locked: '#eef0f3', rule: '#dde3ea', stripRule: '#cfd6e0', outline: '#3b82f6', dots: '#c3cbd6', grid: '#e1e6ed', select: '#2563eb', handle: '#ffffff', eraser: '#6b7280', mask: 'rgba(203, 213, 225, 0.55)', divider: '#94a3b8', skeleton: '#eef2f7', skeletonEdge: '#cbd5e1', skeletonText: '#64748b', shine: '255,255,255' },
+  dark: { paper: '#16191e', locked: '#0f1115', rule: '#2a3038', stripRule: '#2f3640', outline: '#60a5fa', dots: '#3a414c', grid: '#252b33', select: '#60a5fa', handle: '#16191e', eraser: '#9ca3af', mask: 'rgba(15, 17, 21, 0.6)', divider: '#5b6573', skeleton: '#20252c', skeletonEdge: '#353c46', skeletonText: '#9ca3af', shine: '255,255,255' },
+};
+type Palette = (typeof PALETTES)['light'];
+/** The look in use (one board at a time). Exports always draw with the light one. */
+let P: Palette = PALETTES.light;
 
 /** Version history: how removed ink and the glow behind new ink are drawn. */
 const REMOVED_INK = '#dc2626';
@@ -377,6 +387,23 @@ export class Board {
     this.setScroll(this.scrollY + dyLogical);
   }
 
+  /** Dark mode: a dark page, ink shown in readable colours (the strokes themselves keep theirs). */
+  private dark = false;
+  /** Drawing for a picture or PDF: real colours on white, whatever the theme. */
+  private exporting = false;
+  setDark(on: boolean) {
+    this.dark = on;
+    P = on ? PALETTES.dark : PALETTES.light;
+    this.cursorCache = null;
+    this.el.classList.toggle('dark', on);
+    if (this.editor) this.positionEditor();
+    this.invalidate('bg', 'ink', 'live', 'margin');
+  }
+  /** An ink colour as it is shown now. */
+  shownColor(color: string) {
+    return this.dark && !this.exporting ? darkInk(color) : color;
+  }
+
   /** The note's strokes as shown (not a preview). */
   allStrokes(): Stroke[] {
     return this.strokes.map((c) => c.s);
@@ -431,7 +458,15 @@ export class Board {
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.setTransform(s, 0, 0, s, 0, 0);
     await this.allImagesLoaded();
-    for (const pass of [true, false]) for (const cs of this.strokes) if ((cs.s.tool === 'image') === pass) this.drawStroke(ctx, cs);
+    const look = P;
+    this.exporting = true;
+    P = PALETTES.light;
+    try {
+      for (const pass of [true, false]) for (const cs of this.strokes) if ((cs.s.tool === 'image') === pass) this.drawStroke(ctx, cs);
+    } finally {
+      this.exporting = false;
+      P = look;
+    }
     return c;
   }
 
@@ -1050,7 +1085,7 @@ export class Board {
    */
   private inkCursor(tool: 'pen' | 'highlighter'): string {
     const hl = tool === 'highlighter';
-    const color = hl ? this.settings.highlighterColor : this.settings.penColor;
+    const color = hl ? this.settings.highlighterColor : this.shownColor(this.settings.penColor);
     const width = hl ? this.settings.highlighterWidth : this.settings.penWidth;
     if (!/^#[0-9a-f]{3,8}$/i.test(color)) return 'crosshair';
     // Browsers ignore cursor images larger than 128 px; stay well under it.
@@ -1141,7 +1176,7 @@ export class Board {
       lineHeight: String(TEXT_LINE),
       textAlign: st.align ?? 'left',
       textDecoration: st.underline ? 'underline' : 'none',
-      color: ed.color,
+      color: this.shownColor(ed.color),
       width: `${b.w * s}px`,
       height: `${b.h * s}px`,
     });
@@ -1733,18 +1768,18 @@ export class Board {
     const H = this.settings.stripHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (this.free) {
-      // Whiteboard: white page, no strips or locks, with the chosen paper.
-      ctx.fillStyle = '#ffffff';
+      // Whiteboard: a plain page, no strips or locks, with the chosen paper.
+      ctx.fillStyle = P.paper;
       ctx.fillRect(0, 0, this.viewW, this.viewH);
       this.drawPaper(ctx);
       return;
     }
     if (this.split) {
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = P.paper;
       ctx.fillRect(0, 0, this.viewW, this.viewH);
       if (this.settings.showLines) {
         const [first, last] = this.visibleStrips();
-        ctx.strokeStyle = '#dde3ea';
+        ctx.strokeStyle = P.rule;
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let i = first; i <= last; i++) {
@@ -1756,18 +1791,18 @@ export class Board {
       }
       return;
     }
-    ctx.fillStyle = '#eef0f3';
+    ctx.fillStyle = P.locked;
     ctx.fillRect(0, 0, this.viewW, this.viewH);
     const [first, last] = this.visibleStrips();
     for (let i = first; i <= last; i++) {
       const top = (i * H - this.scrollY) * s;
       const hpx = H * s;
       if (this.unlocked.has(i)) {
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = P.paper;
         ctx.fillRect(0, top, this.viewW, hpx);
       }
       if (this.settings.showLines) {
-        ctx.strokeStyle = '#cfd6e0';
+        ctx.strokeStyle = P.stripRule;
         ctx.lineWidth = 1;
         ctx.beginPath();
         const y = Math.round(top + hpx) + 0.5;
@@ -1780,7 +1815,7 @@ export class Board {
     for (const i of this.unlocked) {
       if (i < first || i > last) continue;
       const top = (i * H - this.scrollY) * s;
-      ctx.strokeStyle = '#3b82f6';
+      ctx.strokeStyle = P.outline;
       ctx.lineWidth = 2;
       ctx.strokeRect(1, top + 1, this.viewW - 2, H * s - 2);
     }
@@ -1799,12 +1834,12 @@ export class Board {
     const sx = (x: number) => Math.round((x - this.scrollX) * s) + 0.5;
     const sy = (y: number) => Math.round((y - this.scrollY) * s) + 0.5;
     if (paper === 'dots') {
-      ctx.fillStyle = '#c3cbd6';
+      ctx.fillStyle = P.dots;
       const r = Math.max(1, 1.2 * Math.min(2, s));
       for (let y = y0; y <= y1; y += gap) for (let x = x0; x <= x1; x += gap) ctx.fillRect(sx(x) - r / 2, sy(y) - r / 2, r, r);
       return;
     }
-    ctx.strokeStyle = '#e1e6ed';
+    ctx.strokeStyle = P.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let y = y0; y <= y1; y += gap) {
@@ -1900,8 +1935,9 @@ export class Board {
     }
     if (s.tool === 'text') {
       ctx.save();
-      ctx.fillStyle = s.color;
-      ctx.strokeStyle = s.color;
+      const color = this.shownColor(s.color);
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
       ctx.font = fontCss(s.font, s.width);
       ctx.textBaseline = 'top';
       const lines = (s.text ?? '').split('\n');
@@ -1928,10 +1964,14 @@ export class Board {
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = s.color;
-    if (s.tool === 'highlighter') {
-      ctx.globalAlpha = 0.38;
-      ctx.globalCompositeOperation = 'multiply';
+    // Highlighter: its own colour, laid over the page (multiply darkens a light page; screen
+    // brightens a dark one). Pen: as shown in the current theme.
+    const hl = s.tool === 'highlighter';
+    ctx.strokeStyle = hl ? s.color : this.shownColor(s.color);
+    if (hl) {
+      const onDark = this.dark && !this.exporting;
+      ctx.globalAlpha = onDark ? 0.6 : 0.38;
+      ctx.globalCompositeOperation = onDark ? 'screen' : 'multiply';
     }
     if (c.variable) {
       const p = s.points;
@@ -2041,12 +2081,12 @@ export class Board {
         for (const pass of [true, false]) for (const c of this.selection) if ((c.s.tool === 'image') === pass) this.drawStroke(ctx, c);
       ctx.setLineDash([6 / this.scale, 4 / this.scale]);
       ctx.lineWidth = 1.5 / this.scale;
-      ctx.strokeStyle = '#2563eb';
+      ctx.strokeStyle = P.select;
       ctx.strokeRect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
       // Resize handle.
       const hs = 7 / this.scale;
       ctx.setLineDash([]);
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = P.handle;
       ctx.fillRect(box.maxX - hs, box.maxY - hs, hs * 2, hs * 2);
       ctx.strokeRect(box.maxX - hs, box.maxY - hs, hs * 2, hs * 2);
       ctx.restore();
@@ -2056,7 +2096,7 @@ export class Board {
       ctx.beginPath();
       ctx.arc(this.eraserCursor.x, this.eraserCursor.y, ERASER_RADIUS, 0, Math.PI * 2);
       ctx.lineWidth = 1.5 / this.scale;
-      ctx.strokeStyle = '#6b7280';
+      ctx.strokeStyle = P.eraser;
       ctx.stroke();
     }
   }
@@ -2065,10 +2105,10 @@ export class Board {
   private drawSplitOverlay(ctx: CanvasRenderingContext2D) {
     const d = this.dividerY;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = 'rgba(203, 213, 225, 0.55)';
+    ctx.fillStyle = P.mask;
     if (!this.panes.top) ctx.fillRect(0, 0, this.viewW, d);
     if (!this.panes.bottom) ctx.fillRect(0, d, this.viewW, this.viewH - d);
-    ctx.fillStyle = this.dividerArmed ? '#2563eb' : '#94a3b8';
+    ctx.fillStyle = this.dividerArmed ? P.select : P.divider;
     ctx.fillRect(0, Math.round(d) - (this.dividerArmed ? 1.5 : 1), this.viewW, this.dividerArmed ? 3 : 2);
   }
 
@@ -2127,7 +2167,7 @@ function drawSkeleton(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
   const r = Math.min(10, w / 4, h / 4);
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, r);
-  ctx.fillStyle = '#eef2f7';
+  ctx.fillStyle = P.skeleton;
   ctx.fill();
   if (phase != null) {
     ctx.save();
@@ -2135,21 +2175,21 @@ function drawSkeleton(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
     const band = Math.max(60, w * 0.35);
     const bx = x - band + (w + 2 * band) * phase;
     const g = ctx.createLinearGradient(bx, 0, bx + band, 0);
-    g.addColorStop(0, 'rgba(255,255,255,0)');
-    g.addColorStop(0.5, 'rgba(255,255,255,0.85)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
+    g.addColorStop(0, `rgba(${P.shine},0)`);
+    g.addColorStop(0.5, `rgba(${P.shine},${P === PALETTES.dark ? 0.08 : 0.85})`);
+    g.addColorStop(1, `rgba(${P.shine},0)`);
     ctx.fillStyle = g;
     ctx.fillRect(x, y, w, h);
     ctx.restore();
   }
-  ctx.strokeStyle = '#cbd5e1';
+  ctx.strokeStyle = P.skeletonEdge;
   ctx.lineWidth = 1 / scale;
   ctx.stroke();
   // The label stays a readable size on screen, and is left out when the box is too small for it.
   const font = 14 / scale;
   ctx.font = `${font}px ${TEXT_FONT}`;
   if (ctx.measureText(label).width < w - 16 / scale && font * 2 < h) {
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = P.skeletonText;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, x + w / 2, y + h / 2);

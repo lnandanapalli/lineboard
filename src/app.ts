@@ -20,6 +20,7 @@ import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
 import { openSearch } from './searchUi';
 import { avatar, EMPTY_PROFILE, squarePicture, type Profile } from './profile';
+import { applyTheme, clearTheme, isDark, onThemeChange } from './theme';
 import { clip, MAX_IMPORT_FILE, MAX_NOTE_TITLE, MAX_NOTEBOOK_NAME, MAX_PICTURES_AT_ONCE } from './limits';
 import { LocalStore } from './store/localStore';
 import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
@@ -461,6 +462,18 @@ export class App {
       },
     });
 
+    // Light or dark, as chosen in Settings (or as the device is, by default).
+    applyTheme();
+    this.board.setDark(isDark());
+    const offTheme = onThemeChange((dark) => {
+      this.board.setDark(dark);
+      this.renderToolOptions();
+    });
+    this.abort.signal.addEventListener('abort', () => {
+      offTheme();
+      clearTheme();
+    });
+
     this.buildSettings();
     this.renderToolOptions();
     this.renderMode();
@@ -703,11 +716,13 @@ export class App {
     const swatch = (c: string) => {
       const on = c.toLowerCase() === cur.toLowerCase();
       const b = h('button', { class: 'swatch' + (on ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, 'aria-pressed': String(on), title: c });
-      b.style.setProperty('--c', c);
+      // Shown as it looks on the page (in dark mode, ink is shown lighter).
+      const shown = isHL ? c : this.board.shownColor(c);
+      b.style.setProperty('--c', shown);
       // The chosen colour: a ring around it and a check inside, light or dark to stand out on it.
       if (on) {
         b.innerHTML = icons.check;
-        b.style.setProperty('--tick', isLight(c) ? '#111827' : '#ffffff');
+        b.style.setProperty('--tick', isLight(shown) ? '#111827' : '#ffffff');
       }
       b.addEventListener('click', () => pick(c));
       return b;
