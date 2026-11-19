@@ -660,7 +660,7 @@ export class App {
         this.board.sizePending(slots[i], bitmap.width, bitmap.height);
         const id = uuid();
         await this.store.putImage(id, img.blob);
-        last = this.board.insertImage(id, img.type, bitmap);
+        last = this.board.insertImage(id, img.type, bitmap, slots[i]);
       } catch (e) {
         toast('Could not add the picture: ' + (e as Error).message, 'error');
       } finally {

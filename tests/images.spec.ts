@@ -271,3 +271,16 @@ test('while a picture is being added, a placeholder shows where it will go', asy
   await expect.poll(() => db.strokes.length).toBe(1);
   await expect.poll(grey).toBeLessThan(100);
 });
+
+test('pictures added together land where their placeholders were, not on top of each other', async ({ page }) => {
+  await freeBoard(page);
+  await page.locator('input[type=file][accept^="image/"]').setInputFiles([
+    { name: 'a.png', mimeType: 'image/png', buffer: PNG },
+    { name: 'b.png', mimeType: 'image/png', buffer: PNG },
+  ]);
+  await expectStrokes(page, 2);
+  const [a, b] = (await strokes(page)).map((s) => s.points);
+  // The second sits down-right of the first, by the placeholder's step.
+  expect(b[0] - a[0]).toBeGreaterThan(10);
+  expect(b[1] - a[1]).toBeGreaterThan(10);
+});

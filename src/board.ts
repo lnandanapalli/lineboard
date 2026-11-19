@@ -1129,7 +1129,10 @@ export class Board {
   sizePending(key: number, pxW: number, pxH: number) {
     const p = this.pending.get(key);
     if (!p) return;
-    this.pending.set(key, { ...this.placeBox(pxW, pxH, p.offset), offset: p.offset });
+    // Take the picture's proportions, keeping the box where it is (the view may have moved since).
+    const { w, h } = this.placeBox(pxW, pxH);
+    const cx = p.l + p.w / 2, cy = p.t + p.h / 2;
+    this.pending.set(key, { l: Math.max(4, Math.min(PAGE_W - w - 4, cx - w / 2)), t: Math.max(4, cy - h / 2), w, h, offset: p.offset });
     this.invalidate('live');
   }
   removePending(key: number) {
@@ -1139,9 +1142,11 @@ export class Board {
   }
 
   /** Place a picture in the middle of the view, at most 600 page units wide, and select it. */
-  insertImage(id: string, type: string, bitmap: ImageBitmap): Stroke {
+  insertImage(id: string, type: string, bitmap: ImageBitmap, slot?: number): Stroke {
     this.commitText();
-    const { l, t, w, h } = this.placeBox(bitmap.width, bitmap.height);
+    // Into the placeholder the user was shown, if there is one; otherwise the middle of the view.
+    const { l, t, w, h } = (slot != null && this.pending.get(slot)) || this.placeBox(bitmap.width, bitmap.height);
+    if (slot != null) this.removePending(slot);
     const r1 = (v: number) => Math.round(v * 10) / 10;
     const stroke: Stroke = {
       id: uuid(),
