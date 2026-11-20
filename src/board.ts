@@ -27,6 +27,8 @@ export const MAX_STROKE_POINTS = 20_000;
 export const PAGE_W = 1000;
 /** A stroke that ends within this many ms with almost no movement, via pointercancel, is discarded. */
 const SETTLE_MS = 90;
+/** A contact that grows into a palm does so right after it lands; later growth is a pressing finger. */
+const PALM_SETTLE_MS = 300;
 const ERASER_RADIUS = 12;
 const MIN_POINT_DIST = 0.6;
 /** Free mode: two fingers that land within this many ms of each other start a two-finger scroll. */
@@ -937,11 +939,23 @@ export class Board {
     const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const list = events.length ? events : [e];
     for (const ev of list) {
-      // A contact that grows past the limit mid-stroke is a palm settling down: drop the stroke.
-      if (a.pointerType === 'touch' && contactSize(ev) > this.palmLimit) {
-        this.cb.onContact(contactSize(ev), 'touch', false);
-        this.cancelActive();
-        return;
+      // A contact growing past the palm limit: a palm settling right after it lands (drop the
+      // stroke), or a finger or soft stylus widening as it presses or tilts in a stroke that has
+      // been going for a while (that is writing: keep it, and let automatic detection widen its
+      // limit so strokes like it are safe). Only a sudden huge contact ends an established stroke,
+      // keeping what was drawn; nothing written for a while ever vanishes.
+      const grown = a.pointerType === 'touch' ? contactSize(ev) : 0;
+      if (grown > this.palmLimit) {
+        if (performance.now() - a.start < PALM_SETTLE_MS) {
+          this.cb.onContact(grown, 'touch', false);
+          this.cancelActive();
+          return;
+        }
+        if (grown > this.palmLimit * 2) {
+          this.finish();
+          return;
+        }
+        if (this.settings.palmMode !== 'manual') this.palm.widen(grown);
       }
       // Learning takes the biggest the contact gets (a fingertip widens as it presses), so the limit
       // it learns always lets the same strokes through again.
