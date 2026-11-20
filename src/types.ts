@@ -138,10 +138,9 @@ export const DEFAULT_SETTINGS: Settings = {
 export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } | null | undefined): Settings {
   const { freeMode, ...rest } = stored ?? {};
   const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
-  // Before automatic palm detection: someone who set their own limit keeps it (manual); everyone
-  // else gets automatic.
-  if (rest.palmMode !== 'auto' && rest.palmMode !== 'manual')
-    out.palmMode = typeof rest.touchThreshold === 'number' && rest.touchThreshold !== DEFAULT_SETTINGS.touchThreshold ? 'manual' : 'auto';
+  // Automatic unless someone deliberately turned the manual limit on (a limit saved before
+  // automatic detection existed is kept, and used only if they turn it on).
+  if (out.palmMode !== 'manual') out.palmMode = 'auto';
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
   if (!(SHAPES as readonly string[]).includes(out.shape)) out.shape = 'rectangle';

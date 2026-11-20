@@ -96,12 +96,37 @@ test('taps on a locked part of the page explain how to write there', async ({ pa
   await expect(page.locator('#toast')).toContainText('locked');
 });
 
-test('manual palm detection keeps a limit someone set before; everyone else gets automatic', async () => {
+test('palm detection is automatic unless the manual limit was deliberately turned on', async () => {
   const { withDefaults } = await import('../src/types');
   expect(withDefaults({}).palmMode).toBe('auto');
-  expect(withDefaults({ touchThreshold: 45 }).palmMode).toBe('auto');
-  expect(withDefaults({ touchThreshold: 70 }).palmMode).toBe('manual');
-  expect(withDefaults({ touchThreshold: 70, palmMode: 'auto' }).palmMode).toBe('auto');
+  // A limit saved before (maybe moved by accident) is kept but not used until someone turns it on.
+  expect(withDefaults({ touchThreshold: 70 }).palmMode).toBe('auto');
+  expect(withDefaults({ touchThreshold: 70 }).touchThreshold).toBe(70);
+  expect(withDefaults({ touchThreshold: 70, palmMode: 'manual' }).palmMode).toBe('manual');
+  expect(withDefaults({ palmMode: 'weird' as 'manual' }).palmMode).toBe('auto');
+});
+
+test('the manual limit is used only while its switch is on, with a note saying so', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Stylus & palm' }).click();
+  await page.getByRole('switch', { name: 'Set the palm limit myself' }).click();
+  await expect(page.getByRole('switch', { name: 'Set the palm limit myself' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('slider', { name: 'Ignore touches larger than' }).fill('10');
+  await expect(page.locator('.palm-manual-note')).toContainText('larger than 10 px');
+  await page.locator('.settings-close').click();
+  // A 26 px fingertip is over the manual limit: ignored.
+  await stroke(cdp, geo, 0, 13);
+  await page.waitForTimeout(150);
+  await expectStrokes(page, 0);
+  // Switch off: automatic again, the same finger writes.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Stylus & palm' }).click();
+  await page.getByRole('switch', { name: 'Set the palm limit myself' }).click();
+  await expect(page.locator('.palm-manual-note')).toBeHidden();
+  await page.locator('.settings-close').click();
+  await stroke(cdp, geo, 0, 13);
+  await expectStrokes(page, 1);
 });
 
 test('the learned limit sits comfortably above the writing contact', () => {

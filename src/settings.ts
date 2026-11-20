@@ -476,6 +476,7 @@ export class SettingsPanel {
       s().touchThreshold = Number(thr.value);
       thrVal.textContent = thr.value + ' px';
       this.host.changed();
+      this.refreshPalm();
     });
 
     let samples: number[] = [];
@@ -502,6 +503,7 @@ export class SettingsPanel {
       thr.value = String(v);
       thrVal.textContent = v + ' px';
       this.host.changed();
+      this.refreshPalm();
       toast(`Palm limit set to ${v} px.`);
     });
     const resetCal = h('button', { class: 'btn', type: 'button' }, 'Clear');
@@ -518,27 +520,35 @@ export class SettingsPanel {
     );
     this.contactReadout = h('p', { class: 'readout' }, 'Last contact on page: none yet');
 
-    // Automatic (the default) learns the writing contact each time the app opens; Manual is the
-    // fixed limit with its calibration box.
-    const mode = h('select', { class: 'dlg-input' }, h('option', { value: 'auto' }, 'Automatic'), h('option', { value: 'manual' }, 'Manual')) as HTMLSelectElement;
+    // Automatic (the default) learns the writing contact each time the app opens. A fixed limit is
+    // used only while its own switch is on, so it is never in effect by accident; while on, a note
+    // says automatic detection is off.
+    const mode = this.toggle(
+      'Set the palm limit myself',
+      'Off (recommended): Lineboard learns how big your writing contact is (a finger, a rubber-tipped stylus, a fine pen) from your first few strokes each time you open it, and treats touches much bigger than that as a resting palm. On: a fixed limit you set below is used instead, and nothing is learned.',
+      () => s().palmMode === 'manual',
+      (on) => {
+        s().palmMode = on ? 'manual' : 'auto';
+        paint();
+      },
+    );
     const status = h('p', { class: 'muted palm-status' });
+    const manualNote = h('p', { class: 'enc-warn palm-manual-note' });
     const manual = h(
       'div',
       { class: 'palm-manual' },
       this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts, a pen tip as a small one. Write in the box below with your stylus to set the limit from it.'),
       h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
     );
-    const paint = () => {
-      mode.value = s().palmMode;
-      manual.hidden = s().palmMode !== 'manual';
-      status.hidden = s().palmMode === 'manual';
-      status.textContent = this.host.palmStatus();
-    };
-    mode.addEventListener('change', () => {
-      s().palmMode = mode.value === 'manual' ? 'manual' : 'auto';
-      this.host.changed();
-      paint();
-    });
+    function paint() {
+      const on = s().palmMode === 'manual';
+      manual.hidden = !on;
+      manualNote.hidden = !on;
+      manualNote.textContent = `Automatic detection is off: touches larger than ${s().touchThreshold} px are ignored. Turn the switch off to let Lineboard learn your writing again.`;
+      status.hidden = on;
+      status.textContent = palmStatus();
+    }
+    const palmStatus = () => this.host.palmStatus();
     this.refreshPalm = paint;
 
     this.addSync(() => {
@@ -550,12 +560,9 @@ export class SettingsPanel {
     return [
       this.card(
         'Palm rejection inside the unlocked strip',
-        this.row(
-          'Palm detection',
-          mode,
-          'Automatic learns how big your writing contact is (a finger, a rubber-tipped stylus, a fine pen) from your first few strokes each time you open Lineboard, then treats touches much bigger than that as a resting palm. It adjusts again if someone writes with a bigger contact. Manual uses a fixed limit you set.',
-        ),
         status,
+        mode,
+        manualNote,
         manual,
         this.contactReadout,
       ),
