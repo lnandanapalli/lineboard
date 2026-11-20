@@ -5,6 +5,7 @@ import { publicFooter } from './public';
 import { logo } from './brand';
 import { passkeysSupported } from './account';
 import { Captcha } from './captcha';
+import { EMAIL_COOLDOWN, emailLimit } from './emailLimit';
 
 type Mode = 'signin' | 'signup' | 'magic' | 'reset';
 /** Shortest password accepted for new passwords; keep in step with the project's Auth setting. */
@@ -39,8 +40,91 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
   const form = h('form', { class: 'auth-form' }, h('label', {}, 'Email', email), h('label', { class: 'password-label' }, 'Password', withReveal(pass)), agreement, captcha.el, submit);
 
   const setMsg = (t: string, kind: 'ok' | 'err' = 'ok') => {
+    stopCountdown();
     msg.textContent = t;
     msg.className = 'auth-msg ' + kind;
+  };
+
+  // A wait before the next email: the message counts down and the button stays off until it ends.
+  let countdown: ReturnType<typeof setInterval> | null = null;
+  /** The form's own button is waiting out Supabase's email wait. */
+  let submitHeld = false;
+  function stopCountdown() {
+    if (countdown) clearInterval(countdown);
+    countdown = null;
+    if (submitHeld) {
+      submitHeld = false;
+      submit.disabled = false;
+    }
+  }
+  const waitThen = (button: HTMLButtonElement, seconds: number, show: (left: number) => void, done: () => void) => {
+    stopCountdown();
+    let left = seconds;
+    button.disabled = true;
+    show(left);
+    countdown = setInterval(() => {
+      left--;
+      if (left > 0) return show(left);
+      stopCountdown();
+      button.disabled = false;
+      done();
+    }, 1000);
+  };
+
+  // After an email is sent: say so plainly, with the address, and offer to send it again (after
+  // the wait Supabase requires) instead of leaving the form up to be pressed again.
+  const sent = h('div', { class: 'auth-sent', hidden: true });
+  const showSent = (what: 'signup' | 'magic' | 'reset', to: string) => {
+    const resend = h('button', { class: 'btn wide', type: 'button' }) as HTMLButtonElement;
+    const label = { signup: 'Resend confirmation email', magic: 'Resend sign-in link', reset: 'Resend reset link' }[what];
+    const status = h('p', { class: 'auth-msg', 'aria-live': 'polite' });
+    const startWait = (seconds: number) =>
+      waitThen(resend, seconds, (left) => (resend.textContent = `${label} (${left}s)`), () => (resend.textContent = label));
+    resend.addEventListener('click', async () => {
+      resend.disabled = true;
+      status.textContent = 'Sending...';
+      status.className = 'auth-msg';
+      try {
+        const captchaToken = await captcha.take();
+        const { error } =
+          what === 'signup'
+            ? await sb.auth.resend({ type: 'signup', email: to, options: { emailRedirectTo: redirectTo, captchaToken } })
+            : what === 'magic'
+              ? await sb.auth.signInWithOtp({ email: to, options: { emailRedirectTo: redirectTo, shouldCreateUser: false, captchaToken } })
+              : await sb.auth.resetPasswordForEmail(to, { redirectTo, captchaToken });
+        if (error) throw error;
+        status.textContent = 'Sent again.';
+        startWait(EMAIL_COOLDOWN);
+      } catch (err) {
+        const limit = emailLimit(err as Error);
+        status.textContent = limit ? (limit.wait ? `${limit.text} a moment.` : limit.text) : (err as Error).message || 'Could not send it.';
+        status.className = 'auth-msg err';
+        if (limit?.wait) startWait(limit.wait);
+        else resend.disabled = false;
+      }
+    });
+    const back = h('button', { type: 'button', class: 'link' }, 'Use a different email');
+    back.addEventListener('click', () => {
+      stopCountdown();
+      form.insertBefore(captcha.el, submit); // back where it was
+      sent.hidden = true;
+      for (const el of [form, extra, tabs]) el.hidden = false;
+      render();
+    });
+    const what2 = { signup: 'confirm your account', magic: 'sign in', reset: 'choose a new password' }[what];
+    sent.replaceChildren(
+      h('h2', {}, 'Check your email'),
+      h('p', {}, 'We sent a link to ', h('b', {}, to), `. Open it to ${what2}. It can take a minute to arrive; if it does not, check your spam folder.`),
+      resend,
+      status,
+      back,
+    );
+    for (const el of [form, extra, tabs, passkeyBtn]) el.hidden = true;
+    // The bot check comes along (Resend needs it too, and it may ask for a click).
+    sent.insertBefore(captcha.el, resend);
+    setMsg('');
+    sent.hidden = false;
+    startWait(EMAIL_COOLDOWN);
   };
 
   const tab = (m: Mode, label: string) => {
@@ -120,21 +204,36 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
       } else if (mode === 'signup') {
         const { data, error } = await sb.auth.signUp({ email: em, password: pass.value, options: { emailRedirectTo: redirectTo, captchaToken } });
         if (error) throw error;
-        if (!data.session) setMsg('Check your email to confirm your account, then come back here.');
+        if (!data.session) showSent('signup', em);
       } else if (mode === 'magic') {
         const { error } = await sb.auth.signInWithOtp({ email: em, options: { emailRedirectTo: redirectTo, shouldCreateUser: false, captchaToken } });
         if (error) throw error;
-        setMsg('Sign-in link sent. Open it on this device.');
+        showSent('magic', em);
       } else {
         const { error } = await sb.auth.resetPasswordForEmail(em, { redirectTo, captchaToken });
         if (error) throw error;
-        setMsg('Password reset link sent.');
+        showSent('reset', em);
       }
     } catch (err) {
       const e = err as Error & { code?: string };
-      setMsg(e.code === 'captcha_failed' ? 'The bot check failed. Try again.' : e.message || 'Something went wrong', 'err');
+      const limit = emailLimit(e);
+      if (limit?.wait) {
+        // Supabase's wait between two emails: count it down, and keep the button off meanwhile.
+        const label = submit.textContent;
+        waitThen(submit, limit.wait, (left) => {
+          msg.textContent = `${limit.text} ${left} second${left === 1 ? '' : 's'}.`;
+          msg.className = 'auth-msg err';
+        }, () => {
+          submitHeld = false;
+          msg.textContent = '';
+          submit.textContent = label;
+        });
+        submitHeld = true;
+        return;
+      }
+      setMsg(limit ? limit.text : e.code === 'captcha_failed' ? 'The bot check failed. Try again.' : e.message || 'Something went wrong', 'err');
     } finally {
-      submit.disabled = false;
+      if (!submitHeld) submit.disabled = false;
     }
   });
 
@@ -183,6 +282,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
         form,
         passkeyBtn,
         extra,
+        sent,
         msg,
         guestBox,
         tabs,

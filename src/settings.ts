@@ -53,6 +53,8 @@ export interface SettingsHost {
   deleteAccount?: () => Promise<void>;
   /** No account: delete everything kept in this browser. */
   deleteLocalData?: () => Promise<void>;
+  /** What automatic palm detection has learned so far, in words. */
+  palmStatus: () => string;
   /** The display name and picture (the picture as an object URL, or null). */
   profile: () => { profile: Profile; url: string | null };
   changeProfile: (change: { name?: string; picture?: File | null }) => Promise<void>;
@@ -158,7 +160,11 @@ export class SettingsPanel {
     if (s === 'signin') this.securityPane?.refresh();
   }
 
+  /** Repaint the palm detection status (it changes as strokes are learned from). */
+  private refreshPalm: () => void = () => {};
+
   showContact(size: number, type: string, accepted: boolean) {
+    this.refreshPalm();
     const reason = accepted ? 'drawn' : 'ignored';
     this.contactReadout.textContent = `Last contact on page: ${size ? Math.round(size) + ' px' : 'size not reported'} (${type}, ${reason})`;
   }
@@ -470,6 +476,7 @@ export class SettingsPanel {
       s().touchThreshold = Number(thr.value);
       thrVal.textContent = thr.value + ' px';
       this.host.changed();
+      this.refreshPalm();
     });
 
     let samples: number[] = [];
@@ -496,6 +503,7 @@ export class SettingsPanel {
       thr.value = String(v);
       thrVal.textContent = v + ' px';
       this.host.changed();
+      this.refreshPalm();
       toast(`Palm limit set to ${v} px.`);
     });
     const resetCal = h('button', { class: 'btn', type: 'button' }, 'Clear');
@@ -512,16 +520,50 @@ export class SettingsPanel {
     );
     this.contactReadout = h('p', { class: 'readout' }, 'Last contact on page: none yet');
 
+    // Automatic (the default) learns the writing contact each time the app opens. A fixed limit is
+    // used only while its own switch is on, so it is never in effect by accident; while on, a note
+    // says automatic detection is off.
+    const mode = this.toggle(
+      'Set the palm limit myself',
+      'Off (recommended): Lineboard learns how big your writing contact is (a finger, a rubber-tipped stylus, a fine pen) from your first few strokes each time you open it, and treats touches much bigger than that as a resting palm. On: a fixed limit you set below is used instead, and nothing is learned.',
+      () => s().palmMode === 'manual',
+      (on) => {
+        s().palmMode = on ? 'manual' : 'auto';
+        paint();
+      },
+    );
+    const status = h('p', { class: 'muted palm-status' });
+    const manualNote = h('p', { class: 'enc-warn palm-manual-note' });
+    const manual = h(
+      'div',
+      { class: 'palm-manual' },
+      this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts, a pen tip as a small one. Write in the box below with your stylus to set the limit from it.'),
+      h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
+    );
+    function paint() {
+      const on = s().palmMode === 'manual';
+      manual.hidden = !on;
+      manualNote.hidden = !on;
+      manualNote.textContent = `Automatic detection is off: touches larger than ${s().touchThreshold} px are ignored. Turn the switch off to let Lineboard learn your writing again.`;
+      status.hidden = on;
+      status.textContent = palmStatus();
+    }
+    const palmStatus = () => this.host.palmStatus();
+    this.refreshPalm = paint;
+
     this.addSync(() => {
       thr.value = String(s().touchThreshold);
       thrVal.textContent = s().touchThreshold + ' px';
+      paint();
     });
 
     return [
       this.card(
         'Palm rejection inside the unlocked strip',
-        this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts, a pen tip as a small one. Write in the box below with your stylus to calibrate it.'),
-        h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
+        status,
+        mode,
+        manualNote,
+        manual,
         this.contactReadout,
       ),
       this.card('Active pens', penOnly),

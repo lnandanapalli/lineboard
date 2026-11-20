@@ -22,9 +22,12 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 - **Strips, for finer control.** Lock the page strip by strip: unlock one strip to write in it, or switch to
   **multi-strip** to unlock several at once for larger drawings.
 - **Palm-safe scrolling.** Drag the margin to scroll, or step line by line with the arrow buttons or keys.
-- **Palm filtering inside the open area:** one stroke at a time, oversized contacts ignored (with a
-  calibration pad in Settings), strokes cancelled if a contact grows into a palm, and optional pen-only input
-  when an active pen is detected.
+- **Palm filtering inside the open area, with nothing to set up.** Each time Lineboard opens it learns how big
+  your writing contact is (a finger, a rubber-tipped stylus or a fine pen) from your first few strokes, then
+  treats touches much bigger than that as a resting palm. It adjusts again when someone writes with a bigger
+  contact, and never learns from a palm resting still. Also: one stroke at a time, strokes cancelled if a
+  contact grows into a palm, optional pen-only input, and a manual limit with a calibration pad for those who
+  want it. Taps on a locked part of the page explain how to write there.
 - **Free whiteboard** when an idea needs the whole page: write anywhere, two fingers scroll and zoom, with
   plain, lined, grid or dotted paper.
 - **Tools:**

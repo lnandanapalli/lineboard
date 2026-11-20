@@ -106,6 +106,7 @@ export class App {
   private settingsPanel!: SettingsPanel;
   private hint!: HTMLElement;
   private toolbarEl!: HTMLElement;
+  private lockedHintShown = false;
   private historyBtn!: HTMLButtonElement;
   /** Saves versions of notes as they change (version history). */
   private history: VersionRecorder;
@@ -456,6 +457,17 @@ export class App {
       onContact: (size, type, accepted) => this.settingsPanel?.showContact(size, type, accepted),
       onUnlockChange: () => {},
       loadImage: (id, type) => this.store.getImage(id, type),
+      // People new to the app try to write on a locked part of the page: say how, once.
+      onLockedTouches: () => {
+        if (this.lockedHintShown) return;
+        this.lockedHintShown = true;
+        toast(
+          this.settings.mode === 'split'
+            ? 'That half of the screen is locked, so your palm can rest there. Write in the open half, or tap the 🔒 in the margin to switch halves.'
+            : 'That part of the page is locked, so your palm can rest there. Tap a 🔒 in the margin to write in a strip.',
+        );
+      },
+      onPalmRelearn: () => toast('Adjusted to how you write. Try that stroke again.'),
       onSplitRatio: (r) => {
         this.settings.splitRatio = r;
         this.settingsChanged();
@@ -1810,6 +1822,13 @@ export class App {
       deleteAccount: this.opts.account ? () => this.deleteAccount() : undefined,
       deleteLocalData: this.store.mode === 'local' ? () => this.deleteLocalData() : undefined,
       profile: () => ({ profile: this.profile, url: this.profileUrl }),
+      palmStatus: () => {
+        const p = this.board.palm;
+        if (p.learning) return `Learning from your first strokes (${p.sampleCount} of 4 so far). Until then only very large contacts are ignored.`;
+        return p.threshold === Infinity
+          ? 'This device does not report touch size, so palms are kept out by the locked strips instead.'
+          : `Learned from your writing: touches larger than ${p.threshold} px are treated as a resting palm.`;
+      },
       changeProfile: (change) => this.changeProfile(change),
       archived: () => {
         const books = this.notebooks.filter((b) => b.archived_at);

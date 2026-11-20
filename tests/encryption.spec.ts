@@ -154,7 +154,13 @@ test('settings are split into sections', async ({ page }) => {
   const tabs = page.locator('.settings-tab');
   await expect(tabs).toHaveText(['Account', 'Data controls', 'Sign-in & devices', 'Encryption', 'Page & writing', 'Stylus & palm', 'About']);
   await tabs.filter({ hasText: 'Stylus & palm' }).click();
+  // Automatic palm detection by default; the fixed limit and calibration pad come with their own switch.
+  const manual = page.getByRole('switch', { name: 'Set the palm limit myself' });
+  await expect(manual).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('.cal-pad')).toBeHidden();
+  await manual.click();
   await expect(page.locator('.cal-pad')).toBeVisible();
+  await expect(page.locator('.palm-manual-note')).toContainText('Automatic detection is off');
   await expect(page.locator('.settings-pane[data-section="account"]')).toBeHidden();
   await tabs.filter({ hasText: 'Encryption' }).click();
   await expect(page.getByRole('switch', { name: 'End-to-end encryption' })).toBeDisabled();
