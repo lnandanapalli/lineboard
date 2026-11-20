@@ -53,6 +53,17 @@ export class PalmLearner {
   }
 
   /**
+   * A stroke that is writing (it has been going for a while) reached this contact size: make sure
+   * the limit leaves room for it, so the next strokes like it are not taken for a palm.
+   */
+  widen(size: number) {
+    if (!Number.isFinite(size) || size <= 0) return;
+    const room = Math.round(Math.min(MAX_LIMIT, size * 1.3 + 6));
+    if (this.limit !== null && this.limit !== Infinity && room > this.limit) this.limit = room;
+    if (this.limit === null && room > this.cap) this.cap = room;
+  }
+
+  /**
    * A touch of this size, alone and moving like writing in the writing area, was refused as a
    * palm. A few of those in a row mean someone writes with a bigger contact (another person, a
    * finger instead of a stylus): learn again, with room for that contact. Returns true then.
