@@ -85,3 +85,13 @@ test('dark-page ink keeps its hue and stays readable', () => {
   expect(darkInk('#11182780')).toMatch(/80$/); // transparency kept
   expect(darkInk('not a colour')).toBe('not a colour');
 });
+
+test('in dark mode the size button shows the pen as it looks on the page, not black on black', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await setup(page);
+  const dot = await page.locator('.size-btn .size-dot').evaluate((el) => getComputedStyle(el).backgroundColor);
+  const [r, g, b] = dot.match(/\d+/g)!.map(Number);
+  expect(Math.max(r, g, b)).toBeGreaterThan(170); // a light dot on the dark toolbar
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect.poll(() => page.locator('.size-btn .size-dot').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgb(17, 24, 39)');
+});
