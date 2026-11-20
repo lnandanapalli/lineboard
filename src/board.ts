@@ -943,6 +943,9 @@ export class Board {
         this.cancelActive();
         return;
       }
+      // Learning takes the biggest the contact gets (a fingertip widens as it presses), so the limit
+      // it learns always lets the same strokes through again.
+      if (a.pointerType === 'touch' && a.size !== undefined) a.size = Math.max(a.size, contactSize(ev));
       const pt = this.toLogical(ev.clientX, ev.clientY);
       if (a.scale) {
         const { ax, ay, bx, by } = a.scale;

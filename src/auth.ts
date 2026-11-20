@@ -106,6 +106,7 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
     const back = h('button', { type: 'button', class: 'link' }, 'Use a different email');
     back.addEventListener('click', () => {
       stopCountdown();
+      form.insertBefore(captcha.el, submit); // back where it was
       sent.hidden = true;
       for (const el of [form, extra, tabs]) el.hidden = false;
       render();
@@ -119,6 +120,8 @@ export function renderAuth(root: HTMLElement, sb: SupabaseClient, opts: AuthOpti
       back,
     );
     for (const el of [form, extra, tabs, passkeyBtn]) el.hidden = true;
+    // The bot check comes along (Resend needs it too, and it may ask for a click).
+    sent.insertBefore(captcha.el, resend);
     setMsg('');
     sent.hidden = false;
     startWait(EMAIL_COOLDOWN);

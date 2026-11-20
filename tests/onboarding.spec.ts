@@ -126,3 +126,31 @@ test('the learned limit sits comfortably above the writing contact', () => {
   expect(emailLimit({ message: 'email rate limit exceeded', code: 'over_email_send_rate_limit' })?.wait).toBe(0);
   expect(emailLimit({ message: 'Invalid login credentials' })).toBeNull();
 });
+
+test('a fingertip that widens as it presses keeps writing after learning (it learns the widest it gets)', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  // Starts at 10 px across, widens to 40 px.
+  const widening = async (strip: number) => {
+    const y = stripY(geo, strip);
+    await send(cdp, 'touchStart', [tp(geo.areaX + 80, y, 5, 1)]);
+    for (let i = 1; i <= 15; i++) await send(cdp, 'touchMove', [tp(geo.areaX + 80 + i * 10, y, Math.min(20, 5 + i * 1.5), 1)]);
+    await send(cdp, 'touchEnd', []);
+  };
+  for (let i = 0; i < 4; i++) await widening(0);
+  await expectStrokes(page, 4);
+  await widening(0);
+  await expectStrokes(page, 5);
+});
+
+test('with the bot check on, it moves to the "check your email" screen so Resend can use it', async ({ page }) => {
+  await mockSupabase(page, undefined, { captcha: true });
+  await page.goto('/signup');
+  await page.getByLabel('Email', { exact: true }).fill('new@example.com');
+  await page.getByLabel('Password', { exact: true }).fill('secret123');
+  await page.getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.locator('.auth-sent .captcha')).toHaveCount(1);
+  // Not inside anything hidden (the test's stand-in widget draws nothing, so it has no size to "see").
+  expect(await page.locator('.auth-sent .captcha').evaluate((el) => el.closest('[hidden]') === null)).toBe(true);
+  await page.locator('.auth-sent').getByRole('button', { name: 'Use a different email' }).click();
+  await expect(page.locator('.auth-form .captcha')).toHaveCount(1);
+});
