@@ -53,6 +53,8 @@ export interface SettingsHost {
   deleteAccount?: () => Promise<void>;
   /** No account: delete everything kept in this browser. */
   deleteLocalData?: () => Promise<void>;
+  /** What automatic palm detection has learned so far, in words. */
+  palmStatus: () => string;
   /** The display name and picture (the picture as an object URL, or null). */
   profile: () => { profile: Profile; url: string | null };
   changeProfile: (change: { name?: string; picture?: File | null }) => Promise<void>;
@@ -158,7 +160,11 @@ export class SettingsPanel {
     if (s === 'signin') this.securityPane?.refresh();
   }
 
+  /** Repaint the palm detection status (it changes as strokes are learned from). */
+  private refreshPalm: () => void = () => {};
+
   showContact(size: number, type: string, accepted: boolean) {
+    this.refreshPalm();
     const reason = accepted ? 'drawn' : 'ignored';
     this.contactReadout.textContent = `Last contact on page: ${size ? Math.round(size) + ' px' : 'size not reported'} (${type}, ${reason})`;
   }
@@ -512,16 +518,45 @@ export class SettingsPanel {
     );
     this.contactReadout = h('p', { class: 'readout' }, 'Last contact on page: none yet');
 
+    // Automatic (the default) learns the writing contact each time the app opens; Manual is the
+    // fixed limit with its calibration box.
+    const mode = h('select', { class: 'dlg-input' }, h('option', { value: 'auto' }, 'Automatic'), h('option', { value: 'manual' }, 'Manual')) as HTMLSelectElement;
+    const status = h('p', { class: 'muted palm-status' });
+    const manual = h(
+      'div',
+      { class: 'palm-manual' },
+      this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts, a pen tip as a small one. Write in the box below with your stylus to set the limit from it.'),
+      h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
+    );
+    const paint = () => {
+      mode.value = s().palmMode;
+      manual.hidden = s().palmMode !== 'manual';
+      status.hidden = s().palmMode === 'manual';
+      status.textContent = this.host.palmStatus();
+    };
+    mode.addEventListener('change', () => {
+      s().palmMode = mode.value === 'manual' ? 'manual' : 'auto';
+      this.host.changed();
+      paint();
+    });
+    this.refreshPalm = paint;
+
     this.addSync(() => {
       thr.value = String(s().touchThreshold);
       thrVal.textContent = s().touchThreshold + ' px';
+      paint();
     });
 
     return [
       this.card(
         'Palm rejection inside the unlocked strip',
-        this.row('Ignore touches larger than', h('div', { class: 'range' }, thr, thrVal), 'Palms register as big contacts, a pen tip as a small one. Write in the box below with your stylus to calibrate it.'),
-        h('div', { class: 'cal' }, pad, h('div', { class: 'cal-side' }, calOut, h('div', { class: 'cal-btns' }, useCal, resetCal))),
+        this.row(
+          'Palm detection',
+          mode,
+          'Automatic learns how big your writing contact is (a finger, a rubber-tipped stylus, a fine pen) from your first few strokes each time you open Lineboard, then treats touches much bigger than that as a resting palm. It adjusts again if someone writes with a bigger contact. Manual uses a fixed limit you set.',
+        ),
+        status,
+        manual,
         this.contactReadout,
       ),
       this.card('Active pens', penOnly),

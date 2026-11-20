@@ -66,7 +66,12 @@ export const DEFAULT_NOTEBOOK_NAME = 'My Notebook';
 export interface Settings {
   /** Strip height in page units (page width = 1000). */
   stripHeight: number;
-  /** Touches with a contact size (CSS px) above this are treated as palm. */
+  /**
+   * Palm detection: 'auto' learns the writing contact from the first strokes each time the app
+   * opens; 'manual' uses touchThreshold.
+   */
+  palmMode: 'auto' | 'manual';
+  /** Manual palm detection: touches with a contact size (CSS px) above this are treated as palm. */
   touchThreshold: number;
   /** If an active pen (pointerType "pen") is ever seen, ignore finger touches entirely. */
   penOnlyWhenPenSeen: boolean;
@@ -104,6 +109,7 @@ export const PAPERS: Paper[] = ['plain', 'lines', 'grid', 'dots'];
 
 export const DEFAULT_SETTINGS: Settings = {
   stripHeight: 90,
+  palmMode: 'auto',
   touchThreshold: 45,
   penOnlyWhenPenSeen: true,
   showLines: true,
@@ -132,6 +138,10 @@ export const DEFAULT_SETTINGS: Settings = {
 export function withDefaults(stored: Partial<Settings> & { freeMode?: boolean } | null | undefined): Settings {
   const { freeMode, ...rest } = stored ?? {};
   const out: Settings = { ...DEFAULT_SETTINGS, ...rest };
+  // Before automatic palm detection: someone who set their own limit keeps it (manual); everyone
+  // else gets automatic.
+  if (rest.palmMode !== 'auto' && rest.palmMode !== 'manual')
+    out.palmMode = typeof rest.touchThreshold === 'number' && rest.touchThreshold !== DEFAULT_SETTINGS.touchThreshold ? 'manual' : 'auto';
   if (!rest.mode && freeMode) out.mode = 'free';
   if (!BOARD_MODES.includes(out.mode)) out.mode = 'strips';
   if (!(SHAPES as readonly string[]).includes(out.shape)) out.shape = 'rectangle';

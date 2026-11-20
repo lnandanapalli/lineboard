@@ -154,6 +154,10 @@ test('settings are split into sections', async ({ page }) => {
   const tabs = page.locator('.settings-tab');
   await expect(tabs).toHaveText(['Account', 'Data controls', 'Sign-in & devices', 'Encryption', 'Page & writing', 'Stylus & palm', 'About']);
   await tabs.filter({ hasText: 'Stylus & palm' }).click();
+  // Automatic palm detection by default; the calibration pad comes with Manual.
+  await expect(page.getByRole('combobox', { name: 'Palm detection' })).toHaveValue('auto');
+  await expect(page.locator('.cal-pad')).toBeHidden();
+  await page.getByRole('combobox', { name: 'Palm detection' }).selectOption('manual');
   await expect(page.locator('.cal-pad')).toBeVisible();
   await expect(page.locator('.settings-pane[data-section="account"]')).toBeHidden();
   await tabs.filter({ hasText: 'Encryption' }).click();

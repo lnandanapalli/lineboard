@@ -5,6 +5,7 @@ import { shapeStrokes } from './shapes';
 import { cleanStyle, fontCss, isPlain, type TextStyle } from './textStyle';
 import { createTextBar, type TextFormatPatch } from './textBar';
 import { darkInk } from './theme';
+import { PalmLearner } from './palm';
 
 /** The page's own colours (paper, rules, locked strips...), for the light and the dark look. */
 const PALETTES = {
@@ -49,6 +50,10 @@ export interface BoardCallbacks {
   onSplitRatio?(ratio: number): void;
   /** Load a picture referenced by an 'image' stroke. */
   loadImage?(id: string, type: string): Promise<Blob>;
+  /** Several touches landed on a locked part of the page: say how to write there. */
+  onLockedTouches?(): void;
+  /** Automatic palm detection started learning again (the writing contact changed). */
+  onPalmRelearn?(): void;
 }
 
 interface Cached {
@@ -66,6 +71,8 @@ interface Cached {
 interface ActiveInput {
   pointerId: number;
   pointerType: string;
+  /** Touch contact size when it went down (CSS px), for automatic palm detection. */
+  size?: number;
   kind: 'draw' | 'erase' | 'shape' | 'lasso' | 'move' | 'scale';
   start: number;
   points: number[];
@@ -213,6 +220,19 @@ export class Board {
   private dividerArmed = false;
   tool: Tool = 'pen';
   private penSeen = false;
+  /** Automatic palm detection (Settings > Stylus & palm > Automatic): learns each time the app opens. */
+  readonly palm = new PalmLearner();
+  /** Touches refused because that part of the page is locked (for the "how to write here" hint). */
+  private lockedTaps: number[] = [];
+  /** Pointers down on the page now. */
+  private down = new Set<number>();
+  /** A lone touch refused as a palm, watched to see whether it moves like writing. */
+  private refusedTouch: { id: number; x: number; y: number; size: number } | null = null;
+
+  /** The biggest touch that still writes: learned, or the manual setting. */
+  private get palmLimit() {
+    return this.settings.palmMode === 'manual' ? this.settings.touchThreshold : this.palm.threshold;
+  }
 
   private active: ActiveInput | null = null;
   private marginDrag: MarginDrag | null = null;
@@ -638,10 +658,18 @@ export class Board {
 
   private bindInput() {
     const L = this.live;
-    L.addEventListener('pointerdown', (e) => this.onDown(e));
+    L.addEventListener('pointerdown', (e) => {
+      this.down.add(e.pointerId);
+      this.onDown(e);
+    });
     L.addEventListener('pointermove', (e) => this.onMove(e));
-    L.addEventListener('pointerup', (e) => this.onUp(e, false));
-    L.addEventListener('pointercancel', (e) => this.onUp(e, true));
+    const up = (e: PointerEvent, cancelled: boolean) => {
+      this.down.delete(e.pointerId);
+      if (this.refusedTouch?.id === e.pointerId) this.refusedTouch = null;
+      this.onUp(e, cancelled);
+    };
+    L.addEventListener('pointerup', (e) => up(e, false));
+    L.addEventListener('pointercancel', (e) => up(e, true));
     L.addEventListener('pointerleave', () => {
       if (this.eraserCursor && !this.active) {
         this.eraserCursor = null;
@@ -748,18 +776,26 @@ export class Board {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const size = contactSize(e);
     const pt = this.toLogical(e.clientX, e.clientY);
-    if (this.free && e.pointerType === 'touch' && size <= this.settings.touchThreshold && this.tryStartPan(e)) return;
+    if (this.free && e.pointerType === 'touch' && size <= this.palmLimit && this.tryStartPan(e)) return;
 
     let accept = true;
+    let palm = false;
     if (this.active) accept = false; // first-touch lock: one stroke at a time
     else if (e.pointerType === 'touch') {
       if (this.settings.penOnlyWhenPenSeen && this.penSeen) accept = false;
-      else if (size > this.settings.touchThreshold) accept = false; // too big -> palm
+      else if (size > this.palmLimit) {
+        accept = false; // too big -> palm
+        palm = true;
+      }
     }
-    if (accept && !this.isUnlockedAt(pt.y)) accept = false; // only unlocked strips take input
+    const locked = !this.isUnlockedAt(pt.y);
+    if (accept && locked) accept = false; // only unlocked strips take input
     if (!this.noteId || this.loading) accept = false; // no note open yet, or its ink still loading
     this.cb.onContact(size, e.pointerType, accept);
-    if (!accept) return;
+    if (!accept) {
+      this.refused(e, size, palm, locked);
+      return;
+    }
 
     if (this.tool === 'text') {
       e.preventDefault();
@@ -824,6 +860,7 @@ export class Board {
       points: [],
       erased: [],
       raw: null,
+      size,
     };
     if (this.active.kind === 'shape') {
       this.active.shape = { x0: pt.x, y0: pt.y, x1: pt.x, y1: pt.y, constrain: e.shiftKey };
@@ -833,7 +870,43 @@ export class Board {
     this.addPoint(pt.x, pt.y, this.pressureOf(e));
   }
 
+  /**
+   * A press that did not write. Two things people run into, explained instead of looking broken:
+   * a lone touch in the writing area refused as a palm (automatic detection learns again: someone
+   * is writing with a bigger contact than before), and taps on a locked part of the page.
+   */
+  private refused(e: PointerEvent, size: number, palm: boolean, locked: boolean) {
+    if (!this.noteId || this.loading || this.active) return;
+    if (palm && !locked && this.down.size === 1 && this.settings.palmMode !== 'manual') {
+      const p = clientToApp(e.clientX, e.clientY);
+      this.refusedTouch = { id: e.pointerId, x: p.x, y: p.y, size };
+      return;
+    }
+    if (locked && !palm && !(e.pointerType === 'touch' && this.settings.penOnlyWhenPenSeen && this.penSeen)) {
+      const now = Date.now();
+      this.lockedTaps = [...this.lockedTaps.filter((t) => now - t < 8000), now];
+      if (this.lockedTaps.length >= 3) {
+        this.lockedTaps = [];
+        this.cb.onLockedTouches?.();
+      }
+    }
+  }
+
   private onMove(e: PointerEvent) {
+    const rt = this.refusedTouch;
+    if (rt && rt.id === e.pointerId) {
+      // A refused "palm" that moves like writing, alone on the screen: someone writing with a
+      // bigger contact than learned. A few of those and detection adjusts to them.
+      if (this.down.size !== 1) this.refusedTouch = null;
+      else {
+        const p = clientToApp(e.clientX, e.clientY);
+        if (Math.hypot(p.x - rt.x, p.y - rt.y) >= 25) {
+          this.refusedTouch = null;
+          if (this.palm.missed(rt.size)) this.cb.onPalmRelearn?.();
+        }
+      }
+      return;
+    }
     const pd = this.preview?.drag;
     if (this.preview) {
       if (pd?.pointerId === e.pointerId) {
@@ -865,7 +938,7 @@ export class Board {
     const list = events.length ? events : [e];
     for (const ev of list) {
       // A contact that grows past the limit mid-stroke is a palm settling down: drop the stroke.
-      if (a.pointerType === 'touch' && contactSize(ev) > this.settings.touchThreshold) {
+      if (a.pointerType === 'touch' && contactSize(ev) > this.palmLimit) {
         this.cb.onContact(contactSize(ev), 'touch', false);
         this.cancelActive();
         return;
@@ -1696,6 +1769,8 @@ export class Board {
       return;
     }
     if (!a.points.length) return;
+    // A real stroke written by touch teaches automatic palm detection how big this writer's contact is.
+    if (a.kind === 'draw' && a.pointerType === 'touch' && a.size !== undefined && a.points.length >= 12 && performance.now() - a.start >= 60) this.palm.record(a.size);
     // Finish where the pen actually lifted (the stabilizer trails slightly behind it).
     if (a.raw && this.settings.smoothing > 0 && a.points.length >= 3) {
       const [x, y, p] = a.raw;

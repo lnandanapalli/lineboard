@@ -19,6 +19,8 @@ export interface MockDb {
   versions?: Row[];
   /** Set to make the database look as if schema.sql predates version history. */
   noHistory?: boolean;
+  /** Auth emails sent (sign-up confirmation, links, resets): address and time, like Supabase's 60 s wait. */
+  emails?: { to: string; at: number; kind: string }[];
   /** The auth user's user_metadata (display name, picture version). */
   meta?: Record<string, unknown>;
   /** Set to make the database look as if schema.sql predates stars and the archive. */
@@ -284,6 +286,18 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       if (method === 'DELETE') db.passkeys = db.passkeys.filter((x) => x !== p);
       if (method === 'PATCH' && p) p.friendly_name = body().friendly_name;
       return json(route, 200, p ?? null);
+    }
+    // Emails (sign-up confirmation, sign-in link, password reset, resend): one per address per 60 s,
+    // refused with Supabase's own message and the seconds left.
+    if (['/auth/v1/signup', '/auth/v1/otp', '/auth/v1/recover', '/auth/v1/resend'].includes(path) && method === 'POST') {
+      const to = String(body()?.email ?? '').toLowerCase();
+      db.emails ??= [];
+      const last = db.emails.filter((x) => x.to === to).pop();
+      const left = last ? Math.ceil(60 - (Date.now() - last.at) / 1000) : 0;
+      if (left > 0) return authError(route, 429, 'over_email_send_rate_limit', `For security purposes, you can only request this after ${left} seconds.`);
+      db.emails.push({ to, at: Date.now(), kind: path.split('/').pop()! });
+      if (path === '/auth/v1/signup') return json(route, 200, { ...user(), email: to, confirmation_sent_at: new Date().toISOString() });
+      return json(route, 200, {});
     }
     if (path.startsWith('/auth/v1/')) return route.fulfill({ status: 204, headers: cors });
 

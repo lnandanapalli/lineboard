@@ -34,7 +34,8 @@ test('signup submits to signup, explains email confirmation and opens policies w
   const request = page.waitForRequest(`${MOCK_URL}/auth/v1/signup**`);
   await page.getByRole('button', { name: 'Create account', exact: true }).click();
   expect((await request).postDataJSON().email).toBe('new@example.com');
-  await expect(page.getByRole('status')).toContainText('Check your email');
+  await expect(page.locator('.auth-sent')).toContainText('Check your email');
+  await expect(page.locator('.auth-sent')).toContainText('new@example.com');
 });
 
 test('login errors are actionable and password reset and email-link flows work', async ({ page }) => {
@@ -50,13 +51,14 @@ test('login errors are actionable and password reset and email-link flows work',
   await page.getByRole('button', { name: 'Forgot password?' }).click();
   await expect(page.getByLabel('Password', { exact: true })).toBeHidden();
   await page.getByRole('button', { name: 'Send reset link' }).click();
-  await expect(page.getByRole('status')).toHaveText('Password reset link sent.');
+  await expect(page.locator('.auth-sent')).toContainText('choose a new password');
+  await page.getByRole('button', { name: 'Use a different email' }).click();
   await page.getByRole('button', { name: 'Back to sign in' }).click();
   await page.getByRole('button', { name: 'Email me a sign-in link' }).click();
   const request = page.waitForRequest(`${MOCK_URL}/auth/v1/otp**`);
   await page.getByRole('button', { name: 'Send sign-in link' }).click();
   expect((await request).postDataJSON().create_user).toBe(false);
-  await expect(page.getByRole('status')).toContainText('Sign-in link sent');
+  await expect(page.locator('.auth-sent')).toContainText('Open it to sign in');
 });
 
 test('local homepage and policies are readable on mobile, with a working notebook entry', async ({ page }) => {
