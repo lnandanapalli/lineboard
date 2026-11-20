@@ -778,8 +778,9 @@ export class App {
     this.sizeBtn.innerHTML = '';
     const dot = h('i', { class: 'size-dot' });
     dot.style.width = dot.style.height = `${px}px`;
+    // As the ink shows on the page (in dark mode a black pen shows light, so the dot stays visible).
     if (this.sizeTool === 'highlighter') dot.style.background = this.settings.highlighterColor;
-    else dot.style.background = this.settings.penColor;
+    else dot.style.background = this.board.shownColor(this.settings.penColor);
     this.sizeBtn.append(dot);
     const label = `${this.sizeName} size: ${w}`;
     this.sizeBtn.setAttribute('aria-label', label);
@@ -794,7 +795,7 @@ export class App {
     const tool = this.sizeTool;
     const cfg = SIZES[tool];
     const isHL = tool === 'highlighter';
-    const color = isHL ? this.settings.highlighterColor : this.settings.penColor;
+    const color = isHL ? this.settings.highlighterColor : this.board.shownColor(this.settings.penColor);
     const slider = h('input', { type: 'range', min: String(cfg.min), max: String(cfg.max), step: String(cfg.step), 'aria-label': `${this.sizeName} size` }) as HTMLInputElement;
     slider.value = String(this.size);
     const value = h('output', { class: 'size-value' });
