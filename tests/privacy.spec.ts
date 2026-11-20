@@ -99,7 +99,10 @@ test('without an account, "Delete everything on this device" removes the notes a
   await expectStrokes(page, 2);
   await openAccountSettings(page);
   await page.getByRole('button', { name: 'Delete everything on this device', exact: true }).click();
+  // The app reloads once everything is deleted: wait for that page, not the old one still showing.
+  const reloaded = page.waitForEvent('load');
   await page.locator('dialog[open]').getByRole('button', { name: 'Delete everything', exact: true }).click();
+  await reloaded;
   await page.locator('.canvas-area canvas.live').waitFor();
   await expectStrokes(page, 0);
   // The picture files went too (the deletion finished before the page reloaded).
