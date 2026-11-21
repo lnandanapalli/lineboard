@@ -314,6 +314,7 @@ export class App {
 
     this.undoBtn = this.iconBtn(icons.undo, withShortcut('Undo', 'Mod+Z'), () => this.undo());
     this.redoBtn = this.iconBtn(icons.redo, withShortcut('Redo', isApple ? 'Mod+Shift+Z' : 'Mod+Y'), () => this.redo());
+    const clearBtn = this.iconBtn(icons.clearPage, 'Clear page', () => void this.clearPage(), 'clear-btn');
 
     this.modeMenu = dropdown<BoardMode>({
       name: 'Mode',
@@ -341,7 +342,7 @@ export class App {
       this.swatches,
       this.sizeBtn,
       h('div', { class: 'sep' }),
-      h('div', { class: 'group' }, this.undoBtn, this.redoBtn),
+      h('div', { class: 'group' }, this.undoBtn, this.redoBtn, clearBtn),
       h('div', { class: 'sep' }),
       this.modeMenu.el,
       (this.stripControls = h(
@@ -1035,6 +1036,30 @@ export class App {
     this.apply(a, true);
     this.undoStack.push(a);
     this.renderUndo();
+  }
+
+  /**
+   * Erase the whole page (ink, text and pictures) after asking. It is one undo step, and the page as
+   * it was is saved to version history first, so it can always be brought back.
+   */
+  private async clearPage() {
+    const note = this.current;
+    if (!note || this.loadedNote !== note.id || this.board.previewing) return;
+    if (this.board.isEmpty()) return toast('This page is already empty.');
+    const ok = await dialog({
+      title: 'Clear this page?',
+      message: 'Everything on the page will be erased: writing, shapes, text and pictures. You can undo this, and the page as it is now stays in version history.',
+      ok: 'Clear page',
+      danger: true,
+    });
+    // The note may have changed while the dialog was open.
+    if (!ok || this.current?.id !== note.id || this.loadedNote !== note.id || this.board.previewing) return;
+    const strokes = this.board.allStrokes();
+    if (!strokes.length) return;
+    // Save what is there now as a version (if it is not in history yet) before it goes.
+    this.history.leave(note.id, strokes);
+    this.board.removeStrokes(strokes.map((s) => s.id));
+    this.record({ type: 'remove', strokes });
   }
 
   private renderUndo() {

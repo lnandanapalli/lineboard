@@ -380,3 +380,38 @@ test('old unnamed versions thin out; named ones and the newest are kept', () => 
   const many = Array.from({ length: 10 }, (_, i) => at(i * 60_000, null, i));
   expect(toPrune(many, now, 4).map((v) => v.id)).toEqual(many.slice(4).map((v) => v.id));
 });
+
+test('Clear page erases everything after asking; it is one undo step and the page before stays in history', async ({ page }) => {
+  const { cdp, geo } = await setup(page);
+  const first = (await notes(page))[0];
+  const saved = async () => (await notes(page)).find((n) => n.id === first.id)!.strokes.length;
+  await draw(cdp, geo, 50);
+  await draw(cdp, geo, 300);
+  await expect.poll(saved).toBe(2);
+  expect((await localVersions(page)).filter((v) => v.note_id === first.id)).toHaveLength(0);
+
+  const clear = page.getByRole('button', { name: 'Clear page' });
+  const dlg = page.locator('dialog[open]');
+  // Cancelling keeps everything.
+  await clear.click();
+  await expect(dlg).toContainText('Clear this page?');
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(200);
+  expect(await saved()).toBe(2);
+
+  await clear.click();
+  await dlg.getByRole('button', { name: 'Clear page' }).click();
+  await expect.poll(saved).toBe(0);
+  // The page as it was is now a version.
+  await expect.poll(async () => (await localVersions(page)).filter((v) => v.note_id === first.id).length).toBe(1);
+
+  // One undo brings it all back.
+  await page.getByRole('button', { name: /^Undo/ }).click();
+  await expect.poll(saved).toBe(2);
+
+  // An empty page has nothing to clear: no question asked.
+  await page.getByRole('button', { name: /^Redo/ }).click();
+  await expect.poll(saved).toBe(0);
+  await clear.click();
+  await expect(dlg).toHaveCount(0);
+});
