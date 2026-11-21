@@ -1,11 +1,12 @@
 name: CI
 
+# Pull requests run these checks here. Pushes to main (merged pull requests and direct pushes alike)
+# and version tags run them inside the release workflow, on the exact commit it is about to publish,
+# so they run once per commit and nothing is published or deployed without them.
 on:
-  push:
-    branches: [main]
   pull_request:
-  # The release workflow runs these same checks on the exact commit it is about to publish.
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
