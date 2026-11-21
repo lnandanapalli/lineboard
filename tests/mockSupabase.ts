@@ -27,6 +27,10 @@ export interface MockDb {
   noFlags?: boolean;
   /** Set to make the database look as if schema.sql predates the trash. */
   noTrash?: boolean;
+  /** Most notebooks an account may have (the trash not counted), like enforce_row_limits. */
+  notebookLimit?: number;
+  /** Like a database whose limit predates the trash: the trash counts too. */
+  notebookLimitCountsTrash?: boolean;
   settings: Row | null;
   keys: Row | null;
   /** Auth server state: signed-in sessions, MFA factors, passkeys, password changes. */
@@ -415,6 +419,10 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
           if (!allowed(table, row)) return denied(route);
           const fk = badNotebook(row, existing);
           if (fk) return json(route, 409, { code: '23503', message: fk });
+          if (table === 'notebooks' && !existing && db.notebookLimit != null && (db.notebookLimitCountsTrash || !String(row.id).match(/^.{14}8/))) {
+            if (rows().filter((b) => db.notebookLimitCountsTrash || !String(b.id).match(/^.{14}8/)).length + 1 > db.notebookLimit)
+              return json(route, 400, { code: '23514', message: `Lineboard limit: an account can have at most ${db.notebookLimit} notebooks` });
+          }
           set(rows().filter((b) => b.id !== row.id).concat(row));
           saved.push(row);
         }

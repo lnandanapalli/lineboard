@@ -617,3 +617,33 @@ test('signed in: Empty trash only deletes what is still in the trash', async ({ 
   expect(db.notes.map((n) => n.title)).toContain('Restored elsewhere');
   expect(db.notes.map((n) => n.title)).not.toContain('Old one');
 });
+
+test('signed in at the notebook limit: the trash does not count; if it cannot be made, the library still loads', async ({ page }) => {
+  const db = await mockSupabase(page);
+  const now = new Date().toISOString();
+  db.notebooks.push({ id: USER_ID, user_id: USER_ID, name: 'My Notebook', created_at: now, updated_at: now });
+  db.notes.push({ id: 'aaaaaaaa-0000-4000-8000-000000000001', user_id: USER_ID, title: 'Full house', notebook_id: USER_ID, created_at: now, updated_at: now });
+  db.notebookLimit = 1;
+  // A database whose limit still counts the trash: making it fails, but nothing else does.
+  db.notebookLimitCountsTrash = true;
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill(db.password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await attachBoard(page);
+  await expect(page.locator('.title-input')).toHaveValue('Full house');
+  await openSidebar(page);
+  await expect(noteRow(page, 'Full house')).toHaveCount(1);
+  await expect(page.locator('.trash-btn')).toBeHidden();
+  await rowAction(page, noteRow(page, 'Full house'), 'Delete');
+  await expect(dlg(page).locator('p')).toContainText('deleted permanently');
+  await dlg(page).getByRole('button', { name: 'Cancel' }).click();
+
+  // With the updated limit the trash is made, even at the limit.
+  db.notebookLimitCountsTrash = false;
+  await page.reload();
+  await attachBoard(page);
+  await openSidebar(page);
+  await expect(page.locator('.trash-btn')).toBeVisible();
+  expect(db.notebooks.map((b) => b.name).sort()).toEqual(['My Notebook', 'Trash']);
+});

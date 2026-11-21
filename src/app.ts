@@ -273,7 +273,16 @@ export class App {
       // Every notebook in the trash (on another device): there must be somewhere to write.
       if (!books.some((b) => b.id !== trashId && !b.deleted_at)) books = [...books, await this.store.createNotebook(DEFAULT_NOTEBOOK_NAME)];
       this.trashOn = await this.trashWorks();
-      if (!books.some((b) => b.id === trashId) && this.trashOn) books = [...books, await this.store.ensureTrash()];
+      if (!books.some((b) => b.id === trashId) && this.trashOn) {
+        // Without a trash (it could not be made, say the account is at a limit), the library still
+        // loads, and deleting asks and deletes for good, as before the trash existed.
+        try {
+          books = [...books, await this.store.ensureTrash()];
+        } catch (e) {
+          console.warn('No trash', e);
+          this.trashOn = false;
+        }
+      }
       const notes = await this.store.listNotes();
       this.setLibrary(books, notes);
       // Every notebook archived (on another device): bring one back, there must be somewhere to write.

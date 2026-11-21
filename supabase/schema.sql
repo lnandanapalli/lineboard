@@ -362,8 +362,10 @@ language plpgsql security definer set search_path = '' as $$
 declare bad text;
 begin
   if tg_table_name = 'notebooks' then
+    -- The trash (the user's id with its version digit set to 8, made by the app) does not count.
     select format('%s notebooks', 500) into bad from (select distinct user_id from added) a
-     where (select count(*) from public.notebooks b where b.user_id = a.user_id) > 500 limit 1;
+     where (select count(*) from public.notebooks b
+             where b.user_id = a.user_id and b.id <> overlay(a.user_id::text placing '8' from 15 for 1)::uuid) > 500 limit 1;
   elsif tg_table_name = 'notes' then
     select format('%s notes', 20000) into bad from (select distinct user_id from added) a
      where (select count(*) from public.notes n where n.user_id = a.user_id) > 20000 limit 1;
