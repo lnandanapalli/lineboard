@@ -48,6 +48,11 @@ alter table public.notes     add column if not exists archived_at timestamptz;
 alter table public.notebooks add column if not exists starred boolean not null default false;
 alter table public.notebooks add column if not exists archived_at timestamptz;
 
+-- The trash: a deleted note or notebook is kept (hidden) with deleted_at set, so it can be restored
+-- from Settings > Data controls. The app deletes it for good after 30 days, or when asked.
+alter table public.notes     add column if not exists deleted_at timestamptz;
+alter table public.notebooks add column if not exists deleted_at timestamptz;
+
 -- ------------- End-to-end encryption (optional, per user) -------------
 -- When a user turns encryption on, the app encrypts titles, names and ink on the device. Encrypted
 -- rows keep the ciphertext in *_enc columns and leave the plaintext columns empty (or null).

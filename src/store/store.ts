@@ -46,6 +46,8 @@ export interface Store {
   setNotebookFlags(id: string, flags: Flags): Promise<void>;
   /** False when the cloud database predates stars and the archive (schema not updated yet). */
   supportsFlags?(): Promise<boolean>;
+  /** False when the cloud database predates the trash (schema not updated yet): deleting is then permanent. */
+  supportsTrash?(): Promise<boolean>;
   /** A note's versions, newest first (without their content). */
   listVersions(noteId: string): Promise<VersionMeta[]>;
   /** One version's strokes. */

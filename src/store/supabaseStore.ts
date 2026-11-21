@@ -99,10 +99,10 @@ export class SupabaseStore implements Store {
     return this.vault?.supported !== false;
   }
   private bookCols() {
-    return 'id,name,created_at,updated_at' + (this.encCols ? ',name_enc' : '') + (this.flagCols ? ',starred,archived_at' : '');
+    return 'id,name,created_at,updated_at' + (this.encCols ? ',name_enc' : '') + (this.flagCols ? ',starred,archived_at' : '') + (this.trashCols ? ',deleted_at' : '');
   }
   private noteCols() {
-    return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '') + (this.flagCols ? ',starred,archived_at' : '');
+    return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '') + (this.flagCols ? ',starred,archived_at' : '') + (this.trashCols ? ',deleted_at' : '');
   }
 
   /** Whether the database has the starred / archived_at columns (stars and the archive). */
@@ -118,11 +118,30 @@ export class SupabaseStore implements Store {
     })();
     return this.flagProbe;
   }
-  private flagsOf(r: { starred?: boolean | null; archived_at?: string | null }): Flags {
-    return { ...(r.starred ? { starred: true } : {}), ...(r.archived_at ? { archived_at: r.archived_at } : {}) };
+  /** Whether the database has the deleted_at columns (the trash). */
+  private trashCols = false;
+  private trashProbe: Promise<boolean> | null = null;
+  supportsTrash(): Promise<boolean> {
+    this.trashProbe ??= (async () => {
+      const { error } = await this.sb.from('notes').select('deleted_at').limit(1);
+      const missing = !!error && (error.code === '42703' || /deleted_at/.test(error.message ?? ''));
+      if (error && !missing) this.trashProbe = null; // offline or similar: ask again next time
+      this.trashCols = !missing;
+      return this.trashCols;
+    })();
+    return this.trashProbe;
+  }
+  /** Both optional column sets, checked once before notes and notebooks are read or written. */
+  private probeCols() {
+    return Promise.all([this.supportsFlags(), this.supportsTrash()]);
+  }
+  private flagsOf(r: { starred?: boolean | null; archived_at?: string | null; deleted_at?: string | null }): Flags {
+    return { ...(r.starred ? { starred: true } : {}), ...(r.archived_at ? { archived_at: r.archived_at } : {}), ...(r.deleted_at ? { deleted_at: r.deleted_at } : {}) };
   }
   private async writeFlags(table: 'notes' | 'notebooks', id: string, flags: Flags) {
-    if (!(await this.supportsFlags())) throw new StoreError('Stars and the archive need a database update: the site operator re-runs supabase/schema.sql.', true);
+    if ('deleted_at' in flags) {
+      if (!(await this.supportsTrash())) throw new StoreError('The trash needs a database update: the site operator re-runs supabase/schema.sql.', true);
+    } else if (!(await this.supportsFlags())) throw new StoreError('Stars and the archive need a database update: the site operator re-runs supabase/schema.sql.', true);
     const { error } = await this.sb.from(table).update(flags).eq('id', id);
     check(error);
   }
@@ -250,7 +269,7 @@ export class SupabaseStore implements Store {
   // ----------------------------- notebooks -----------------------------
 
   async listNotebooks(): Promise<Notebook[]> {
-    await this.supportsFlags();
+    await this.probeCols();
     const { data, error } = await this.sb.from('notebooks').select(this.bookCols()).order('created_at', { ascending: true });
     check(error);
     return Promise.all(((data ?? []) as unknown as BookRow[]).map((r) => this.decodeBook(r)));
@@ -270,7 +289,7 @@ export class SupabaseStore implements Store {
   }
 
   async createNotebook(name: string): Promise<Notebook> {
-    await this.supportsFlags();
+    await this.probeCols();
     const id = uuid();
     let row: BookRow | null = null;
     await this.write(async (key) => {
@@ -303,7 +322,7 @@ export class SupabaseStore implements Store {
   /** Insert notebooks keeping their ids (used to move notebooks made without an account). Idempotent. */
   async importNotebooks(notebooks: Notebook[]) {
     if (!notebooks.length) return;
-    await this.supportsFlags();
+    await this.probeCols();
     await this.write(async (key) => {
       const rows = await Promise.all(
         notebooks.map(async (b) => ({
@@ -313,6 +332,7 @@ export class SupabaseStore implements Store {
           created_at: b.created_at,
           updated_at: b.updated_at,
           ...(this.flagCols ? { starred: !!b.starred, archived_at: b.archived_at ?? null } : {}),
+          ...(this.trashCols ? { deleted_at: b.deleted_at ?? null } : {}),
         })),
       );
       const { error } = await this.sb.from('notebooks').upsert(rows, { onConflict: 'id' });
@@ -330,7 +350,7 @@ export class SupabaseStore implements Store {
   }
 
   async listNotes(): Promise<NoteMeta[]> {
-    await this.supportsFlags();
+    await this.probeCols();
     // Page through: the API returns at most 1000 rows per request, and an account may have more notes.
     const rows: NoteRow[] = [];
     for (let from = 0; ; from += PAGE) {
@@ -344,7 +364,7 @@ export class SupabaseStore implements Store {
   }
 
   async createNote(title: string, notebookId: string): Promise<NoteMeta> {
-    await this.supportsFlags();
+    await this.probeCols();
     const id = uuid();
     let row: NoteRow | null = null;
     await this.write(async (key) => {
@@ -362,7 +382,7 @@ export class SupabaseStore implements Store {
   /** Insert or update notes keeping their ids (used to move notes made without an account). Idempotent. */
   async importNotes(notes: NoteMeta[]) {
     if (!notes.length) return;
-    await this.supportsFlags();
+    await this.probeCols();
     await this.write(async (key) => {
       const rows = await Promise.all(
         notes.map(async (n) => ({
@@ -373,6 +393,7 @@ export class SupabaseStore implements Store {
           created_at: n.created_at,
           updated_at: n.updated_at,
           ...(this.flagCols ? { starred: !!n.starred, archived_at: n.archived_at ?? null } : {}),
+          ...(this.trashCols ? { deleted_at: n.deleted_at ?? null } : {}),
         })),
       );
       const { error } = await this.sb.from('notes').upsert(rows, { onConflict: 'id' });

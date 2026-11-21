@@ -25,6 +25,8 @@ export interface MockDb {
   meta?: Record<string, unknown>;
   /** Set to make the database look as if schema.sql predates stars and the archive. */
   noFlags?: boolean;
+  /** Set to make the database look as if schema.sql predates the trash. */
+  noTrash?: boolean;
   settings: Row | null;
   keys: Row | null;
   /** Auth server state: signed-in sessions, MFA factors, passkeys, password changes. */
@@ -378,6 +380,8 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     // ---- notebooks / notes ----
     if (db.noFlags && (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') && /starred|archived_at/.test((url.searchParams.get('select') ?? '') + (req.postData() ?? '')))
       return json(route, 400, { code: '42703', message: `column ${path.slice(9)}.starred does not exist` });
+    if (db.noTrash && (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') && /deleted_at/.test((url.searchParams.get('select') ?? '') + (req.postData() ?? '')))
+      return json(route, 400, { code: '42703', message: `column ${path.slice(9)}.deleted_at does not exist` });
     if (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') {
       const table = path.endsWith('notebooks') ? 'notebooks' : 'notes';
       const rows = () => db[table];

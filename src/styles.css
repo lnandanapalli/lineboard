@@ -742,6 +742,7 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 .archived-name small { color: var(--muted); font-size: 12px; }
 .archived-kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 .btn.danger-text { color: var(--danger); }
+.trash-empty { margin: 10px 0 0; justify-content: flex-end; }
 
 /* ----- Search ----- */
 .search-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); cursor: pointer; font: inherit; text-align: left; }

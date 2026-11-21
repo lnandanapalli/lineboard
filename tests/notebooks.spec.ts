@@ -83,7 +83,7 @@ test('a note can be moved to another notebook', async ({ page }) => {
   await expect(page.locator('.note-list .note-title', { hasText: 'Move me' })).toHaveCount(0);
 });
 
-test('deleting a notebook deletes its notes; deleting the last one leaves a fresh "My Notebook"', async ({ page }) => {
+test('deleting a notebook moves it and its notes to the trash; deleting the last one leaves a fresh "My Notebook"', async ({ page }) => {
   const { cdp, geo } = await setup(page);
   await openSidebar(page);
   await newNotebook(page, 'Scratch');
@@ -95,16 +95,19 @@ test('deleting a notebook deletes its notes; deleting the last one leaves a fres
   await notebookButton(page).click();
   await page.locator('.book-list li', { hasText: 'Scratch' }).locator('.more-btn').click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
-  await expect(page.locator('dialog[open] p')).toContainText('its 1 note');
-  await answerDialog(page, 'Delete notebook');
+  await expect(page.locator('#toast')).toContainText('Moved "Scratch" and its notes to the trash');
   await expect(notebookButton(page)).toContainText('My Notebook');
-  await expectStrokes(page, 0);
+  await expectStrokes(page, 1); // kept in the trash
+  const books = () => page.evaluate(() => JSON.parse(localStorage.getItem('lb-local-notebooks') ?? '[]') as { name: string; deleted_at?: string }[]);
+  expect((await books()).find((b) => b.name === 'Scratch')?.deleted_at).toBeTruthy();
 
   await openNotebookList(page);
+  await expect(page.locator('.book-list li', { hasText: 'Scratch' })).toHaveCount(0);
   await page.locator('.book-list li', { hasText: 'My Notebook' }).locator('.more-btn').click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
-  await answerDialog(page, 'Delete notebook');
+  await expect(page.locator('#toast')).toContainText('Moved "My Notebook"');
   await expect(notebookButton(page)).toContainText('My Notebook');
+  await expect.poll(async () => (await books()).filter((b) => !b.deleted_at).length).toBe(1);
   await expect(noteTitles(page)).toHaveCount(1);
 });
 
