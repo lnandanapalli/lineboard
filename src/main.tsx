@@ -5,6 +5,7 @@ import { useScreen, type Screen } from './ui/screen';
 import { HomePage, PolicyPage } from './ui/Public';
 import { AuthScreen, NewPasswordScreen } from './ui/Auth';
 import { BusyScreen, MoveNotesScreen, StorageNotice } from './ui/Startup';
+import { AppScreen } from './ui/AppScreen';
 
 let booted = false;
 
@@ -22,6 +23,8 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <MoveNotesScreen count={screen.count} answer={screen.answer} />;
     case 'busy':
       return <BusyScreen text={screen.text} />;
+    case 'app':
+      return <AppScreen app={screen.app} />;
   }
 }
 
@@ -37,7 +40,10 @@ function Root() {
     // Once per page (StrictMode runs effects twice in development).
     if (booted || !host.current) return;
     booted = true;
-    boot(host.current);
+    // Just after this first render: boot() changes screens at once (flushSync), which React does
+    // not allow from inside its own render.
+    const el = host.current;
+    queueMicrotask(() => boot(el));
   }, []);
   return (
     <>

@@ -3,23 +3,22 @@ import { Board, PAGE_W, TEXT_FONT } from './board';
 import { SettingsPanel } from './settings';
 import type { AccountSecurity } from './account';
 import { icons } from './icons';
-import { logo } from './brand';
 import { GoneError, type Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
 import { LINE_STYLE_NAMES, LINE_STYLES, LINE_WIDTHS, SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
-import { IMAGE_TYPES, prepareImage } from './images';
+import { prepareImage } from './images';
 import { withDefaults, type AppUser, type BoardMode, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool, DEFAULT_NOTEBOOK_NAME, TRASH_DAYS } from './types';
 import { actionMenu, closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
-import { isApple, withShortcut } from './keys';
-import { appRect, appViewport, attachOrientation, clientToApp, detachOrientation, orientation } from './orientation';
-import { attachNameTips } from './nameTip';
+import { withShortcut } from './keys';
+import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
+import { createStore } from 'zustand/vanilla';
 import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
 import { openSearch } from './searchUi';
-import { avatar, EMPTY_PROFILE, squarePicture, type Profile } from './profile';
+import { EMPTY_PROFILE, squarePicture, type Profile } from './profile';
 import { applyTheme, clearTheme, isDark, onThemeChange } from './theme';
 import { clip, MAX_IMPORT_FILE, MAX_NOTE_TITLE, MAX_NOTEBOOK_NAME, MAX_PICTURES_AT_ONCE } from './limits';
 import { LocalStore } from './store/localStore';
@@ -49,9 +48,32 @@ export interface AppOptions {
   onAccountDeleted?: () => Promise<void>;
 }
 
-/** Said when an export could not include every picture. */
+/**
+ * What the React views of the app (ui/AppScreen.tsx) show, in slices: each part of the screen
+ * re-renders only when its own slice changes (drawing a stroke touches `undo`, not the note list).
+ * The counters only say "changed"; the data itself is read from the App.
+ */
+export interface AppView {
+  tools: number;
+  mode: number;
+  undo: number;
+  status: number;
+  notes: number;
+  profile: number;
+  title: string;
+  sidebarOpen: boolean;
+  bookPanelOpen: boolean;
+  /** Looking at version history: the toolbar and sidebar are out of reach. */
+  historyOpen: boolean;
+  /** The version history panel is open (its toolbar button shows as pressed). */
+  historyPanel: boolean;
+  /** The rotate button shows (the app is turned by hand). */
+  rotateShown: boolean;
+}
+type Slice = 'tools' | 'mode' | 'undo' | 'status' | 'notes' | 'profile';
+
 /** Is a colour light (dark marks show better on it)? Relative luminance, as in WCAG. */
-function isLight(color: string) {
+export function isLight(color: string) {
   // The whole value: #rgb or #rrggbb, with an optional alpha (#rgba, #rrggbbaa) that is ignored.
   const m = /^#(?:([0-9a-f]{6})(?:[0-9a-f]{2})?|([0-9a-f]{3})[0-9a-f]?)$/i.exec(color);
   if (!m) return true;
@@ -63,6 +85,7 @@ function isLight(color: string) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4;
 }
 
+/** Said when an export could not include every picture. */
 const missingNote = (n: number) =>
   `Downloaded, but ${n === 1 ? '1 picture' : `${n} pictures`} could not be read and ${n === 1 ? 'is' : 'are'} not in the file. Check your connection and export again.`;
 
@@ -91,36 +114,41 @@ export class App {
   private loadToken = 0;
   private abort = new AbortController();
 
-  // DOM
-  private root: HTMLElement;
-  private sidebar!: HTMLElement;
-  private noteList!: HTMLElement;
-  private bookButton!: HTMLButtonElement;
-  private bookPanel!: HTMLElement;
-  private titleInput!: HTMLInputElement;
-  private toolBtns = new Map<Tool, HTMLButtonElement>();
-  private swatches!: HTMLElement;
-  private sizeBtn!: HTMLButtonElement;
-  private undoBtn!: HTMLButtonElement;
-  private redoBtn!: HTMLButtonElement;
-  private modeMenu!: Dropdown<BoardMode>;
-  private shapeBtn!: HTMLButtonElement;
-  private shapeMain!: HTMLButtonElement;
-  private shapeTool!: HTMLElement;
-  private selectMenu!: Dropdown<'lasso' | 'rect'>;
+  /** What the React views show (see AppView). */
+  readonly view = createStore<AppView>(() => ({
+    tools: 0,
+    mode: 0,
+    undo: 0,
+    status: 0,
+    notes: 0,
+    profile: 0,
+    title: '',
+    sidebarOpen: false,
+    bookPanelOpen: false,
+    historyOpen: false,
+    historyPanel: false,
+    rotateShown: false,
+  }));
+  private bump(...slices: Slice[]) {
+    this.view.setState((v) => Object.fromEntries(slices.map((k) => [k, v[k] + 1])) as Partial<AppView>);
+  }
+  private setTitle(title: string) {
+    this.view.setState({ title });
+  }
+
+  // Parts still drawn outside React: the board (with its first-visit hint) and two toolbar menus.
+  /** The board's element, placed on the page by React (ui/AppScreen.tsx). */
+  readonly boardHost: HTMLElement;
+  private hint!: HTMLElement;
+  readonly modeMenu: Dropdown<BoardMode>;
+  readonly selectMenu: Dropdown<'lasso' | 'rect'>;
+  /** The app's element and its main area, once React has put them on the page (see attach). */
+  private appEl: HTMLElement | null = null;
+  private mainEl: HTMLElement | null = null;
   /** The last strip mode, so F (free on/off) returns to it. */
   private lastStripMode: BoardMode = 'strips';
-  private stripControls!: HTMLElement;
-  private status!: HTMLElement;
-  private rotateBtn!: HTMLButtonElement;
-  private appEl!: HTMLElement;
-  private settingsPanel!: SettingsPanel;
-  /** At the bottom of the sidebar: opens the trash (Settings > Data controls). */
-  private trashBtn!: HTMLButtonElement;
-  private hint!: HTMLElement;
-  private toolbarEl!: HTMLElement;
+  settingsPanel!: SettingsPanel;
   private lockedHintShown = false;
-  private historyBtn!: HTMLButtonElement;
   /** Saves versions of notes as they change (version history). */
   private history: VersionRecorder;
   private historyPanel: HistoryPanel | null = null;
@@ -130,12 +158,10 @@ export class App {
   }, 800);
 
   constructor(
-    root: HTMLElement,
-    private store: Store,
+    readonly store: Store,
     private user: AppUser,
-    private opts: AppOptions = {},
+    readonly opts: AppOptions = {},
   ) {
-    this.root = root;
     this.settings = withDefaults(lsGet<Partial<Settings>>(this.lsKey('settings'), {}));
     this.queue = new SyncQueue(store, this.lsKey('queue'));
     this.history = new VersionRecorder(store, this.lsKey('history'), async (id) => {
@@ -159,13 +185,15 @@ export class App {
       this.syncState = s;
       this.renderStatus();
     };
-    this.build();
+    this.boardHost = h('div', { class: 'board-host' });
+    this.modeMenu = this.buildModeMenu();
+    this.selectMenu = this.buildSelectMenu();
+    this.buildSettings();
     this.syncState = this.queue.pending ? 'saving' : 'saved';
-    this.renderStatus();
     window.addEventListener(
       'beforeunload',
       (e) => {
-        this.board.finishText();
+        this.board?.finishText();
         if (this.queue.pending) {
           e.preventDefault();
           e.returnValue = '';
@@ -179,7 +207,7 @@ export class App {
     window.addEventListener(
       'pagehide',
       () => {
-        this.board.finishText();
+        this.board?.finishText();
         this.saveSettingsDebounced.flush();
         if (this.current && this.loadedNote === this.current.id) this.history.leave(this.current.id, this.board.allStrokes());
       },
@@ -197,11 +225,34 @@ export class App {
       },
       { signal: this.abort.signal },
     );
-    this.ready = this.init();
+    this.bindKeys();
+    this.ready = new Promise((resolve) => (this.started = resolve)).then(() => this.init());
   }
 
-  /** Settles once the notebooks are loaded and a note is open. */
-  private ready: Promise<void> = Promise.resolve();
+  /** Settles once the board is on the page, the notebooks are loaded and a note is open. */
+  private ready: Promise<void>;
+  private started: (v?: unknown) => void = () => {};
+
+  /**
+   * React has put the app on the page: make the board in its element (it measures itself there),
+   * then load the notes. Safe to call again with the same elements.
+   */
+  attach(appEl: HTMLElement, mainEl: HTMLElement) {
+    if (this.appEl === appEl) return;
+    this.appEl = appEl;
+    this.mainEl = mainEl;
+    this.buildBoard();
+    attachOrientation(appEl);
+    const showRotate = () => this.view.setState({ rotateShown: orientation.manual });
+    showRotate();
+    const off = orientation.onChange(showRotate);
+    this.abort.signal.addEventListener('abort', () => off());
+    this.renderToolOptions();
+    this.renderMode();
+    this.renderUndo();
+    this.renderStatus();
+    this.started();
+  }
 
   /** Wait (briefly) until queued saves are written, e.g. before leaving guest mode. */
   async flush(timeoutMs = 3000) {
@@ -209,7 +260,7 @@ export class App {
     while (this.queue.pending && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
   }
 
-  private async goSignIn() {
+  async goSignIn() {
     await this.flush();
     this.opts.signIn?.();
   }
@@ -220,7 +271,7 @@ export class App {
     this.historyPanel?.close();
     this.history.stop();
     this.queue.stop();
-    detachOrientation(this.appEl);
+    if (this.appEl) detachOrientation(this.appEl);
     this.settingsPanel.destroy();
   }
 
@@ -328,7 +379,7 @@ export class App {
         this.currentBook = book;
         if (note) {
           this.current = note;
-          if (document.activeElement !== this.titleInput) this.titleInput.value = note.title;
+          this.setTitle(note.title); // the title field keeps what is being typed (ui/AppScreen.tsx)
         } else if (this.current) {
           this.current = null;
           const next = this.visibleNotes()[0];
@@ -356,77 +407,9 @@ export class App {
 
   // ----------------------------- layout -----------------------------
 
-  private iconBtn(icon: string, title: string, onClick: () => void, cls = '') {
-    const b = h('button', { class: 'icon-btn ' + cls, type: 'button', title, 'aria-label': title }) as HTMLButtonElement;
-    b.innerHTML = icon;
-    b.addEventListener('click', onClick);
-    return b;
-  }
-
-  private build() {
-    // Toolbar
-    this.titleInput = h('input', { class: 'title-input', type: 'text', 'aria-label': 'Note title', maxlength: String(MAX_NOTE_TITLE) }) as HTMLInputElement;
-    this.titleInput.addEventListener('change', () => void this.renameCurrent(this.titleInput.value));
-    this.titleInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.titleInput.blur();
-    });
-
-    const tools = h('div', { class: 'group' });
-    for (const [t, icon, label, key] of [
-      ['pen', icons.pen, 'Pen', 'P'],
-      ['highlighter', icons.highlighter, 'Highlighter', 'H'],
-      ['eraser', icons.eraser, 'Eraser', 'E'],
-      ['text', icons.text, 'Text', 'T'],
-    ] as const) {
-      const b = this.iconBtn(icon, label, () => this.setTool(t), 'tool');
-      b.title = withShortcut(label, key);
-      this.toolBtns.set(t, b);
-      tools.append(b);
-    }
-    // Select: a free-hand loop or a dragged rectangle.
-    this.selectMenu = dropdown<'lasso' | 'rect'>({
-      name: 'Select',
-      className: 'select-btn',
-      value: this.settings.selectMode,
-      reselect: true,
-      // The icon picks the Select tool as last used; the arrow chooses lasso or rectangle.
-      split: { className: 'select-tool', onMain: () => this.setTool('select'), title: (t) => withShortcut(t, 'V') },
-      onSelect: (m) => {
-        this.settings.selectMode = m;
-        this.settingsChanged();
-        this.setTool('select');
-      },
-      options: [
-        { value: 'lasso', label: 'Lasso select', icon: icons.lasso, hint: 'V', description: 'Draw a loop around what you want.' },
-        { value: 'rect', label: 'Rectangle select', icon: icons.rectSelect, hint: 'V', description: 'Drag a box around what you want.' },
-      ],
-    });
-    tools.append(this.selectMenu.el);
-    // Shapes: the icon draws the last shape picked; the arrow opens the palette.
-    this.shapeMain = h('button', { class: 'split-main', type: 'button' }) as HTMLButtonElement;
-    this.shapeMain.addEventListener('click', () => this.setTool('shape'));
-    this.shapeBtn = h('button', { class: 'split-arrow shape-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', 'aria-label': 'Shape options', title: 'Shape options' }) as HTMLButtonElement;
-    this.shapeBtn.innerHTML = icons.chevron;
-    this.shapeBtn.addEventListener('click', () => this.openShapePalette());
-    this.shapeTool = h('div', { class: 'split-btn shape-tool', role: 'group', 'aria-label': 'Shapes' }, this.shapeMain, this.shapeBtn);
-    tools.append(this.shapeTool);
-    // Insert a picture (also: paste, or drop a file on the page).
-    const filePick = h('input', { type: 'file', accept: IMAGE_TYPES, multiple: true, hidden: true, 'aria-hidden': 'true' }) as HTMLInputElement;
-    filePick.addEventListener('change', () => {
-      void this.insertImages([...(filePick.files ?? [])]);
-      filePick.value = '';
-    });
-    const imageBtn = this.iconBtn(icons.image, 'Insert picture', () => filePick.click());
-    tools.append(imageBtn, filePick);
-    this.swatches = h('div', { class: 'group swatches' });
-    this.sizeBtn = h('button', { class: 'size-btn', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }) as HTMLButtonElement;
-    this.sizeBtn.addEventListener('click', () => this.openSizePicker());
-
-    this.undoBtn = this.iconBtn(icons.undo, withShortcut('Undo', 'Mod+Z'), () => this.undo());
-    this.redoBtn = this.iconBtn(icons.redo, withShortcut('Redo', isApple ? 'Mod+Shift+Z' : 'Mod+Y'), () => this.redo());
-    const clearBtn = this.iconBtn(icons.clearPage, 'Clear page', () => void this.clearPage(), 'clear-btn');
-
-    this.modeMenu = dropdown<BoardMode>({
+  /** Mode: how the page takes ink (toolbar menu). */
+  private buildModeMenu() {
+    return dropdown<BoardMode>({
       name: 'Mode',
       className: 'mode-btn',
       value: this.settings.mode,
@@ -438,90 +421,31 @@ export class App {
         { value: 'free', label: 'Free whiteboard', icon: icons.free, hint: 'F', description: 'The whole page takes ink. Two fingers scroll and zoom.' },
       ],
     });
+  }
 
-    this.status = h('div', { class: 'status', title: '' });
-    this.rotateBtn = this.iconBtn(icons.rotate, 'Rotate right', () => orientation.rotateRight(), 'rotate-btn');
+  /** Select: a free-hand loop or a dragged rectangle. The icon picks the tool; the arrow chooses which. */
+  private buildSelectMenu() {
+    return dropdown<'lasso' | 'rect'>({
+      name: 'Select',
+      className: 'select-btn',
+      value: this.settings.selectMode,
+      reselect: true,
+      split: { className: 'select-tool', onMain: () => this.setTool('select'), title: (t) => withShortcut(t, 'V') },
+      onSelect: (m) => {
+        this.settings.selectMode = m;
+        this.settingsChanged();
+        this.setTool('select');
+      },
+      options: [
+        { value: 'lasso', label: 'Lasso select', icon: icons.lasso, hint: 'V', description: 'Draw a loop around what you want.' },
+        { value: 'rect', label: 'Rectangle select', icon: icons.rectSelect, hint: 'V', description: 'Drag a box around what you want.' },
+      ],
+    });
+  }
 
-    const toolbar = (this.toolbarEl = h(
-      'header',
-      { class: 'toolbar' },
-      this.iconBtn(icons.menu, 'Notes', () => this.toggleSidebar()),
-      this.titleInput,
-      h('div', { class: 'sep' }),
-      tools,
-      this.swatches,
-      this.sizeBtn,
-      h('div', { class: 'sep' }),
-      h('div', { class: 'group' }, this.undoBtn, this.redoBtn, clearBtn),
-      h('div', { class: 'sep' }),
-      this.modeMenu.el,
-      (this.stripControls = h(
-        'div',
-        { class: 'group strip-controls' },
-        this.iconBtn(icons.up, withShortcut('Previous strip', 'Up'), () => this.board.stepLine(-1), 'step-btn'),
-        this.iconBtn(icons.down, withShortcut('Next strip', 'Down'), () => this.board.stepLine(1), 'step-btn'),
-        this.iconBtn(icons.lockAll, 'Lock all strips', () => this.board.lockAll()),
-      )),
-      h('div', { class: 'spacer' }),
-      this.opts.signIn ? this.signInButton('toolbar') : null,
-      this.status,
-      this.rotateBtn,
-      (this.historyBtn = this.iconBtn(icons.history, 'Version history', () => void this.openHistory())),
-      (this.exportBtn = this.iconBtn(icons.download, 'Share or export', () => this.openExportMenu())),
-      this.iconBtn(icons.gear, 'Settings', () => this.openSettings()),
-    ));
-
-    // Sidebar
-    this.bookButton = h('button', { class: 'book-button', type: 'button', 'aria-expanded': 'false', title: 'Switch notebook' }) as HTMLButtonElement;
-    this.bookButton.addEventListener('click', () => this.toggleBookPanel());
-    this.bookPanel = h('div', { class: 'book-panel', hidden: true });
-    this.noteList = h('ul', { class: 'note-list' });
-    const newBtn = h('button', { class: 'btn primary', type: 'button' });
-    newBtn.innerHTML = `${icons.plus}<span>New note</span>`;
-    newBtn.addEventListener('click', () => void this.newNote(true));
-    const importBtn = h('button', { class: 'btn import-btn', type: 'button', title: 'Import notes from a Lineboard file (.lbd) or a zip of them' });
-    importBtn.innerHTML = `${icons.upload}<span>Import</span>`;
-    importBtn.addEventListener('click', () => this.pickImport());
-    this.sidebar = h(
-      'aside',
-      { class: 'sidebar' },
-      h('div', { class: 'sidebar-head' }, h('div', { class: 'brand' }, logo(), h('span', {}, 'Lineboard')), this.iconBtn(icons.close, 'Close', () => this.toggleSidebar(false))),
-      this.searchButton(),
-      h('div', { class: 'section-label' }, 'Notebook'),
-      this.bookButton,
-      this.bookPanel,
-      h('div', { class: 'note-buttons' }, newBtn, importBtn),
-      this.noteList,
-      h(
-        'div',
-        { class: 'sidebar-foot' },
-        (this.trashBtn = h('button', { class: 'trash-btn', type: 'button' }) as HTMLButtonElement),
-        // Name and picture, not the email: the sidebar is on screen in recordings and screen shares.
-        (this.accountChip = h('button', { class: 'account-chip', type: 'button' }) as HTMLButtonElement),
-        h(
-          'small',
-          { class: 'foot-note' },
-          this.opts.signIn
-            ? 'Trying without an account: notes are saved in this browser only.'
-            : this.store.mode === 'local'
-              ? 'Local mode: notes stay on this device.'
-              : 'Synced to your account.',
-        ),
-      ),
-      this.opts.signIn ? this.signInButton('sidebar') : null,
-    );
-    // Your name and picture open Settings (profile, data controls and sign-out are all there).
-    this.accountChip.addEventListener('click', () => this.settingsPanel.open('account'));
-    this.trashBtn.addEventListener('click', () => this.settingsPanel.openTrash());
-    this.renderTrashButton();
-    this.renderAccountChip();
-    this.sidebar.append(this.resizeHandle());
-    attachNameTips(this.sidebar, '.note-title, .book-title, .book-name');
-    const scrim = h('div', { class: 'scrim' });
-    scrim.addEventListener('click', () => this.toggleSidebar(false));
-
-    // Board
-    const boardHost = h('div', { class: 'board-host' });
+  /** The board, in its element (once that is on the page), with the first-visit hint and pictures. */
+  private buildBoard() {
+    const boardHost = this.boardHost;
     this.hint = h('div', { class: 'hint' });
     // The first-visit explanation matches the mode the page opens in (split, for new users).
     const how =
@@ -533,17 +457,7 @@ export class App {
       this.hint.remove();
       lsSet('lb-hint-dismissed', true);
     });
-
-    const main = h('div', { class: 'main' }, this.sidebar, scrim, boardHost);
     if (!lsGet('lb-hint-dismissed', false)) boardHost.append(this.hint);
-
-    this.appEl = h('div', { class: 'app' }, toolbar, main);
-    this.root.replaceChildren(this.appEl);
-    attachOrientation(this.appEl);
-    const showRotate = () => (this.rotateBtn.hidden = !orientation.manual);
-    showRotate();
-    const off = orientation.onChange(showRotate);
-    this.abort.signal.addEventListener('abort', () => off());
 
     // The board takes pointer presses without moving focus, so a field being edited (the note title)
     // would keep its caret. Pressing the board finishes the edit, as clicking anywhere else does.
@@ -599,12 +513,6 @@ export class App {
       offTheme();
       clearTheme();
     });
-
-    this.buildSettings();
-    this.renderToolOptions();
-    this.renderMode();
-    this.renderUndo();
-    this.bindKeys();
     this.bindPictures(boardHost);
   }
 
@@ -655,7 +563,7 @@ export class App {
       { capture: true, signal: this.abort.signal },
     );
     window.addEventListener('keydown', (e) => {
-      if (e.defaultPrevented || this.historyPanel) return; // already handled (an open menu, a text box...), or looking at history
+      if (e.defaultPrevented || this.historyPanel || !this.board) return; // already handled (an open menu, a text box...), or looking at history
       const t = e.target as HTMLElement;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       const mod = e.ctrlKey || e.metaKey;
@@ -693,91 +601,24 @@ export class App {
     }, { signal: this.abort.signal });
   }
 
-  private signInButton(where: 'toolbar' | 'sidebar' | 'settings') {
+  /** "Sign in to save" (trying without an account), as a plain element for Settings. */
+  private signInButton(where: 'settings') {
     const b = h('button', { class: 'btn primary signin-save signin-' + where, type: 'button', title: 'Sign in or create an account to save your notes' }) as HTMLButtonElement;
     b.innerHTML = `${icons.cloud}<span>Sign in to save</span>`;
     b.addEventListener('click', () => {
-      if (where === 'settings') this.settingsPanel.close();
+      this.settingsPanel.close();
       void this.goSignIn();
     });
     return b;
   }
 
-  /**
-   * The sidebar's right edge can be dragged to make it wider or narrower, within limits so it never
-   * covers most of the page: 240 px to 560 px, and at most 60% of the screen. Double-click (or
-   * Home) puts it back; arrow keys move it in steps. Remembered on this device.
-   */
-  private resizeHandle() {
-    const MIN = 240;
-    const max = () => Math.max(MIN, Math.min(560, Math.floor(appViewport().width * 0.6)));
-    const handle = h('div', { class: 'sidebar-resize', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the sidebar', tabindex: '0', title: 'Drag to resize (double-click to reset)' });
-    const apply = (w: number | null) => {
-      if (w === null) {
-        this.sidebar.style.removeProperty('--sidebar-w');
-        handle.removeAttribute('aria-valuenow');
-        return;
-      }
-      const v = Math.round(Math.min(max(), Math.max(MIN, w)));
-      this.sidebar.style.setProperty('--sidebar-w', `${v}px`);
-      handle.setAttribute('aria-valuenow', String(v));
-      handle.setAttribute('aria-valuemin', String(MIN));
-      handle.setAttribute('aria-valuemax', String(max()));
-    };
-    const save = () => lsSet('lb-sidebar-width', this.sidebar.style.getPropertyValue('--sidebar-w') ? parseInt(this.sidebar.style.getPropertyValue('--sidebar-w')) : null);
-    const saved = lsGet<number | null>('lb-sidebar-width', null);
-    if (typeof saved === 'number' && Number.isFinite(saved)) apply(saved);
-    let drag: { id: number; x0: number; w0: number } | null = null;
-    handle.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      handle.setPointerCapture(e.pointerId);
-      // In the app's own coordinates: with the app turned 90°, the on-screen width is its height.
-      drag = { id: e.pointerId, x0: clientToApp(e.clientX, e.clientY).x, w0: appRect(this.sidebar).width };
-      this.sidebar.classList.add('resizing');
-    });
-    handle.addEventListener('pointermove', (e) => {
-      if (drag?.id === e.pointerId) apply(drag.w0 + clientToApp(e.clientX, e.clientY).x - drag.x0);
-    });
-    const end = (e: PointerEvent) => {
-      if (drag?.id !== e.pointerId) return;
-      drag = null;
-      this.sidebar.classList.remove('resizing');
-      save();
-    };
-    handle.addEventListener('pointerup', end);
-    handle.addEventListener('pointercancel', end);
-    handle.addEventListener('dblclick', () => {
-      apply(null);
-      save();
-    });
-    handle.addEventListener('keydown', (e) => {
-      const w = appRect(this.sidebar).width;
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') apply(w + (e.key === 'ArrowRight' ? 24 : -24));
-      else if (e.key === 'Home') apply(null);
-      else return;
-      e.preventDefault();
-      save();
-    });
-    // A smaller window (or turning the device) keeps the sidebar within the limit.
-    window.addEventListener(
-      'resize',
-      () => {
-        const cur = parseInt(this.sidebar.style.getPropertyValue('--sidebar-w'));
-        if (cur) apply(cur);
-      },
-      { signal: this.abort.signal },
-    );
-    return handle;
-  }
-
-  private toggleSidebar(force?: boolean) {
-    const open = force ?? !this.root.querySelector('.app')!.classList.contains('sidebar-open');
-    this.root.querySelector('.app')!.classList.toggle('sidebar-open', open);
+  toggleSidebar(force?: boolean) {
+    this.view.setState((v) => ({ sidebarOpen: force ?? !v.sidebarOpen }));
   }
 
   // ----------------------------- tools -----------------------------
 
-  private setTool(t: Tool) {
+  setTool(t: Tool) {
     if (t === 'text' && this.store.supportsText) {
       // Older cloud databases can't store text boxes yet; ask once, then switch.
       void this.store.supportsText().then((ok) => {
@@ -815,65 +656,57 @@ export class App {
 
   private renderMode() {
     this.modeMenu.set(this.settings.mode);
-    this.stripControls.hidden = this.settings.mode === 'free';
-    // Previous / next strip mean nothing when the screen is split into two fixed panes.
-    for (const b of this.stripControls.querySelectorAll<HTMLElement>('.step-btn')) b.hidden = this.settings.mode === 'split';
     if (this.settings.mode !== 'free') this.lastStripMode = this.settings.mode;
+    this.bump('mode');
+  }
+
+  /** The toolbar's view of the tools: which is in use, its colours and size (ui/AppScreen.tsx). */
+  toolState() {
+    const tool = this.tool;
+    const isHL = tool === 'highlighter';
+    const sizeTool = this.sizeTool;
+    const { min, max } = SIZES[sizeTool];
+    return {
+      tool,
+      shape: this.settings.shape,
+      isHL,
+      colors: isHL ? HL_COLORS : PEN_COLORS,
+      color: isHL ? this.settings.highlighterColor : this.settings.penColor,
+      /** As a colour shows on the page (in dark mode, ink is shown lighter). */
+      shown: (c: string) => (isHL ? c : (this.board?.shownColor(c) ?? c)),
+      size: this.size,
+      sizeName: this.sizeName,
+      /** The size button's dot: as big as the size (capped), in the ink's on-screen colour. */
+      dotPx: 4 + ((this.size - min) / (max - min)) * 16,
+      dotColor: sizeTool === 'highlighter' ? this.settings.highlighterColor : (this.board?.shownColor(this.settings.penColor) ?? this.settings.penColor),
+      /** Colour and size mean nothing to the eraser and the selection: greyed out, not hidden. */
+      off: tool === 'eraser' || tool === 'select',
+    };
+  }
+
+  /** Pick an ink colour (from the palette or the custom picker). */
+  pickColor(c: string) {
+    if (this.tool === 'highlighter') this.settings.highlighterColor = c;
+    else this.settings.penColor = c;
+    if (this.tool === 'eraser' || this.tool === 'select') this.setTool('pen');
+    this.settingsChanged();
+    this.renderToolOptions();
+  }
+
+  get mode() {
+    return this.settings.mode;
+  }
+  stepLine(dir: 1 | -1) {
+    this.board?.stepLine(dir);
+  }
+  lockAll() {
+    this.board?.lockAll();
   }
 
   private renderToolOptions() {
-    for (const [t, b] of this.toolBtns) b.classList.toggle('active', t === this.tool);
-    this.shapeTool.classList.toggle('active', this.tool === 'shape');
-    this.shapeMain.innerHTML = SHAPE_ICONS[this.settings.shape];
-    this.shapeMain.setAttribute('aria-label', `Shapes: ${SHAPE_NAMES[this.settings.shape]}`);
-    this.shapeMain.title = withShortcut(`Shapes: ${SHAPE_NAMES[this.settings.shape]}`, 'S');
     this.selectMenu.el.classList.toggle('active', this.tool === 'select');
     this.selectMenu.set(this.settings.selectMode);
-    const isHL = this.tool === 'highlighter';
-    const colors = isHL ? HL_COLORS : PEN_COLORS;
-    const cur = isHL ? this.settings.highlighterColor : this.settings.penColor;
-    const pick = (c: string) => {
-      if (isHL) this.settings.highlighterColor = c;
-      else this.settings.penColor = c;
-      if (this.tool === 'eraser' || this.tool === 'select') this.setTool('pen');
-      this.settingsChanged();
-      this.renderToolOptions();
-    };
-    const swatch = (c: string) => {
-      const on = c.toLowerCase() === cur.toLowerCase();
-      const b = h('button', { class: 'swatch' + (on ? ' active' : ''), type: 'button', 'aria-label': 'Color ' + c, 'aria-pressed': String(on), title: c });
-      // Shown as it looks on the page (in dark mode, ink is shown lighter).
-      const shown = isHL ? c : this.board.shownColor(c);
-      b.style.setProperty('--c', shown);
-      // The chosen colour: a ring around it and a check inside, light or dark to stand out on it.
-      if (on) {
-        b.innerHTML = icons.check;
-        b.style.setProperty('--tick', isLight(shown) ? '#111827' : '#ffffff');
-      }
-      b.addEventListener('click', () => pick(c));
-      return b;
-    };
-    // A colour chosen with the picker shows as its own swatch after the palette.
-    const custom = colors.some((c) => c.toLowerCase() === cur.toLowerCase()) ? null : swatch(cur);
-    const picker = h('input', { type: 'color', class: 'color-input', 'aria-label': 'Custom colour', tabindex: '-1' }) as HTMLInputElement;
-    picker.value = /^#[0-9a-f]{6}$/i.test(cur) ? cur : '#000000';
-    picker.addEventListener('input', () => pick(picker.value));
-    const more = h('label', { class: 'swatch-more', title: 'Custom colour' }, picker);
-    more.insertAdjacentHTML('beforeend', icons.plus);
-    // Every tool gets the same number of colour slots (the longest palette plus a custom one), so the
-    // toolbar never shifts when the tool changes: unused slots stay empty but keep their space.
-    const slots = Math.max(PEN_COLORS.length, HL_COLORS.length) + 1;
-    const shown = [...colors.map(swatch), ...(custom ? [custom] : [])];
-    const blanks = Array.from({ length: slots - shown.length }, () => h('span', { class: 'swatch-slot', 'aria-hidden': 'true' }));
-    this.swatches.replaceChildren(...shown, ...blanks, more);
-    this.renderSizeButton();
-    // Colour and size mean nothing to the eraser and the selection: grey them out rather than hide
-    // them, so nothing moves.
-    const off = this.tool === 'eraser' || this.tool === 'select';
-    this.swatches.classList.toggle('disabled', off);
-    this.swatches.setAttribute('aria-disabled', String(off));
-    for (const b of this.swatches.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) b.disabled = off;
-    this.sizeBtn.disabled = off;
+    this.bump('tools');
   }
 
   /** The size of the tool in use: pen, highlighter, text, or shape outline thickness. */
@@ -893,25 +726,14 @@ export class App {
     return { pen: 'Pen', highlighter: 'Highlighter', text: 'Text', shape: 'Shape outline' }[this.sizeTool];
   }
 
-  /** Toolbar button: a dot drawn at the current size (capped so it fits). */
+  /** The toolbar's size button (a dot at the current size) shows the change. */
   private renderSizeButton() {
-    const { min, max } = SIZES[this.sizeTool];
-    const w = this.size;
-    const px = 4 + ((w - min) / (max - min)) * 16;
-    this.sizeBtn.innerHTML = '';
-    const dot = h('i', { class: 'size-dot' });
-    dot.style.width = dot.style.height = `${px}px`;
-    // As the ink shows on the page (in dark mode a black pen shows light, so the dot stays visible).
-    if (this.sizeTool === 'highlighter') dot.style.background = this.settings.highlighterColor;
-    else dot.style.background = this.board.shownColor(this.settings.penColor);
-    this.sizeBtn.append(dot);
-    const label = `${this.sizeName} size: ${w}`;
-    this.sizeBtn.setAttribute('aria-label', label);
-    this.sizeBtn.title = label;
+    this.bump('tools');
   }
 
-  private openSizePicker() {
-    if (this.sizeBtn.getAttribute('aria-expanded') === 'true') {
+  /** The size picker, under its toolbar button (`anchor`). */
+  openSizePicker(anchor: HTMLElement) {
+    if (anchor.getAttribute('aria-expanded') === 'true') {
       closeOpenMenu();
       return;
     }
@@ -972,11 +794,11 @@ export class App {
       }),
     );
     draw();
-    popover(this.sizeBtn, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${this.sizeName} size` });
+    popover(anchor, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${this.sizeName} size` });
   }
 
   /** Add pictures to the page: save each, then place it in view and select it (to move or resize). */
-  private async insertImages(files: File[]) {
+  async insertImages(files: File[]) {
     let pics = files.filter((f) => f.type.startsWith('image/'));
     if (!pics.length) return;
     if (pics.length > MAX_PICTURES_AT_ONCE) {
@@ -1022,9 +844,9 @@ export class App {
     }
   }
 
-  /** The shape palette: a grid of shapes, and a switch for perfect squares / circles. */
-  private openShapePalette() {
-    if (this.shapeBtn.getAttribute('aria-expanded') === 'true') {
+  /** The shape palette (under its toolbar button, `anchor`): a grid of shapes, and a switch for perfect squares / circles. */
+  openShapePalette(anchor: HTMLElement) {
+    if (anchor.getAttribute('aria-expanded') === 'true') {
       closeOpenMenu();
       return;
     }
@@ -1059,7 +881,7 @@ export class App {
       h('b', {}, 'Keep proportions'),
       lock,
     );
-    ({ close } = popover(this.shapeBtn, h('div', { class: 'shape-palette' }, grid, this.lineOptions(), foot), { label: 'Shapes' }));
+    ({ close } = popover(anchor, h('div', { class: 'shape-palette' }, grid, this.lineOptions(), foot), { label: 'Shapes' }));
   }
 
   /** Line style (solid, dashed, dotted) and thickness for shapes: two rows of icon choices. */
@@ -1145,7 +967,7 @@ export class App {
     return { type: a.type === 'add' ? 'remove' : 'add', strokes: a.strokes };
   }
 
-  private undo() {
+  undo() {
     const a = this.undoStack.pop();
     if (!a) return;
     this.apply(this.invert(a), true);
@@ -1153,7 +975,7 @@ export class App {
     this.renderUndo();
   }
 
-  private redo() {
+  redo() {
     const a = this.redoStack.pop();
     if (!a) return;
     this.apply(a, true);
@@ -1165,7 +987,7 @@ export class App {
    * Erase the whole page (ink, text and pictures) after asking. It is one undo step, and the page as
    * it was is saved to version history first, so it can always be brought back.
    */
-  private async clearPage() {
+  async clearPage() {
     const note = this.current;
     if (!note || this.loadedNote !== note.id || this.board.previewing) return;
     if (this.board.isEmpty()) return toast('This page is already empty.');
@@ -1186,8 +1008,10 @@ export class App {
   }
 
   private renderUndo() {
-    this.undoBtn.disabled = !this.undoStack.length;
-    this.redoBtn.disabled = !this.redoStack.length;
+    this.bump('undo');
+  }
+  undoState() {
+    return { canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0 };
   }
 
   /** Pictures still being prepared and uploaded: the status says "Saving..." until they are done. */
@@ -1195,14 +1019,14 @@ export class App {
   private syncState: SyncState = 'saved';
 
   private renderStatus() {
+    this.bump('status');
+  }
+  /** Saved, saving, or waiting to retry, in words. */
+  statusState() {
     const s: SyncState = this.picturesInFlight && this.syncState === 'saved' ? 'saving' : this.syncState;
     const local = this.store.mode === 'local';
     const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: local ? 'Not saved yet, will retry' : 'Offline, will retry' }[s];
-    // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.
-    this.status.className = 'status ' + s + (this.opts.signIn ? ' compact' : '');
-    this.status.textContent = text;
-    this.status.title = text;
-    this.status.setAttribute('aria-label', text);
+    return { state: s, text };
   }
 
   private bumpCurrent() {
@@ -1230,39 +1054,31 @@ export class App {
   }
 
   private renderNoteList() {
-    this.renderTrashButton();
-    const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-    const books = new Map(this.notebooks.map((b) => [b.id, b.name]));
-    const row = (n: NoteMeta, starredList: boolean) => {
-      const active = n.id === this.current?.id;
-      // In "Starred", a note from another notebook says which one it is in.
-      const sub = starredList && n.notebook_id !== this.currentBook?.id ? (books.get(n.notebook_id ?? '') ?? '') : fmt.format(new Date(n.updated_at));
-      const open = h('button', { class: 'note-open', type: 'button' }, h('span', { class: 'note-title' }, n.title || 'Untitled'), h('span', { class: 'note-date' }, sub));
-      open.addEventListener('click', () => {
-        void this.openFromList(n);
-        if (window.innerWidth < 900) this.toggleSidebar(false);
-      });
-      const more = this.iconBtn(icons.more, `More for "${n.title || 'Untitled'}"`, () => this.noteMenu(n, more), 'small more-btn');
-      more.setAttribute('aria-haspopup', 'menu');
-      more.setAttribute('aria-expanded', 'false');
-      return h('li', { class: active ? 'active' : '' }, open, h('div', { class: 'note-actions' }, this.starButton('note', n), more));
-    };
-    // A starred note shows once, under "Starred", not again in its notebook's list.
-    const starred = this.starredNotes();
-    const notes = this.visibleNotes().filter((n) => !n.starred);
-    this.noteList.replaceChildren(
-      ...(starred.length ? [h('li', { class: 'list-label', role: 'presentation' }, 'Starred'), ...starred.map((n) => row(n, true)), h('li', { class: 'list-label', role: 'presentation' }, 'Notes')] : []),
-      ...notes.map((n) => row(n, false)),
-    );
-    this.renderNotebooks(); // keep the per-notebook note counts current
+    this.bump('notes');
   }
 
-  /** A star toggle for a note or notebook row. */
-  private starButton(kind: 'note' | 'notebook', item: NoteMeta | Notebook) {
-    const name = 'title' in item ? item.title || 'Untitled' : item.name;
-    const b = this.iconBtn(item.starred ? icons.starFilled : icons.star, item.starred ? `Unstar "${name}"` : `Star "${name}"`, () => void this.setFlags(kind, item, { starred: !item.starred }), 'small star-btn' + (item.starred ? ' on' : ''));
-    b.setAttribute('aria-pressed', String(!!item.starred));
-    return b;
+  /** The sidebar's note list: starred notes (from any notebook) first, then this notebook's others. */
+  listState() {
+    return {
+      // A starred note shows once, under "Starred", not again in its notebook's list.
+      starred: this.starredNotes(),
+      notes: this.visibleNotes().filter((n) => !n.starred),
+      currentId: this.current?.id ?? null,
+      currentBookId: this.currentBook?.id ?? null,
+      bookNames: new Map(this.notebooks.map((b) => [b.id, b.name])),
+    };
+  }
+
+  /** The notebook switcher: the open notebook, and every notebook in use with its note count. */
+  booksState() {
+    const counts = new Map<string, number>();
+    for (const n of this.notes) if (n.notebook_id && !n.archived_at) counts.set(n.notebook_id, (counts.get(n.notebook_id) ?? 0) + 1);
+    return { current: this.currentBook, items: this.activeBooks().map((nb) => ({ nb, count: counts.get(nb.id) ?? 0 })) };
+  }
+
+  /** Star or unstar a note or notebook. */
+  toggleStar(kind: 'note' | 'notebook', item: NoteMeta | Notebook) {
+    void this.setFlags(kind, item, { starred: !item.starred });
   }
 
   // ----------------------------- profile -----------------------------
@@ -1270,7 +1086,9 @@ export class App {
   private profile: Profile = { ...EMPTY_PROFILE };
   /** The profile picture as an object URL (null: none, or not readable here). */
   private profileUrl: string | null = null;
-  private accountChip!: HTMLButtonElement;
+  profileState() {
+    return { profile: this.profile, url: this.profileUrl };
+  }
 
   private async loadProfile(p?: Profile) {
     try {
@@ -1285,11 +1103,7 @@ export class App {
   }
 
   private renderAccountChip() {
-    const name = this.profile.name;
-    this.accountChip.replaceChildren(avatar(this.profile, this.profileUrl, 32), h('span', { class: 'account-name' + (name ? '' : ' empty') }, name || 'Add your name'));
-    this.accountChip.insertAdjacentHTML('beforeend', icons.gear);
-    this.accountChip.setAttribute('aria-label', `${name || 'Your profile'}: settings`);
-    this.accountChip.title = 'Settings';
+    this.bump('profile');
   }
 
   /** Change the name or picture (from Settings). */
@@ -1301,15 +1115,7 @@ export class App {
 
   // ----------------------------- search -----------------------------
 
-  private searchButton() {
-    const b = h('button', { class: 'search-btn', type: 'button', title: withShortcut('Search notes and notebooks', 'Mod+K') });
-    b.innerHTML = `${icons.search}<span>Search</span><kbd></kbd>`;
-    b.querySelector('kbd')!.textContent = isApple ? '⌘K' : 'Ctrl K';
-    b.addEventListener('click', () => this.openSearch());
-    return b;
-  }
-
-  private openSearch() {
+  openSearch() {
     if (document.querySelector('.search-modal') || this.historyPanel) return;
     this.board.finishText();
     openSearch({
@@ -1338,13 +1144,13 @@ export class App {
   }
 
   /** Open a note from the list (a starred one may be in another notebook). */
-  private async openFromList(n: NoteMeta) {
+  async openFromList(n: NoteMeta) {
     const book = this.notebooks.find((b) => b.id === n.notebook_id);
     if (book && book.id !== this.currentBook?.id) await this.switchNotebook(book, n);
     else await this.openNote(n);
   }
 
-  private noteMenu(n: NoteMeta, anchor: HTMLElement) {
+  noteMenu(n: NoteMeta, anchor: HTMLElement) {
     actionMenu(anchor, `Actions for "${n.title || 'Untitled'}"`, [
       { label: 'Rename', icon: icons.edit, run: () => void this.promptRename(n) },
       { label: 'Move to notebook', icon: icons.move, run: () => void this.moveNote(n) },
@@ -1355,7 +1161,7 @@ export class App {
     ]);
   }
 
-  private notebookMenu(nb: Notebook, anchor: HTMLElement) {
+  notebookMenu(nb: Notebook, anchor: HTMLElement) {
     actionMenu(anchor, `Actions for "${nb.name}"`, [
       { label: 'Rename', icon: icons.edit, run: () => void this.renameNotebook(nb) },
       { label: 'Share', icon: icons.share, run: () => void this.shareNotebook(nb) },
@@ -1421,7 +1227,7 @@ export class App {
     }
     this.loadedNote = null;
     this.current = n;
-    this.titleInput.value = n.title;
+    this.setTitle(n.title);
     lsSet(this.lsKey('last-note'), n.id);
     this.undoStack = [];
     this.redoStack = [];
@@ -1450,7 +1256,7 @@ export class App {
    * Create a note. Asked for by the user (`ask`): name it first, starting from the default name,
    * selected so typing replaces it. Made by the app (a notebook with no notes left): the default.
    */
-  private async newNote(ask = false) {
+  async newNote(ask = false) {
     const d = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date());
     let title = `Note ${d}`;
     if (ask) {
@@ -1468,7 +1274,7 @@ export class App {
     }
   }
 
-  private async renameCurrent(title: string) {
+  async renameCurrent(title: string) {
     if (!this.current) return;
     const t = clip(title, MAX_NOTE_TITLE) || 'Untitled';
     await this.rename(this.current, t);
@@ -1483,13 +1289,13 @@ export class App {
   private async rename(n: NoteMeta, title: string) {
     const old = n.title;
     n.title = title;
-    if (n.id === this.current?.id) this.titleInput.value = title;
+    if (n.id === this.current?.id) this.setTitle(title);
     this.renderNoteList();
     try {
       await this.store.renameNote(n.id, title);
     } catch (e) {
       n.title = old;
-      if (n.id === this.current?.id) this.titleInput.value = old;
+      if (n.id === this.current?.id) this.setTitle(old);
       this.renderNoteList();
       if (!(await this.gone(e, 'Rename'))) toast('Rename failed: ' + (e as Error).message, 'error');
     }
@@ -1608,13 +1414,9 @@ export class App {
     return this.looseTrash().length + this.trashedBooks.length;
   }
 
-  private renderTrashButton() {
-    if (!this.trashBtn) return;
-    const n = this.trashCount();
-    this.trashBtn.hidden = !this.trashOn || !this.trashBook;
-    this.trashBtn.innerHTML = `${icons.trash}<span>Trash</span>`;
-    this.trashBtn.append(h('span', { class: 'trash-count' }, n ? String(n) : ''));
-    this.trashBtn.setAttribute('aria-label', n ? `Trash, ${n} item${n === 1 ? '' : 's'}` : 'Trash, empty');
+  /** The sidebar's Trash button: hidden without a trash (older database), with how much is in it. */
+  trashState() {
+    return { shown: this.trashOn && !!this.trashBook, count: this.trashCount() };
   }
 
   /**
@@ -1718,43 +1520,15 @@ export class App {
   // ----------------------------- notebooks -----------------------------
 
   private renderNotebooks() {
-    const b = this.currentBook;
-    this.bookButton.innerHTML = `${icons.notebook}<span class="book-name"></span>${icons.chevron}`;
-    this.bookButton.querySelector('.book-name')!.textContent = b?.name ?? '';
-    const counts = new Map<string, number>();
-    for (const n of this.notes) if (n.notebook_id) counts.set(n.notebook_id, (counts.get(n.notebook_id) ?? 0) + 1);
-    for (const n of this.notes) if (n.archived_at && n.notebook_id) counts.set(n.notebook_id, (counts.get(n.notebook_id) ?? 1) - 1);
-    const items = this.activeBooks().map((nb) => {
-      const open = h(
-        'button',
-        { class: 'book-open', type: 'button' },
-        h('span', { class: 'book-title' }, nb.name),
-        h('span', { class: 'book-count' }, String(counts.get(nb.id) ?? 0)),
-      );
-      open.addEventListener('click', () => {
-        this.toggleBookPanel(false);
-        if (nb.id !== this.currentBook?.id) void this.switchNotebook(nb);
-      });
-      const more = this.iconBtn(icons.more, `More for "${nb.name}"`, () => this.notebookMenu(nb, more), 'small more-btn');
-      more.setAttribute('aria-haspopup', 'menu');
-      more.setAttribute('aria-expanded', 'false');
-      return h('li', { class: nb.id === b?.id ? 'active' : '' }, open, h('div', { class: 'note-actions' }, this.starButton('notebook', nb), more));
-    });
-    const add = h('button', { class: 'btn book-new', type: 'button' });
-    add.innerHTML = `${icons.plus}<span>New notebook</span>`;
-    add.addEventListener('click', () => void this.newNotebook());
-    this.bookPanel.replaceChildren(h('ul', { class: 'book-list' }, ...items), add);
+    this.bump('notes');
   }
 
-  private toggleBookPanel(force?: boolean) {
-    const open = force ?? this.bookPanel.hidden === true;
-    this.bookPanel.hidden = !open;
-    this.bookButton.setAttribute('aria-expanded', String(open));
-    this.bookButton.classList.toggle('open', open);
+  toggleBookPanel(force?: boolean) {
+    this.view.setState((v) => ({ bookPanelOpen: force ?? !v.bookPanelOpen }));
   }
 
   /** Show a notebook and open one of its notes (a fresh note if it has none). */
-  private async switchNotebook(book: Notebook, note?: NoteMeta) {
+  async switchNotebook(book: Notebook, note?: NoteMeta) {
     this.currentBook = book;
     lsSet(this.lsKey('last-notebook'), book.id);
     this.renderNotebooks();
@@ -1763,7 +1537,7 @@ export class App {
     else await this.newNote();
   }
 
-  private async newNotebook() {
+  async newNotebook() {
     const name = await dialog({ title: 'New notebook', input: `Notebook ${this.notebooks.length + 1}`, ok: 'Create', maxLength: MAX_NOTEBOOK_NAME });
     if (name === null) return;
     try {
@@ -1869,7 +1643,7 @@ export class App {
 
   // ----------------------------- version history -----------------------------
 
-  private async openHistory() {
+  async openHistory() {
     if (this.historyPanel) return this.historyPanel.close();
     await this.ready;
     const note = this.current;
@@ -1877,17 +1651,14 @@ export class App {
     if (!(await this.history.enabled)) return toast(HISTORY_NEEDS_UPDATE, 'error');
     this.board.finishText();
     this.toggleSidebar(false);
-    this.historyBtn.classList.add('active');
+    this.view.setState({ historyPanel: true });
     this.historyPanel = new HistoryPanel(
       {
         store: this.store,
         board: this.board,
         recorder: this.history,
-        setBusy: (on) => {
-          this.toolbarEl.inert = on;
-          this.sidebar.inert = on;
-          this.appEl.classList.toggle('history-open', on);
-        },
+        // While a version is shown, the toolbar and sidebar are out of reach.
+        setBusy: (on) => this.view.setState({ historyOpen: on }),
         replaceStrokes: (remove, add) => {
           const a: Action = { type: 'replace', from: remove, to: add.map((s) => ({ ...s, note_id: note.id })) };
           this.undoStack.push(a);
@@ -1914,19 +1685,17 @@ export class App {
         openNote: (n) => this.openNote(n),
       },
       note,
-      this.appEl.querySelector('.main')!,
+      this.mainEl!,
       () => {
         this.historyPanel = null;
-        this.historyBtn.classList.remove('active');
+        this.view.setState({ historyPanel: false });
       },
     );
   }
 
-  private exportBtn!: HTMLButtonElement;
-
-  /** The toolbar's export button: this note as a picture, or as a Lineboard file. */
-  private openExportMenu() {
-    if (this.exportBtn.getAttribute('aria-expanded') === 'true') {
+  /** The toolbar's export menu (under its button, `anchor`): this note as a picture, or as a Lineboard file. */
+  openExportMenu(anchor: HTMLElement) {
+    if (anchor.getAttribute('aria-expanded') === 'true') {
       closeOpenMenu();
       return;
     }
@@ -1941,7 +1710,7 @@ export class App {
     };
     const current = this.current;
     ({ close } = popover(
-      this.exportBtn,
+      anchor,
       h(
         'div',
         { class: 'export-menu' },
@@ -2059,7 +1828,7 @@ export class App {
   }
 
   /** Choose a Lineboard file (.lbd) or a zip of them to import. */
-  private pickImport() {
+  pickImport() {
     const input = h('input', { type: 'file', accept: `${LBD_EXT},.zip,application/zip`, hidden: true }) as HTMLInputElement;
     input.addEventListener('change', () => {
       const f = input.files?.[0];
@@ -2230,7 +1999,7 @@ export class App {
     });
   }
 
-  private openSettings() {
+  openSettings() {
     this.settingsPanel.open();
   }
 }

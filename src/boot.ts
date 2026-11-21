@@ -24,6 +24,11 @@ export function boot(root: HTMLElement) {
     showScreen(screen);
   };
   /** The host element, for a screen that still renders itself (React shows nothing meanwhile). */
+  /** Show the notes app (React draws it: ui/AppScreen.tsx). */
+  const showApp = <T extends App>(app: T): T => {
+    showReact({ kind: 'app', app });
+    return app;
+  };
   const host = () => {
     showScreen(null);
     return root;
@@ -49,7 +54,7 @@ export function boot(root: HTMLElement) {
         replaceRoute('/app');
         setGuestActive(true);
         document.title = 'Lineboard';
-        localApp = new App(host(), new LocalStore(), LOCAL_USER);
+        localApp = showApp(new App(new LocalStore(), LOCAL_USER));
       } else showReact({ kind: 'home', cloud: false, signedIn: false, onStart: () => navigate('/app') });
     };
     window.addEventListener(navigationEvent, route);
@@ -101,7 +106,7 @@ export function boot(root: HTMLElement) {
       current = 'guest';
       replaceRoute('/app');
       document.title = 'Lineboard';
-      app = new App(host(), new LocalStore(), LOCAL_USER, { signIn: () => { lsSet(GUEST_MIGRATE, true); navigate('/login'); } });
+      app = showApp(new App(new LocalStore(), LOCAL_USER, { signIn: () => { lsSet(GUEST_MIGRATE, true); navigate('/login'); } }));
     };
 
     /** A guest pressed "Sign in to save": show sign-in, then move their notes after they sign in. */
@@ -289,7 +294,7 @@ export function boot(root: HTMLElement) {
         navigate('/home');
         toast('Your account and all its data have been deleted.');
       };
-      app = new App(host(), store, { id: uid, email }, { signOut, account, onAccountDeleted });
+      app = showApp(new App(store, { id: uid, email }, { signOut, account, onAccountDeleted }));
       // Once per account: record which notes use which pictures, so deleting notes can tidy files up.
       void store.backfillImageUses().catch((e) => console.warn('Picture uses not recorded yet', e));
     };
