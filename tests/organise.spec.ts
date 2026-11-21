@@ -545,3 +545,75 @@ test('signed in: the trash is a notebook in the account; another device deleting
   await dlg(page).getByRole('button', { name: 'Delete' }).click();
   await expect.poll(() => db.notes.map((n) => n.title)).not.toContain('Cloud draft');
 });
+
+test('emptying the trash or deleting forever never erases what another tab restored meanwhile', async ({ page }) => {
+  await setup(page);
+  await newNotebook(page, 'Term');
+  await newNote(page, 'Kept note');
+  await newNote(page, 'Gone note');
+  await openSidebar(page);
+  for (const t of ['Kept note', 'Gone note']) {
+    await rowAction(page, noteRow(page, t), 'Delete');
+    await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
+  }
+  await expect(page.locator('.trash-btn')).toHaveAttribute('aria-label', 'Trash, 2 items');
+
+  // Empty trash is asked; while the question is open, another tab restores one of the notes.
+  const trash = await openTrash(page);
+  await trash.getByRole('button', { name: 'Empty trash' }).click();
+  await elsewhere(page, (books, notes) => {
+    const n = notes.find((x) => x.title === 'Kept note')!;
+    n.notebook_id = books.find((b) => b.name === 'Term')!.id;
+    n.deleted_at = null;
+  });
+  await dlg(page).getByRole('button', { name: 'Empty trash' }).click();
+  await expect(page.locator('#toast')).toContainText('One item was restored on another device, so it was not deleted');
+  const titles = async () => (await notes(page)).map((n) => n.title);
+  expect(await titles()).toContain('Kept note');
+  expect(await titles()).not.toContain('Gone note');
+  await expect(trash).toContainText('The trash is empty');
+
+  // A whole notebook: Delete forever, while another tab restores it.
+  await page.locator('.settings-close').click();
+  await openSidebar(page);
+  if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
+  await page.locator('.book-list li', { hasText: 'Term' }).locator('.more-btn').click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
+  await openTrash(page);
+  await trash.getByRole('button', { name: 'Delete "Term" forever' }).click();
+  await elsewhere(page, (books) => {
+    books.find((b) => b.name === 'Term')!.deleted_at = null;
+  });
+  await dlg(page).getByRole('button', { name: 'Delete forever' }).click();
+  await expect(page.locator('#toast')).toContainText('"Term" was restored on another device, so it was not deleted');
+  expect((await books(page)).map((b) => b.name)).toContain('Term');
+  expect(await titles()).toContain('Kept note');
+});
+
+test('signed in: Empty trash only deletes what is still in the trash', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await page.goto('/login');
+  await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
+  await page.getByLabel('Password', { exact: true }).fill(db.password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await attachBoard(page);
+  await newNote(page, 'Old one');
+  await newNote(page, 'Restored elsewhere');
+  await openSidebar(page);
+  for (const t of ['Old one', 'Restored elsewhere']) {
+    await rowAction(page, noteRow(page, t), 'Delete');
+    await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
+  }
+  const trashId = USER_ID.slice(0, 14) + '8' + USER_ID.slice(15);
+  await expect.poll(() => db.notes.filter((n) => n.notebook_id === trashId).length).toBe(2);
+
+  // Empty trash, but another device takes one out while the question is open.
+  const trash = await openTrash(page);
+  await trash.getByRole('button', { name: 'Empty trash' }).click();
+  Object.assign(db.notes.find((n) => n.title === 'Restored elsewhere')!, { notebook_id: USER_ID, deleted_at: null });
+  await dlg(page).getByRole('button', { name: 'Empty trash' }).click();
+  await expect(page.locator('#toast')).toContainText('was restored on another device');
+  expect(db.notes.map((n) => n.title)).toContain('Restored elsewhere');
+  expect(db.notes.map((n) => n.title)).not.toContain('Old one');
+});

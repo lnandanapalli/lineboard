@@ -124,6 +124,19 @@ export class LocalStore implements Store {
     for (const n of this.notes().filter((m) => m.notebook_id === id)) await this.deleteNote(n.id);
     this.saveNotebooks(this.notebooks().filter((b) => b.id !== id));
   }
+  async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
+    const before = (at?: string | null) => !!at && (!olderThan || at < olderThan);
+    if (kind === 'note') {
+      const n = this.notes().find((m) => m.id === id);
+      if (!n || n.notebook_id !== this.trashId || (olderThan && !before(n.deleted_at))) return false;
+      await this.deleteNote(id);
+      return true;
+    }
+    const b = this.notebooks().find((x) => x.id === id);
+    if (!b || b.id === this.trashId || !before(b.deleted_at)) return false;
+    await this.deleteNotebook(id);
+    return true;
+  }
   async moveNotes(noteIds: string[], notebookId: string) {
     this.liveNotebook(notebookId);
     const all = this.notes();

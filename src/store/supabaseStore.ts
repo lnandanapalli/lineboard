@@ -362,6 +362,15 @@ export class SupabaseStore implements Store {
     check(error);
   }
 
+  async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
+    // One conditional delete: nothing happens if it has left the trash (or went in again later).
+    let q = kind === 'note' ? this.sb.from('notes').delete().eq('id', id).eq('notebook_id', this.trashId) : this.sb.from('notebooks').delete().eq('id', id).not('deleted_at', 'is', null);
+    if (olderThan) q = q.lt('deleted_at', olderThan);
+    const { data, error } = await q.select('id');
+    check(error);
+    return !!data?.length;
+  }
+
   /** Insert notebooks keeping their ids (used to move notebooks made without an account). Idempotent. */
   async importNotebooks(notebooks: Notebook[]) {
     if (!notebooks.length) return;

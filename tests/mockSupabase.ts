@@ -85,6 +85,7 @@ function matches(url: URL) {
       tests.push((r) => set.includes(String(r[col])));
     } else if (raw === 'is.null') tests.push((r) => r[col] == null);
     else if (raw === 'not.is.null') tests.push((r) => r[col] != null);
+    else if (raw.startsWith('lt.')) tests.push((r) => r[col] != null && String(r[col]) < raw.slice(3));
   }
   return (r: Row) => tests.every((t) => t(r));
 }
@@ -434,10 +435,12 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {
-        const gone = rows().filter(match).map((r) => r.id);
+        const removed = rows().filter(match);
+        const gone = removed.map((r) => r.id);
         set(rows().filter((r) => !match(r)));
         if (table === 'notebooks') cascadeNotes(db.notes.filter((n) => gone.includes(n.notebook_id)).map((n) => n.id));
         else cascadeNotes(gone);
+        if (prefer.includes('return=representation')) return json(route, 200, removed);
         return route.fulfill({ status: 204, headers: cors });
       }
     }

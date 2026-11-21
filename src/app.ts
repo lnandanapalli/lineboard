@@ -1516,23 +1516,37 @@ export class App {
     else await this.newNote();
   }
 
-  /** Delete a note for good: its ink, pictures and history. */
-  private async eraseNote(n: NoteMeta) {
-    this.queue.dropNote(n.id);
-    await this.store.deleteNote(n.id);
+  /**
+   * Delete a note for good: its ink, pictures and history. With `fromTrash`, only if it is still in
+   * the trash (see Store.deleteFromTrash); false if it was not (restored elsewhere meanwhile).
+   */
+  private async eraseNote(n: NoteMeta, fromTrash?: { olderThan?: string }) {
+    if (fromTrash) {
+      if (!(await this.store.deleteFromTrash('note', n.id, fromTrash.olderThan))) return false;
+      this.queue.dropNote(n.id);
+    } else {
+      this.queue.dropNote(n.id);
+      await this.store.deleteNote(n.id);
+    }
     this.history.forget(n.id);
     this.notes = this.notes.filter((x) => x.id !== n.id);
     this.trashedNotes = this.trashedNotes.filter((x) => x.id !== n.id);
     await this.leaveIfOpen(n.id);
     this.renderNoteList();
+    return true;
   }
 
-  /** Delete a notebook and every note in it for good. */
-  private async eraseNotebook(b: Notebook) {
-    if (b.id === this.store.trashId) return; // the trash itself stays
+  /** Delete a notebook and every note in it for good; `fromTrash` as for eraseNote. */
+  private async eraseNotebook(b: Notebook, fromTrash?: { olderThan?: string }) {
+    if (b.id === this.store.trashId) return false; // the trash itself stays
     const inside = new Set([...this.notes, ...this.trashedNotes].filter((n) => n.notebook_id === b.id).map((n) => n.id));
-    for (const id of inside) this.queue.dropNote(id);
-    await this.store.deleteNotebook(b.id);
+    if (fromTrash) {
+      if (!(await this.store.deleteFromTrash('notebook', b.id, fromTrash.olderThan))) return false;
+      for (const id of inside) this.queue.dropNote(id);
+    } else {
+      for (const id of inside) this.queue.dropNote(id);
+      await this.store.deleteNotebook(b.id);
+    }
     for (const id of inside) this.history.forget(id);
     this.notes = this.notes.filter((n) => !inside.has(n.id));
     this.trashedNotes = this.trashedNotes.filter((n) => !inside.has(n.id));
@@ -1543,6 +1557,13 @@ export class App {
       this.current = null;
       await this.switchNotebook(this.activeBooks()[0]);
     } else this.renderNoteList();
+    return true;
+  }
+
+  /** Something in the trash was restored elsewhere while it was being deleted here: it was kept. */
+  private async keptRestored(what: string) {
+    toast(`${what} was restored on another device, so it was not deleted.`);
+    await this.resync();
   }
 
   /** Notes in the trash notebook itself (not those inside a notebook in the trash). */
@@ -1635,8 +1656,8 @@ export class App {
     const ok = await dialog({ title: 'Delete forever?', message: `"${name}" will be deleted permanently${kind === 'notebook' ? ', with its notes' : ''}. This cannot be undone.`, ok: 'Delete forever', danger: true });
     if (!ok) return;
     try {
-      if ('title' in item) await this.eraseNote(item);
-      else await this.eraseNotebook(item);
+      const done = 'title' in item ? await this.eraseNote(item, {}) : await this.eraseNotebook(item, {});
+      if (!done) await this.keptRestored(`"${name}"`);
     } catch (e) {
       toast('Delete failed: ' + (e as Error).message, 'error');
     }
@@ -1648,8 +1669,10 @@ export class App {
     const ok = await dialog({ title: 'Empty the trash?', message: 'Everything in the trash will be deleted permanently. This cannot be undone.', ok: 'Empty trash', danger: true });
     if (!ok) return;
     try {
-      for (const b of [...this.trashedBooks]) await this.eraseNotebook(b);
-      for (const n of this.looseTrash()) await this.eraseNote(n);
+      let kept = 0;
+      for (const b of [...this.trashedBooks]) if (!(await this.eraseNotebook(b, {}))) kept++;
+      for (const n of this.looseTrash()) if (!(await this.eraseNote(n, {}))) kept++;
+      if (kept) await this.keptRestored(kept === 1 ? 'One item' : `${kept} items`);
     } catch (e) {
       toast('Could not empty the trash: ' + (e as Error).message, 'error');
     }
@@ -1659,9 +1682,11 @@ export class App {
   private async purgeTrash() {
     const cutoff = Date.now() - TRASH_DAYS * 86_400_000;
     const old = (x: { deleted_at?: string | null }) => !!x.deleted_at && Date.parse(x.deleted_at) < cutoff;
+    // The storage checks again that each is still in the trash and old enough, at the moment it deletes.
+    const olderThan = new Date(cutoff).toISOString();
     try {
-      for (const b of this.trashedBooks.filter(old)) await this.eraseNotebook(b);
-      for (const n of this.looseTrash().filter(old)) await this.eraseNote(n);
+      for (const b of this.trashedBooks.filter(old)) await this.eraseNotebook(b, { olderThan });
+      for (const n of this.looseTrash().filter(old)) await this.eraseNote(n, { olderThan });
     } catch (e) {
       console.warn('Trash not emptied', e);
     }

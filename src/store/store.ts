@@ -38,6 +38,12 @@ export interface Store {
    */
   readonly trashId: string;
   ensureTrash(): Promise<Notebook>;
+  /**
+   * Delete for good a note in the trash, or a notebook in the trash (with its notes), but only if it
+   * is still there (and, with olderThan, went in before then): a restore made meanwhile on another
+   * device is never erased. The check and the delete are one step. Resolves whether it was deleted.
+   */
+  deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string): Promise<boolean>;
   listNotes(): Promise<NoteMeta[]>;
   /** GoneError if the notebook no longer exists or is in the trash. */
   createNote(title: string, notebookId: string): Promise<NoteMeta>;
