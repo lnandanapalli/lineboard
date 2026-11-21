@@ -6,6 +6,8 @@ import { HomePage, PolicyPage } from './ui/Public';
 import { AuthScreen, NewPasswordScreen } from './ui/Auth';
 import { BusyScreen, MoveNotesScreen, StorageNotice } from './ui/Startup';
 import { AppScreen } from './ui/AppScreen';
+import { Overlays } from './ui/overlays';
+import { Toast } from './ui/Toast';
 
 let booted = false;
 
@@ -49,6 +51,8 @@ function Root() {
     <>
       {screen && <ScreenView key={seq} screen={screen} />}
       <div className="screen-host" ref={host} />
+      <Overlays />
+      <Toast />
       <StorageNotice />
     </>
   );

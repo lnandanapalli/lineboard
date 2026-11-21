@@ -71,20 +71,8 @@ export function debounce<A extends unknown[]>(fn: (...a: A) => void, ms: number)
   return d;
 }
 
-let toastTimer: ReturnType<typeof setTimeout> | undefined;
-export function toast(msg: string, kind: 'info' | 'error' = 'info') {
-  let el = document.getElementById('toast');
-  if (!el) {
-    el = h('div', { id: 'toast', role: 'status' });
-  }
-  // Inside the app element when there is one, so it turns with a manually rotated app.
-  const host = document.querySelector('.app') ?? document.body;
-  if (el.parentElement !== host) host.append(el);
-  el.textContent = msg;
-  el.className = 'show ' + kind;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el!.classList.remove('show'), kind === 'error' ? 5000 : 2500);
-}
+/** Show a short message (drawn by React: ui/Toast.tsx). */
+export { toast } from './ui/Toast';
 
 export function lsGet<T>(key: string, fallback: T): T {
   try {
@@ -113,63 +101,5 @@ export function lsDel(key: string) {
   }
 }
 
-/** In-page confirm/prompt dialog. Resolves null on cancel. */
-export function dialog(opts: {
-  title: string;
-  message?: string;
-  input?: string;
-  /** Show a list to pick from; resolves to the chosen value. */
-  choices?: { value: string; label: string }[];
-  ok?: string;
-  danger?: boolean;
-  /** Longest text the field takes. */
-  maxLength?: number;
-  /** A checkbox under the field; its state is written back to `value` when the dialog is confirmed. */
-  check?: { label: string; value: boolean; hint?: string };
-}): Promise<string | null> {
-  return new Promise((resolve) => {
-    const input = opts.input !== undefined ? (h('input', { type: 'text', class: 'dlg-input' }) as HTMLInputElement) : null;
-    if (input) input.value = opts.input!;
-    if (input && opts.maxLength) input.maxLength = opts.maxLength;
-    const select = opts.choices
-      ? (h('select', { class: 'dlg-input' }, ...opts.choices.map((c) => h('option', { value: c.value }, c.label))) as HTMLSelectElement)
-      : null;
-    const box = opts.check ? (h('input', { type: 'checkbox' }) as HTMLInputElement) : null;
-    if (box) box.checked = opts.check!.value;
-    const check = box ? h('label', { class: 'dlg-check' }, box, h('span', {}, opts.check!.label, opts.check!.hint ? h('small', {}, opts.check!.hint) : null)) : null;
-    const okBtn = h('button', { class: 'btn ' + (opts.danger ? 'danger' : 'primary'), type: 'submit' }, opts.ok ?? 'OK');
-    const cancelBtn = h('button', { class: 'btn', type: 'button' }, 'Cancel');
-    const form = h(
-      'form',
-      { method: 'dialog', class: 'dlg' },
-      h('h3', {}, opts.title),
-      opts.message ? h('p', {}, opts.message) : null,
-      input,
-      select,
-      check,
-      h('div', { class: 'dlg-actions' }, cancelBtn, okBtn),
-    );
-    const d = h('dialog', { class: 'modal small' }, form);
-    document.body.append(d);
-    const done = (v: string | null) => {
-      d.close();
-      d.remove();
-      resolve(v);
-    };
-    cancelBtn.addEventListener('click', () => done(null));
-    d.addEventListener('cancel', (e) => {
-      e.preventDefault();
-      done(null);
-    });
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      if (box) opts.check!.value = box.checked;
-      done(input ? input.value : select ? select.value : 'ok');
-    });
-    d.showModal();
-    if (input) {
-      input.focus();
-      input.select();
-    }
-  });
-}
+/** In-page confirm / prompt dialog (drawn by React). Resolves null on cancel. */
+export { dialog } from './ui/overlays';

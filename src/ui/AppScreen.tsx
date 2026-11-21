@@ -15,6 +15,8 @@ import { lsGet, lsSet } from '../util';
 import type { Notebook, NoteMeta } from '../types';
 import { Logo } from './Logo';
 import { Svg } from './Icon';
+import { Dropdown } from './overlays';
+import type { BoardMode } from '../types';
 
 /** Re-render when one slice of the app's view changes (see AppView in app.ts). */
 const useView = <K extends keyof AppView>(app: App, key: K) => useStore(app.view, (v) => v[key]);
@@ -71,7 +73,7 @@ function Toolbar({ app, inert }: { app: App; inert: boolean }) {
       <div className="sep" />
       <UndoGroup app={app} />
       <div className="sep" />
-      <Mount el={app.modeMenu.el} />
+      <ModeMenu app={app} />
       <StripControls app={app} />
       <div className="spacer" />
       {app.opts.signIn && <SignInButton app={app} where="toolbar" />}
@@ -81,6 +83,44 @@ function Toolbar({ app, inert }: { app: App; inert: boolean }) {
       <IconButton icon={icons.download} title="Share or export" aria-haspopup="dialog" aria-expanded="false" onClick={(e) => app.openExportMenu(e.currentTarget)} />
       <IconButton icon={icons.gear} title="Settings" onClick={() => app.openSettings()} />
     </header>
+  );
+}
+
+/** Mode: how the page takes ink. */
+function ModeMenu({ app }: { app: App }) {
+  useView(app, 'mode');
+  return (
+    <Dropdown<BoardMode>
+      name="Mode"
+      className="mode-btn"
+      value={app.mode}
+      onSelect={(m) => app.setMode(m)}
+      options={[
+        { value: 'strips', label: 'Strips', icon: icons.strip, hint: 'M', description: 'Unlock one strip to write; rest your palm anywhere else.' },
+        { value: 'multi', label: 'Multi-strip', icon: icons.multi, hint: 'M', description: 'Unlock several strips at once for bigger drawings.' },
+        { value: 'split', label: 'Split', icon: icons.split, description: 'Two panes, each locked or unlocked; the page scrolls under them. Tap the divider grip, then drag, to resize.' },
+        { value: 'free', label: 'Free whiteboard', icon: icons.free, hint: 'F', description: 'The whole page takes ink. Two fingers scroll and zoom.' },
+      ]}
+    />
+  );
+}
+
+/** Select: a free-hand loop or a dragged rectangle. The icon picks the tool; the arrow chooses which. */
+function SelectMenu({ app }: { app: App }) {
+  useView(app, 'tools');
+  return (
+    <Dropdown<'lasso' | 'rect'>
+      name="Select"
+      className="select-btn"
+      value={app.selectMode}
+      reselect
+      split={{ className: 'select-tool', onMain: () => app.setTool('select'), title: (t) => withShortcut(t, 'V'), active: app.toolState().tool === 'select' }}
+      onSelect={(m) => app.setSelectMode(m)}
+      options={[
+        { value: 'lasso', label: 'Lasso select', icon: icons.lasso, hint: 'V', description: 'Draw a loop around what you want.' },
+        { value: 'rect', label: 'Rectangle select', icon: icons.rectSelect, hint: 'V', description: 'Drag a box around what you want.' },
+      ]}
+    />
   );
 }
 
@@ -126,7 +166,7 @@ function Tools({ app }: { app: App }) {
       {TOOLS.map(([t, icon, label, key]) => (
         <IconButton key={t} icon={icon} title={withShortcut(label, key)} label={label} className={'tool' + (tool === t ? ' active' : '')} onClick={() => app.setTool(t)} />
       ))}
-      <Mount el={app.selectMenu.el} />
+      <SelectMenu app={app} />
       {/* Shapes: the icon draws the last shape picked; the arrow opens the palette. */}
       <div className={'split-btn shape-tool' + (tool === 'shape' ? ' active' : '')} role="group" aria-label="Shapes">
         <button className="split-main" type="button" aria-label={shapeName} title={withShortcut(shapeName, 'S')} onClick={() => app.setTool('shape')} dangerouslySetInnerHTML={{ __html: SHAPE_ICONS[shape] }} />

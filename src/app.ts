@@ -1,15 +1,15 @@
 import { HL_COLORS, PEN_COLORS } from './colors';
-import { Board, PAGE_W, TEXT_FONT } from './board';
+import { Board, PAGE_W } from './board';
 import { SettingsPanel } from './settings';
 import type { AccountSecurity } from './account';
 import { icons } from './icons';
 import { GoneError, type Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
-import { LINE_STYLE_NAMES, LINE_STYLES, LINE_WIDTHS, SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
 import { prepareImage } from './images';
 import { withDefaults, type AppUser, type BoardMode, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool, DEFAULT_NOTEBOOK_NAME, TRASH_DAYS } from './types';
-import { actionMenu, closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
-import { withShortcut } from './keys';
+import { actionMenu, closeOpenMenu, popover } from './ui/overlays';
+import { createElement } from 'react';
+import { ExportMenu, ShapePalette, SizePicker } from './ui/ToolPopovers';
 import { attachOrientation, detachOrientation, orientation } from './orientation';
 import { debounce, dialog, h, lsGet, lsSet, toast, uuid } from './util';
 import { createStore } from 'zustand/vanilla';
@@ -17,7 +17,7 @@ import { buildExport } from './dataExport';
 import { buildLbd, fileName, importDocument, LBD_EXT, readNotesFile } from './lbd';
 import { confirmItsYou } from './securityUi';
 import { canvasToPdf } from './pdf';
-import { openSearch } from './searchUi';
+import { openSearch } from './ui/Search';
 import { EMPTY_PROFILE, squarePicture, type Profile } from './profile';
 import { applyTheme, clearTheme, isDark, onThemeChange } from './theme';
 import { clip, MAX_IMPORT_FILE, MAX_NOTE_TITLE, MAX_NOTEBOOK_NAME, MAX_PICTURES_AT_ONCE } from './limits';
@@ -136,12 +136,10 @@ export class App {
     this.view.setState({ title });
   }
 
-  // Parts still drawn outside React: the board (with its first-visit hint) and two toolbar menus.
+  // Drawn outside React: the board (a canvas engine) with its first-visit hint.
   /** The board's element, placed on the page by React (ui/AppScreen.tsx). */
   readonly boardHost: HTMLElement;
   private hint!: HTMLElement;
-  readonly modeMenu: Dropdown<BoardMode>;
-  readonly selectMenu: Dropdown<'lasso' | 'rect'>;
   /** The app's element and its main area, once React has put them on the page (see attach). */
   private appEl: HTMLElement | null = null;
   private mainEl: HTMLElement | null = null;
@@ -186,8 +184,6 @@ export class App {
       this.renderStatus();
     };
     this.boardHost = h('div', { class: 'board-host' });
-    this.modeMenu = this.buildModeMenu();
-    this.selectMenu = this.buildSelectMenu();
     this.buildSettings();
     this.syncState = this.queue.pending ? 'saving' : 'saved';
     window.addEventListener(
@@ -407,42 +403,6 @@ export class App {
 
   // ----------------------------- layout -----------------------------
 
-  /** Mode: how the page takes ink (toolbar menu). */
-  private buildModeMenu() {
-    return dropdown<BoardMode>({
-      name: 'Mode',
-      className: 'mode-btn',
-      value: this.settings.mode,
-      onSelect: (m) => this.setMode(m),
-      options: [
-        { value: 'strips', label: 'Strips', icon: icons.strip, hint: 'M', description: 'Unlock one strip to write; rest your palm anywhere else.' },
-        { value: 'multi', label: 'Multi-strip', icon: icons.multi, hint: 'M', description: 'Unlock several strips at once for bigger drawings.' },
-        { value: 'split', label: 'Split', icon: icons.split, description: 'Two panes, each locked or unlocked; the page scrolls under them. Tap the divider grip, then drag, to resize.' },
-        { value: 'free', label: 'Free whiteboard', icon: icons.free, hint: 'F', description: 'The whole page takes ink. Two fingers scroll and zoom.' },
-      ],
-    });
-  }
-
-  /** Select: a free-hand loop or a dragged rectangle. The icon picks the tool; the arrow chooses which. */
-  private buildSelectMenu() {
-    return dropdown<'lasso' | 'rect'>({
-      name: 'Select',
-      className: 'select-btn',
-      value: this.settings.selectMode,
-      reselect: true,
-      split: { className: 'select-tool', onMain: () => this.setTool('select'), title: (t) => withShortcut(t, 'V') },
-      onSelect: (m) => {
-        this.settings.selectMode = m;
-        this.settingsChanged();
-        this.setTool('select');
-      },
-      options: [
-        { value: 'lasso', label: 'Lasso select', icon: icons.lasso, hint: 'V', description: 'Draw a loop around what you want.' },
-        { value: 'rect', label: 'Rectangle select', icon: icons.rectSelect, hint: 'V', description: 'Drag a box around what you want.' },
-      ],
-    });
-  }
-
   /** The board, in its element (once that is on the page), with the first-visit hint and pictures. */
   private buildBoard() {
     const boardHost = this.boardHost;
@@ -637,7 +597,7 @@ export class App {
   }
 
   /** Switch how the page takes ink. Strokes are unaffected; only how input is taken changes. */
-  private setMode(m: BoardMode) {
+  setMode(m: BoardMode) {
     const was = this.settings.mode;
     if (m === was) return;
     if (was !== 'free') this.lastStripMode = was;
@@ -655,7 +615,6 @@ export class App {
   }
 
   private renderMode() {
-    this.modeMenu.set(this.settings.mode);
     if (this.settings.mode !== 'free') this.lastStripMode = this.settings.mode;
     this.bump('mode');
   }
@@ -704,9 +663,17 @@ export class App {
   }
 
   private renderToolOptions() {
-    this.selectMenu.el.classList.toggle('active', this.tool === 'select');
-    this.selectMenu.set(this.settings.selectMode);
     this.bump('tools');
+  }
+
+  get selectMode() {
+    return this.settings.selectMode;
+  }
+  /** Lasso or rectangle selection (the Select menu); picks the Select tool too. */
+  setSelectMode(m: 'lasso' | 'rect') {
+    this.settings.selectMode = m;
+    this.settingsChanged();
+    this.setTool('select');
   }
 
   /** The size of the tool in use: pen, highlighter, text, or shape outline thickness. */
@@ -733,68 +700,21 @@ export class App {
 
   /** The size picker, under its toolbar button (`anchor`). */
   openSizePicker(anchor: HTMLElement) {
-    if (anchor.getAttribute('aria-expanded') === 'true') {
-      closeOpenMenu();
-      return;
-    }
+    if (anchor.getAttribute('aria-expanded') === 'true') return void closeOpenMenu();
+    popover(anchor, createElement(SizePicker, { app: this }), { label: `${this.sizeName} size` });
+  }
+
+  /** What the size picker shows: the tool, its range and presets, and the ink's on-screen colour. */
+  sizeConfig() {
     const tool = this.sizeTool;
-    const cfg = SIZES[tool];
-    const isHL = tool === 'highlighter';
-    const color = isHL ? this.settings.highlighterColor : this.board.shownColor(this.settings.penColor);
-    const slider = h('input', { type: 'range', min: String(cfg.min), max: String(cfg.max), step: String(cfg.step), 'aria-label': `${this.sizeName} size` }) as HTMLInputElement;
-    slider.value = String(this.size);
-    const value = h('output', { class: 'size-value' });
-    const preview = h('canvas', { class: 'size-preview', width: '440', height: '90', 'aria-hidden': 'true' }) as HTMLCanvasElement;
-    const draw = () => {
-      const ctx = preview.getContext('2d')!;
-      const w = Number(slider.value);
-      value.textContent = String(w);
-      ctx.clearRect(0, 0, preview.width, preview.height);
-      // Same scale as the board, so the preview matches what you will get on this screen.
-      const k = (document.querySelector('.canvas-area')?.clientWidth ?? PAGE_W) / PAGE_W;
-      ctx.save();
-      ctx.scale(2, 2); // canvas is drawn at 2x for sharpness
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = color;
-      if (tool === 'text') {
-        ctx.fillStyle = color;
-        ctx.font = `${Math.min(40, w * k)}px ${TEXT_FONT}`;
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Aa', 18, 23);
-        ctx.restore();
-        return;
-      }
-      ctx.lineWidth = Math.max(0.5, w * k);
-      if (isHL) ctx.globalAlpha = 0.38;
-      ctx.beginPath();
-      ctx.moveTo(18, 30);
-      ctx.bezierCurveTo(70, 5, 110, 45, 160, 22);
-      ctx.bezierCurveTo(185, 12, 200, 20, 205, 24);
-      ctx.stroke();
-      ctx.restore();
-    };
-    const set = (w: number) => {
-      slider.value = String(w);
-      this.size = w;
-      this.settingsChanged();
-      this.renderSizeButton();
-      for (const b of presets.children) b.classList.toggle('active', Number((b as HTMLElement).dataset.w) === w);
-      draw();
-    };
-    slider.addEventListener('input', () => set(Number(slider.value)));
-    const presets = h(
-      'div',
-      { class: 'size-presets' },
-      ...cfg.presets.map((w, i) => {
-        const names = tool === 'shape' ? LINE_WIDTHS.map((x) => x.name) : ['Thin', 'Medium', 'Thick'];
-        const b = h('button', { class: 'btn' + (w === this.size ? ' active' : ''), type: 'button', 'data-w': String(w) }, names[i]);
-        b.addEventListener('click', () => set(w));
-        return b;
-      }),
-    );
-    draw();
-    popover(anchor, h('div', { class: 'size-picker' }, preview, h('div', { class: 'range' }, slider, value), presets), { label: `${this.sizeName} size` });
+    const color = tool === 'highlighter' ? this.settings.highlighterColor : (this.board?.shownColor(this.settings.penColor) ?? this.settings.penColor);
+    return { tool, cfg: SIZES[tool], color, name: this.sizeName };
+  }
+
+  setSize(w: number) {
+    this.size = w;
+    this.settingsChanged();
+    this.renderSizeButton();
   }
 
   /** Add pictures to the page: save each, then place it in view and select it (to move or resize). */
@@ -844,86 +764,32 @@ export class App {
     }
   }
 
-  /** The shape palette (under its toolbar button, `anchor`): a grid of shapes, and a switch for perfect squares / circles. */
+  /** The shape palette (under its toolbar button, `anchor`). */
   openShapePalette(anchor: HTMLElement) {
-    if (anchor.getAttribute('aria-expanded') === 'true') {
-      closeOpenMenu();
-      return;
-    }
-    const grid = h('div', { class: 'shape-grid', role: 'radiogroup', 'aria-label': 'Shape' });
-    let close = () => {};
-    for (const k of SHAPES) {
-      const b = h('button', { class: 'shape-cell', type: 'button', role: 'radio', 'aria-checked': String(k === this.settings.shape), 'aria-label': SHAPE_NAMES[k], title: SHAPE_NAMES[k] });
-      b.innerHTML = SHAPE_ICONS[k];
-      b.addEventListener('click', () => {
-        this.settings.shape = k;
-        this.settingsChanged();
-        this.setTool('shape');
-        close();
-      });
-      grid.append(b);
-    }
-    const lock = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-label': 'Keep proportions' }) as HTMLButtonElement;
-    lock.append(h('i', { class: 'knob' }));
-    const paint = () => {
-      lock.classList.toggle('on', this.settings.shapeLock);
-      lock.setAttribute('aria-checked', String(this.settings.shapeLock));
-    };
-    paint();
-    lock.addEventListener('click', () => {
-      this.settings.shapeLock = !this.settings.shapeLock;
-      this.settingsChanged();
-      paint();
-    });
-    const foot = h(
-      'div',
-      { class: 'shape-foot' },
-      h('b', {}, 'Keep proportions'),
-      lock,
-    );
-    ({ close } = popover(anchor, h('div', { class: 'shape-palette' }, grid, this.lineOptions(), foot), { label: 'Shapes' }));
+    if (anchor.getAttribute('aria-expanded') === 'true') return void closeOpenMenu();
+    const { close } = popover(anchor, createElement(ShapePalette, { app: this, close: () => close() }), { label: 'Shapes' });
   }
 
-  /** Line style (solid, dashed, dotted) and thickness for shapes: two rows of icon choices. */
-  private lineOptions() {
-    const line = (attrs: string) =>
-      `<svg viewBox="0 0 32 16" width="32" height="16" aria-hidden="true"><path d="M3 8h26" fill="none" stroke="currentColor" stroke-linecap="round" ${attrs}/></svg>`;
-    const group = <T>(label: string, items: { value: T; name: string; icon: string }[], get: () => T, set: (v: T) => void) => {
-      const row = h('div', { class: 'line-choices', role: 'radiogroup', 'aria-label': label });
-      const paint = () => row.querySelectorAll<HTMLButtonElement>('button').forEach((b, i) => b.setAttribute('aria-checked', String(items[i].value === get())));
-      for (const it of items) {
-        const b = h('button', { class: 'line-choice', type: 'button', role: 'radio', 'aria-label': it.name, title: it.name });
-        b.innerHTML = it.icon;
-        b.addEventListener('click', () => {
-          set(it.value);
-          this.settingsChanged();
-          paint();
-        });
-        row.append(b);
-      }
-      paint();
-      return row;
-    };
-    const dashAttr = { solid: '', dashed: 'stroke-dasharray="6 5"', dotted: 'stroke-dasharray="0 5"' };
-    return h(
-      'div',
-      { class: 'line-options' },
-      group(
-        'Line style',
-        LINE_STYLES.map((v) => ({ value: v, name: LINE_STYLE_NAMES[v], icon: line(`stroke-width="2.4" ${dashAttr[v]}`) })),
-        () => this.settings.shapeDash,
-        (v) => (this.settings.shapeDash = v),
-      ),
-      group(
-        'Thickness',
-        LINE_WIDTHS.map((w) => ({ value: w.width as number, name: w.name, icon: line(`stroke-width="${Math.min(7, 1 + w.width * 0.6).toFixed(1)}"`) })),
-        () => this.settings.shapeWidth,
-        (v) => {
-          this.settings.shapeWidth = v;
-          this.renderSizeButton(); // the toolbar's size button shows the same thickness
-        },
-      ),
-    );
+  shapeSettings() {
+    return { shape: this.settings.shape, dash: this.settings.shapeDash, width: this.settings.shapeWidth, lock: this.settings.shapeLock };
+  }
+  setShape(k: Settings['shape']) {
+    this.settings.shape = k;
+    this.settingsChanged();
+    this.setTool('shape');
+  }
+  setShapeDash(v: Settings['shapeDash']) {
+    this.settings.shapeDash = v;
+    this.settingsChanged();
+  }
+  setShapeWidth(v: number) {
+    this.settings.shapeWidth = v;
+    this.settingsChanged();
+    this.renderSizeButton(); // the toolbar's size button shows the same thickness
+  }
+  setShapeLock(on: boolean) {
+    this.settings.shapeLock = on;
+    this.settingsChanged();
   }
 
   private settingsChanged() {
@@ -1695,31 +1561,16 @@ export class App {
 
   /** The toolbar's export menu (under its button, `anchor`): this note as a picture, or as a Lineboard file. */
   openExportMenu(anchor: HTMLElement) {
-    if (anchor.getAttribute('aria-expanded') === 'true') {
-      closeOpenMenu();
-      return;
-    }
-    let close = () => {};
-    const item = (label: string, sub: string, fn: () => void) => {
-      const b = h('button', { class: 'export-item', type: 'button' }, h('b', {}, label), h('small', {}, sub));
-      b.addEventListener('click', () => {
-        close();
-        fn();
-      });
-      return b;
-    };
-    const current = this.current;
-    ({ close } = popover(
-      anchor,
-      h(
-        'div',
-        { class: 'export-menu' },
-        item('Share…', 'As a PDF, picture or Lineboard file, from your device', () => current && void this.shareNote(current)),
-        item('Picture (.png)', 'This page as an image', () => void this.exportPNG()),
-        item(`Lineboard file (${LBD_EXT})`, 'This note, to keep or import elsewhere', () => current && void this.exportNote(current)),
-      ),
-      { label: 'Share or export' },
-    ));
+    if (anchor.getAttribute('aria-expanded') === 'true') return void closeOpenMenu();
+    const { close } = popover(anchor, createElement(ExportMenu, { app: this, close: () => close() }), { label: 'Share or export' });
+  }
+  /** Share the open note (asks how). */
+  shareCurrent() {
+    if (this.current) void this.shareNote(this.current);
+  }
+  /** The open note as a Lineboard file. */
+  exportCurrent() {
+    if (this.current) void this.exportNote(this.current);
   }
 
   /** Make an .lbd from notebooks of notes and download it. */
@@ -1933,7 +1784,7 @@ export class App {
     location.reload();
   }
 
-  private async exportPNG() {
+  async exportPNG() {
     try {
       const blob = await this.board.exportPNG();
       const url = URL.createObjectURL(blob);
