@@ -153,3 +153,26 @@ test('with the app turned 90°, resizing the sidebar follows the app, not the sc
   // One step wider (320 + 24), not straight to the limit.
   await expect(handle).toHaveAttribute('aria-valuenow', '344');
 });
+
+test('changing tools never moves the toolbar: colour and size grey out instead of hiding', async ({ page }) => {
+  await setup(page);
+  const layout = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.toolbar > *')].map((el) => {
+        const r = el.getBoundingClientRect();
+        return `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}`;
+      }),
+    );
+  const before = await layout();
+  for (const key of ['h', 'e', 'v', 't', 's', 'p']) {
+    await page.keyboard.press(key);
+    expect(await layout(), `after pressing ${key}`).toEqual(before);
+  }
+  await page.keyboard.press('e');
+  await expect(page.locator('.swatches')).toHaveClass(/disabled/);
+  await expect(page.locator('.size-btn')).toBeDisabled();
+  await expect(page.locator('.swatch').first()).toBeDisabled();
+  await page.keyboard.press('p');
+  await expect(page.locator('.swatches')).not.toHaveClass(/disabled/);
+  await expect(page.locator('.size-btn')).toBeEnabled();
+});
