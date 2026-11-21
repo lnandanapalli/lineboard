@@ -1,6 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type InputHTMLAttributes } from 'react';
 import { icons } from '../icons';
-import { FORM_SENT } from '../util';
 
 /**
  * A password field with a show / hide button (the eye), so a typing mistake can be checked.
@@ -15,10 +14,8 @@ export const PasswordInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttribut
     if (!form) return;
     const hide = () => setShown(false);
     form.addEventListener('submit', hide);
-    form.addEventListener(FORM_SENT, hide);
     return () => {
       form.removeEventListener('submit', hide);
-      form.removeEventListener(FORM_SENT, hide);
     };
   }, []);
   const label = shown ? 'Hide password' : 'Show password';

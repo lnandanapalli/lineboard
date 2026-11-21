@@ -143,7 +143,6 @@ export class App {
   // Drawn outside React: the board (a canvas engine) with its first-visit hint.
   /** The board's element, placed on the page by React (ui/AppScreen.tsx). */
   readonly boardHost: HTMLElement;
-  private hint!: HTMLElement;
   /** The app's element and its main area, once React has put them on the page (see attach). */
   private appEl: HTMLElement | null = null;
   /** The last strip mode, so F (free on/off) returns to it. */
@@ -405,21 +404,16 @@ export class App {
 
   // ----------------------------- layout -----------------------------
 
-  /** The board, in its element (once that is on the page), with the first-visit hint and pictures. */
+  /** The first-visit explanation (ui/AppScreen.tsx), for the mode the page opens in (split, for new users). */
+  hintText() {
+    return this.settings.mode === 'split'
+      ? 'write in the open half of the screen and rest your palm on the locked half. Tap a 🔒 in the margin to switch halves; drag the margin to scroll.'
+      : 'tap a 🔒 in the margin to unlock one strip. Only that strip takes ink, so rest your palm anywhere else. Drag the margin to scroll.';
+  }
+
+  /** The board, in its element (once that is on the page), and pictures. */
   private buildBoard() {
     const boardHost = this.boardHost;
-    this.hint = h('div', { class: 'hint' });
-    // The first-visit explanation matches the mode the page opens in (split, for new users).
-    const how =
-      this.settings.mode === 'split'
-        ? 'write in the open half of the screen and rest your palm on the locked half. Tap a 🔒 in the margin to switch halves; drag the margin to scroll.'
-        : 'tap a 🔒 in the margin to unlock one strip. Only that strip takes ink, so rest your palm anywhere else. Drag the margin to scroll.';
-    this.hint.innerHTML = `<b>How it works:</b> ${how} <button type="button" class="link">Got it</button>`;
-    this.hint.querySelector('button')!.addEventListener('click', () => {
-      this.hint.remove();
-      lsSet('lb-hint-dismissed', true);
-    });
-    if (!lsGet('lb-hint-dismissed', false)) boardHost.append(this.hint);
 
     // The board takes pointer presses without moving focus, so a field being edited (the note title)
     // would keep its caret. Pressing the board finishes the edit, as clicking anywhere else does.

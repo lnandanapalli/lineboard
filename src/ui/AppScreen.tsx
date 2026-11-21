@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from 'react';
 import { SettingsDialog } from './Settings';
+import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
 import type { App, AppView } from '../app';
 import { isLight } from '../app';
@@ -11,7 +12,7 @@ import { IMAGE_TYPES } from '../images';
 import { MAX_NOTE_TITLE } from '../limits';
 import { orientation, appRect, appViewport, clientToApp } from '../orientation';
 import { attachNameTips } from '../nameTip';
-import { avatar } from '../profile';
+import { Avatar } from './Avatar';
 import { lsGet, lsSet } from '../util';
 import type { Notebook, NoteMeta } from '../types';
 import { Logo } from './Logo';
@@ -46,10 +47,34 @@ export function AppScreen({ app }: { app: App }) {
         <Sidebar app={app} inert={historyOpen} />
         <div className="scrim" onClick={() => app.toggleSidebar(false)} />
         <Mount el={app.boardHost} />
+        <FirstHint app={app} />
         {historyPanel && <HistoryView panel={historyPanel} />}
       </div>
       <SettingsDialog panel={app.settingsPanel} />
     </div>
+  );
+}
+
+/** How the strips work, on the board until dismissed (once per device). */
+function FirstHint({ app }: { app: App }) {
+  const [shown, setShown] = useState(() => !lsGet('lb-hint-dismissed', false));
+  const [how] = useState(() => app.hintText());
+  if (!shown) return null;
+  return createPortal(
+    <div className="hint">
+      <b>How it works:</b> {how}{' '}
+      <button
+        type="button"
+        className="link"
+        onClick={() => {
+          setShown(false);
+          lsSet('lb-hint-dismissed', true);
+        }}
+      >
+        Got it
+      </button>
+    </div>,
+    app.boardHost,
   );
 }
 
@@ -474,11 +499,9 @@ function AccountChip({ app }: { app: App }) {
   useView(app, 'profile');
   const { profile, url } = app.profileState();
   const name = profile.name;
-  const [pic, setPic] = useState<HTMLElement | null>(null);
-  useEffect(() => setPic(avatar(profile, url, 32)), [profile, url]);
   return (
     <button className="account-chip" type="button" aria-label={`${name || 'Your profile'}: settings`} title="Settings" onClick={() => app.settingsPanel.open('account')}>
-      {pic && <Mount el={pic} />}
+      <Avatar profile={profile} url={url} size={32} />
       <span className={'account-name' + (name ? '' : ' empty')}>{name || 'Add your name'}</span>
       <Svg icon={icons.gear} />
     </button>

@@ -1,4 +1,3 @@
-import { icons } from './icons';
 export function uuid(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   const b = crypto.getRandomValues(new Uint8Array(16));
@@ -21,41 +20,6 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   }
   for (const c of children) if (c != null) e.append(c);
   return e;
-}
-
-/** Sent on a form whose submit button runs its action itself (no native submit event). */
-export const FORM_SENT = 'lb-form-sent';
-
-/**
- * A password field with a show / hide button (the eye), so a typing mistake can be checked.
- * Pressing it keeps the caret in the field; the field goes back to hidden when the form is sent.
- */
-export function withReveal(input: HTMLInputElement): HTMLElement {
-  const btn = h('button', { class: 'reveal-btn', type: 'button', 'aria-label': 'Show password', 'aria-pressed': 'false', title: 'Show password' }) as HTMLButtonElement;
-  const paint = () => {
-    const shown = input.type === 'text';
-    btn.innerHTML = shown ? icons.eyeOff : icons.eye;
-    btn.setAttribute('aria-label', shown ? 'Hide password' : 'Show password');
-    btn.title = shown ? 'Hide password' : 'Show password';
-    btn.setAttribute('aria-pressed', String(shown));
-  };
-  btn.addEventListener('pointerdown', (e) => e.preventDefault()); // keep focus in the field
-  btn.addEventListener('click', () => {
-    input.type = input.type === 'password' ? 'text' : 'password';
-    paint();
-  });
-  // Never leave a password showing once it has been used (the field joins its form right after).
-  // Forms that run their action in a click handler send FORM_SENT instead of a submit event.
-  const hide = () => {
-    input.type = 'password';
-    paint();
-  };
-  queueMicrotask(() => {
-    input.form?.addEventListener('submit', hide);
-    input.form?.addEventListener(FORM_SENT, hide);
-  });
-  paint();
-  return h('span', { class: 'reveal' }, input, btn);
 }
 
 export function debounce<A extends unknown[]>(fn: (...a: A) => void, ms: number) {

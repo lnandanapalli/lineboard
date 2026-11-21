@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from 'react';
 
-/** An element made outside React (the board, a part not yet converted), placed here. */
+/** An element made outside React (the board, which draws itself), placed here. */
 export function Mount({ el }: { el: HTMLElement }) {
   const slot = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {

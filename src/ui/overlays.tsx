@@ -26,7 +26,7 @@ export interface DialogOptions {
 
 type Overlay =
   | { id: number; kind: 'dialog'; opts: DialogOptions; resolve: (v: string | null) => void }
-  | { id: number; kind: 'popover'; anchor: HTMLElement; label: string; content: ReactNode | HTMLElement; host: HTMLElement; onClose?: () => void }
+  | { id: number; kind: 'popover'; anchor: HTMLElement; label: string; content: ReactNode; host: HTMLElement; onClose?: () => void }
   | { id: number; kind: 'custom'; render: (close: () => void) => ReactNode };
 
 const useOverlays = create<{ items: Overlay[] }>(() => ({ items: [] }));
@@ -62,9 +62,9 @@ export function dialog(opts: DialogOptions): Promise<string | null> {
 
 /**
  * A panel anchored under a button (size slider, shape palette...). Closes on outside press, Escape
- * or resize. `content` is React, or (for screens not yet converted) an element.
+ * or resize.
  */
-export function popover(anchor: HTMLElement, content: ReactNode | HTMLElement, opts: { label: string; onClose?: () => void }) {
+export function popover(anchor: HTMLElement, content: ReactNode, opts: { label: string; onClose?: () => void }) {
   openMenu?.close();
   const id = nextId++;
   const close = () => {
@@ -229,16 +229,6 @@ function Dialog({ opts, done }: { opts: DialogOptions; done: (v: string | null) 
   );
 }
 
-/** Mounts an element made outside React (popover content from a screen not yet converted). */
-function Element({ el }: { el: HTMLElement }) {
-  const slot = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    slot.current?.append(el);
-    return () => el.remove();
-  }, [el]);
-  return <span ref={slot} style={{ display: 'contents' }} />;
-}
-
 function Popover({ item }: { item: Extract<Overlay, { kind: 'popover' }> }) {
   const panel = useRef<HTMLDivElement>(null);
   const { anchor, host, onClose } = item;
@@ -286,7 +276,7 @@ function Popover({ item }: { item: Extract<Overlay, { kind: 'popover' }> }) {
   }, [anchor, onClose]);
   return createPortal(
     <div className="popover" role="dialog" aria-label={item.label} ref={panel}>
-      {item.content instanceof HTMLElement ? <Element el={item.content} /> : item.content}
+      {item.content}
     </div>,
     host,
   );

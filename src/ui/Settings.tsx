@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
@@ -14,13 +14,13 @@ import { dialog } from './overlays';
 import { toast } from './Toast';
 import { isApple, shortcut } from '../keys';
 import { orientation } from '../orientation';
-import { avatar, MAX_NAME, type Profile } from '../profile';
+import { MAX_NAME, type Profile } from '../profile';
 import { setTheme, themeChoice, type ThemeChoice } from '../theme';
 import { IMAGE_TYPES } from '../images';
 import { InfoButton } from './overlays';
 import { Svg } from './Icon';
 import { Card } from './Card';
-import { Mount } from './Mount';
+import { Avatar } from './Avatar';
 
 /** What end-to-end encryption does, behind the ⓘ next to its switch. */
 const ENC_INFO =
@@ -275,12 +275,6 @@ function ProfileCard({ host }: { host: SettingsHost }) {
   const [name, setName] = useState(profile.name);
   const [busy, setBusy] = useState<'name' | 'pick' | 'remove' | null>(null);
   const file = useRef<HTMLInputElement>(null);
-  const pic = useRef<HTMLElement | null>(null);
-  const [picEl, setPicEl] = useState<HTMLElement | null>(null);
-  useEffect(() => {
-    pic.current = avatar(profile, url, 64);
-    setPicEl(pic.current);
-  }, [profile, url]);
   const run = async (which: 'name' | 'pick' | 'remove', fn: () => Promise<void>) => {
     setBusy(which);
     try {
@@ -305,7 +299,7 @@ function ProfileCard({ host }: { host: SettingsHost }) {
     >
       <div className="profile-edit">
         <div className="profile-row">
-          {picEl && <Mount el={picEl} />}
+          <Avatar profile={profile} url={url} size={64} />
           <div className="row-actions">
             <button className="btn" type="button" disabled={busy === 'pick'} onClick={() => file.current?.click()}>
               {profile.picture ? 'Change picture' : 'Add picture'}
