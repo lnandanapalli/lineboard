@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from 'react';
+import { SettingsDialog } from './Settings';
 import { useStore } from 'zustand';
 import type { App, AppView } from '../app';
 import { isLight } from '../app';
@@ -14,6 +15,7 @@ import { avatar } from '../profile';
 import { lsGet, lsSet } from '../util';
 import type { Notebook, NoteMeta } from '../types';
 import { Logo } from './Logo';
+import { Mount } from './Mount';
 import { Svg } from './Icon';
 import { Dropdown } from './overlays';
 import type { BoardMode } from '../types';
@@ -21,15 +23,6 @@ import type { BoardMode } from '../types';
 /** Re-render when one slice of the app's view changes (see AppView in app.ts). */
 const useView = <K extends keyof AppView>(app: App, key: K) => useStore(app.view, (v) => v[key]);
 
-/** An element made outside React (the board, a menu not yet converted), placed here. */
-function Mount({ el }: { el: HTMLElement }) {
-  const slot = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
-    slot.current?.append(el);
-    return () => el.remove();
-  }, [el]);
-  return <span ref={slot} style={{ display: 'contents' }} />;
-}
 
 /** A toolbar-style button showing one of the app's icons. `label` defaults to the title. */
 function IconButton({ icon, title, label, className = '', ...rest }: { icon: string; title: string; label?: string; className?: string } & ButtonHTMLAttributes<HTMLButtonElement>) {
@@ -53,6 +46,7 @@ export function AppScreen({ app }: { app: App }) {
         <div className="scrim" onClick={() => app.toggleSidebar(false)} />
         <Mount el={app.boardHost} />
       </div>
+      <SettingsDialog panel={app.settingsPanel} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { HL_COLORS, PEN_COLORS } from './colors';
 import { Board, PAGE_W } from './board';
-import { SettingsPanel } from './settings';
+import { SettingsPanel } from './ui/Settings';
 import type { AccountSecurity } from './account';
 import { icons } from './icons';
 import { GoneError, type Store } from './store/store';
@@ -559,17 +559,6 @@ export class App {
         if (e.key === 'f') this.setMode(this.settings.mode === 'free' ? this.lastStripMode : 'free');
       }
     }, { signal: this.abort.signal });
-  }
-
-  /** "Sign in to save" (trying without an account), as a plain element for Settings. */
-  private signInButton(where: 'settings') {
-    const b = h('button', { class: 'btn primary signin-save signin-' + where, type: 'button', title: 'Sign in or create an account to save your notes' }) as HTMLButtonElement;
-    b.innerHTML = `${icons.cloud}<span>Sign in to save</span>`;
-    b.addEventListener('click', () => {
-      this.settingsPanel.close();
-      void this.goSignIn();
-    });
-    return b;
   }
 
   toggleSidebar(force?: boolean) {
@@ -1810,7 +1799,12 @@ export class App {
       noteCount: () => this.notes.length,
       signOut: this.opts.signOut,
       account: this.opts.account,
-      signInButton: this.opts.signIn ? () => this.signInButton('settings') : undefined,
+      signIn: this.opts.signIn
+        ? () => {
+            this.settingsPanel.close();
+            void this.goSignIn();
+          }
+        : undefined,
       exportData: () => this.exportData(),
       exportAll: () => this.exportAll(),
       importNotes: () => this.pickImport(),
