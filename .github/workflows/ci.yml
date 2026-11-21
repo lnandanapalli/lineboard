@@ -1,9 +1,12 @@
 name: CI
 
+# Pull requests run these checks here. Pushes to main (merged pull requests and direct pushes alike)
+# and version tags run them inside the release workflow, on the exact commit it is about to publish,
+# so they run once per commit and nothing is published or deployed without them.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,10 +56,25 @@ jobs:
           limited=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/app; done | grep -c 429 || true)
           echo "429s in a burst of 250: $limited"; test "$limited" -gt 0
           sleep 6
+          # The diagnostic page names the address the rate limit uses (here the last X-Forwarded-For entry).
+          curl -fsS -H 'X-Forwarded-For: 1.2.3.4, 198.51.100.7' http://localhost:8080/healthz/client | grep -qx 'rate-limited as: 198.51.100.7'
+          # Spoofed X-Forwarded-For entries do not dodge the limit: only the last one, added by the
+          # trusted proxy in front (here the Docker gateway), names the client.
+          spoofed=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 10.$i.0.1, 198.51.100.7" http://localhost:8080/app; done | grep -c 429 || true)
+          echo "429s with a rotating spoofed prefix: $spoofed"; test "$spoofed" -gt 0
+          sleep 6
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/app)" = 200
           # No CANONICAL_HOST: www is served, not redirected.
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8080/app)" = 200
           docker rm -f lb
+      - name: Smoke test rate limiting without a trusted proxy
+        run: |
+          docker run -d --name lbn -p 8082:80 -e TRUSTED_PROXIES=none lineboard:ci
+          for i in $(seq 1 20); do curl -fsS http://localhost:8082/healthz && break; sleep 1; done
+          # A client talking to nginx directly cannot change its bucket with the header at all.
+          limited=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 198.51.100.$i" http://localhost:8082/app; done | grep -c 429 || true)
+          echo "429s with a rotating header and no trusted proxy: $limited"; test "$limited" -gt 0
+          docker rm -f lbn
       - name: Smoke test the www redirect
         run: |
           docker run -d --name lbc -p 8081:80 -e CANONICAL_HOST=example.com lineboard:ci
@@ -67,3 +85,28 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: myapp.azurewebsites.net' http://localhost:8081/healthz)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8081/healthz)" = 200
           docker rm -f lbc
+
+  # The database rules in supabase/schema.sql, on real PostgreSQL (supabase-stub.sql stands in for
+  # Supabase's own schemas). Applied twice, as operators re-run it to upgrade.
+  schema:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+      - name: Apply the schema and check its rules
+        run: |
+          createdb lb
+          for f in supabase/test/supabase-stub.sql supabase/schema.sql supabase/schema.sql supabase/test/checks.sql; do
+            psql -d lb -v ON_ERROR_STOP=1 -q -f "$f"
+          done

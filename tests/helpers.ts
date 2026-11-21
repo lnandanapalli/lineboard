@@ -67,3 +67,13 @@ export async function savedStrokes(page: Page): Promise<number> {
 }
 
 export const expectStrokes = (page: Page, n: number) => expect.poll(() => savedStrokes(page)).toBe(n);
+
+/**
+ * Wait until every change in the save queue has been saved (device-only mode): reading the saved
+ * strokes before then would see the state from just before the last change.
+ */
+export async function savesDone(page: Page) {
+  await expect
+    .poll(() => page.evaluate(() => Object.keys(localStorage).filter((k) => /^lb-queue-[^:]+:/.test(k)).length))
+    .toBe(0);
+}

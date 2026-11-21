@@ -338,3 +338,12 @@ test('a large "Download my data" archive (a notes.lbd over 60 MB) can be importe
   await (await chooser).setFiles(path);
   await expect(page.locator('#toast')).toContainText('Imported “Big”', { timeout: 60_000 });
 });
+
+test('a single .lbd with 1000 notes (1001 files) imports: the outer zip limit is only for zips of files', async ({ page }) => {
+  test.setTimeout(120_000);
+  await setup(page);
+  const notes = Array.from({ length: 1000 }, (_, i) => ({ title: `Card ${i}`, strokes: [] as unknown[] }));
+  await importBytes(page, 'big.lbd', lbd(notes));
+  await expect(page.locator('#toast')).toContainText('Imported 1000 notes', { timeout: 90_000 });
+  expect((await localState(page)).notes.filter((n) => n.title.startsWith('Card ')).length).toBe(1000);
+});

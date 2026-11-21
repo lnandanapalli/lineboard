@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { expect, test, type Page } from '@playwright/test';
 import { PEN, drag, expectStrokes, send, setup, stripY, tp } from './helpers';
-import { USER_ID, mockSupabase } from './mockSupabase';
+import { MOCK_URL, USER_ID, mockSupabase } from './mockSupabase';
 
 /** Your data: download a copy of everything, delete the account (or this device's notes). */
 
@@ -275,4 +275,50 @@ test('deleting the account asks for the password, and cancelling it deletes noth
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await page.waitForTimeout(300);
   expect(db.deleted).toBeFalsy();
+});
+
+/** Make this device's session look signed in long ago: its next token shows an old sign-in. */
+async function ageSession(page: import('@playwright/test').Page, db: import('./mockSupabase').MockDb) {
+  for (const s of db.sessions) s.authAt = Math.floor(Date.now() / 1000) - 3600;
+  // Force a token refresh on reload (the saved token looks expired).
+  await page.evaluate(() => {
+    for (const k of Object.keys(localStorage)) {
+      if (!/^sb-.*-auth-token$/.test(k)) continue;
+      const v = JSON.parse(localStorage.getItem(k)!);
+      v.expires_at = Math.floor(Date.now() / 1000) - 10;
+      localStorage.setItem(k, JSON.stringify(v));
+    }
+  });
+  await page.reload();
+}
+
+test('the server refuses to delete an account without a recent sign-in, even when called directly', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await signIn(page);
+  const { attachBoard } = await import('./helpers');
+  await attachBoard(page);
+  await ageSession(page, db);
+  await attachBoard(page);
+  // A caller holding only this (old) session calls the function itself, skipping the app's checks.
+  const res = await page.evaluate(async (url) => {
+    const k = Object.keys(localStorage).find((x) => /^sb-.*-auth-token$/.test(x))!;
+    const token = JSON.parse(localStorage.getItem(k)!).access_token as string;
+    const r = await fetch(url + '/rest/v1/rpc/delete_my_account', { method: 'POST', headers: { apikey: 'test-anon-key', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
+    return { status: r.status, body: await r.text() };
+  }, MOCK_URL);
+  expect(res.status).toBe(403);
+  expect(res.body).toContain('recent sign-in');
+  expect(db.deleted).toBeFalsy();
+
+  // Through the app, confirming with the password, it works: that check is a fresh sign-in.
+  await openAccountSettings(page);
+  await page.getByRole('button', { name: 'Delete account', exact: true }).click();
+  const dlg = page.locator('dialog.modal.small[open]');
+  await dlg.locator('input').fill('DELETE');
+  await dlg.getByRole('button', { name: 'Delete account', exact: true }).click();
+  const ask = page.locator('dialog.confirm-dialog');
+  await ask.locator('input[type=password]').fill('secret123');
+  await ask.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  expect(db.deleted).toBe(true);
 });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PEN, attachBoard, send, setup, stripY, tp } from './helpers';
+import { PEN, attachBoard, send, setup, stripY, tp, savesDone } from './helpers';
 
 /** The smoothing setting steadies shaky lines but still ends the stroke where the pen lifted. */
 
@@ -23,8 +23,9 @@ async function shakyLine(page: Page) {
 }
 
 /** Total vertical travel of the newest stroke (page units), and where it ends. */
-const measure = (page: Page) =>
-  page.evaluate(() => {
+const measure = async (page: Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
     const list = JSON.parse(localStorage[k]);
     const p: number[] = list[list.length - 1].points;
@@ -32,6 +33,7 @@ const measure = (page: Page) =>
     for (let i = 4; i < p.length; i += 3) wiggle += Math.abs(p[i] - p[i - 3]);
     return { wiggle, endX: p[p.length - 3] };
   });
+};
 
 test('smoothing reduces tremor and the stroke still ends at the pen', async ({ page }) => {
   await setup(page);

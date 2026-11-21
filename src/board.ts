@@ -307,6 +307,11 @@ export class Board {
     if (!sameNote) this.commitText();
     this.clearSelection();
     this.cancelActive();
+    // Placeholders belong to the note they were made in: they do not follow to another note.
+    if (noteId !== this.noteId && this.pending.size) {
+      this.pending.clear();
+      this.updateBusy();
+    }
     this.noteId = noteId;
     this.area.dataset.note = noteId; // which note the board shows (tests wait for it)
     this.strokes = [];
@@ -1593,22 +1598,25 @@ export class Board {
   }
 
   /** Place a picture in the middle of the view, at most 600 page units wide, and select it. */
+  /** Where a placeholder is (page units), or where a picture this size would go in the current view. */
+  pictureBox(slot: number | null, pxW: number, pxH: number): { l: number; t: number; w: number; h: number } {
+    const p = slot != null ? this.pending.get(slot) : undefined;
+    return p ? { l: p.l, t: p.t, w: p.w, h: p.h } : this.placeBox(pxW, pxH);
+  }
+
+  /** The stroke for a picture at a box, in a given note (which need not be the one shown). */
+  static imageStroke(id: string, type: string, box: { l: number; t: number; w: number; h: number }, noteId: string): Stroke {
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    const { l, t, w, h } = box;
+    return { id: uuid(), note_id: noteId, tool: 'image', color: type, width: 1, points: [r1(l), r1(t), 0, r1(l + w), r1(t + h), 0], text: id, created_at: new Date().toISOString() };
+  }
+
   insertImage(id: string, type: string, bitmap: ImageBitmap, slot?: number): Stroke {
     this.commitText();
     // Into the placeholder the user was shown, if there is one; otherwise the middle of the view.
-    const { l, t, w, h } = (slot != null && this.pending.get(slot)) || this.placeBox(bitmap.width, bitmap.height);
+    const box = this.pictureBox(slot ?? null, bitmap.width, bitmap.height);
     if (slot != null) this.removePending(slot);
-    const r1 = (v: number) => Math.round(v * 10) / 10;
-    const stroke: Stroke = {
-      id: uuid(),
-      note_id: this.noteId,
-      tool: 'image',
-      color: type,
-      width: 1,
-      points: [r1(l), r1(t), 0, r1(l + w), r1(t + h), 0],
-      text: id,
-      created_at: new Date().toISOString(),
-    };
+    const stroke = Board.imageStroke(id, type, box, this.noteId);
     this.images.set(id, bitmap);
     this.cache(stroke);
     this.invalidate('ink', 'bg', 'margin');

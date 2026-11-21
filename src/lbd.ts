@@ -4,7 +4,7 @@ import type { Store } from './store/store';
 import { cleanStyle, isPlain } from './textStyle';
 import type { Notebook, NoteMeta, Stroke } from './types';
 import { uuid } from './util';
-import { isZip, unzip, zip, ZipError, type UnzipBudget, type ZipEntry } from './zip';
+import { isZip, unzip, zip, zipNames, ZipError, type UnzipBudget, type ZipEntry } from './zip';
 
 /**
  * The Lineboard document (.lbd): notes as a file, to keep, share or move between accounts.
@@ -298,8 +298,10 @@ export async function readNotesFile(file: Blob): Promise<LbdDocument> {
   if (!isZip(bytes)) throw new LbdError('This is not a Lineboard file (.lbd) or a zip of them.');
   const budget = newBudget();
   try {
+    // An .lbd on its own is read with the document's limits (it may hold thousands of notes); only a
+    // zip of .lbd files is held to the outer limits.
+    if (zipNames(bytes).includes('lineboard.json')) return await readLbd(bytes, budget);
     const top = await unzip(bytes, OUTER_LIMITS);
-    if (top.has('lineboard.json')) return await readLbd(bytes, budget);
     // A zip of .lbd files: read each, and put them together.
     const inner = [...top].filter(([name]) => name.toLowerCase().endsWith(LBD_EXT));
     if (!inner.length) throw new LbdError('This zip has no Lineboard files (.lbd) in it.');

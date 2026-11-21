@@ -17,6 +17,9 @@ export interface MockDb {
   strokes: Row[];
   /** note_versions (version history). */
   versions?: Row[];
+  /** note_images (which notes use which picture files) and whether older notes' uses are recorded. */
+  imageUses?: Row[];
+  imageUsesComplete?: boolean;
   /** Set to make the database look as if schema.sql predates version history. */
   noHistory?: boolean;
   /** Auth emails sent (sign-up confirmation, links, resets): address and time, like Supabase's 60 s wait. */
@@ -52,6 +55,9 @@ export interface MockDb {
 export interface Session {
   id: string;
   aal: 'aal1' | 'aal2';
+  /** When it signed in, and last passed an authenticator code (seconds): the token's "amr" claim. */
+  authAt?: number;
+  codeAt?: number;
   user_agent: string;
   ip: string;
   created_at: string;
@@ -63,9 +69,12 @@ export const MOCK_TOTP = '123456';
 const b64url = (v: string | Uint8Array) => Buffer.from(v).toString('base64url');
 
 /** An unsigned JWT in the shape Supabase issues; the client only decodes it. */
-function jwt(session: Session) {
+function jwt(session: Session, refreshed = false) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = { sub: USER_ID, role: 'authenticated', aud: 'authenticated', aal: session.aal, session_id: session.id, amr: [{ method: 'password', timestamp: now }], iat: now, exp: now + 3600 };
+  // Like Supabase: amr says when each method was used for the session; a refresh does not renew it.
+  // A renewed token may also carry a fresh "token_refresh" entry, which is no proof of identity.
+  const amr = [{ method: 'password', timestamp: session.authAt ?? now }, ...(session.codeAt ? [{ method: 'totp', timestamp: session.codeAt }] : []), ...(refreshed ? [{ method: 'token_refresh', timestamp: now }] : [])];
+  const payload = { sub: USER_ID, role: 'authenticated', aud: 'authenticated', aal: session.aal, session_id: session.id, amr, iat: now, exp: now + 3600 };
   return `${b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${b64url(JSON.stringify(payload))}.sig`;
 }
 
@@ -138,12 +147,12 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     factors: db.factors,
   });
 
-  const tokenResponse = (session: Session) => {
+  const tokenResponse = (session: Session, refreshed = false) => {
     const now = Math.floor(Date.now() / 1000);
-    return { access_token: jwt(session), token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh-' + session.id, user: user() };
+    return { access_token: jwt(session, refreshed), token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh-' + session.id, user: user() };
   };
   const newSession = (ua: string): Session => {
-    const session: Session = { id: crypto.randomUUID(), aal: 'aal1', user_agent: ua, ip: '203.0.113.' + (db.sessions.length + 7), created_at: new Date().toISOString() };
+    const session: Session = { id: crypto.randomUUID(), aal: 'aal1', authAt: Math.floor(Date.now() / 1000), user_agent: ua, ip: '203.0.113.' + (db.sessions.length + 7), created_at: new Date().toISOString() };
     db.sessions.push(session);
     return session;
   };
@@ -168,7 +177,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
 
     // The session the request's access token belongs to (null: none, or signed out elsewhere).
     const bearer = (req.headers()['authorization'] ?? '').replace(/^Bearer /, '');
-    let claims: { session_id?: string; aal?: string } = {};
+    let claims: { session_id?: string; aal?: string; amr?: { method: string; timestamp: number }[] } = {};
     try {
       claims = JSON.parse(Buffer.from(bearer.split('.')[1] ?? '', 'base64url').toString() || '{}');
     } catch {
@@ -193,7 +202,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         const id = String(body()?.refresh_token ?? '').replace(/^refresh-/, '');
         const existing = db.sessions.find((x) => x.id === id);
         if (!existing) return authError(route, 400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
-        return json(route, 200, tokenResponse(existing));
+        return json(route, 200, tokenResponse(existing, true));
       }
       if (grant === 'password' && (db.deleted || body()?.password !== db.password)) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
       return json(route, 200, tokenResponse(newSession(ua)));
@@ -246,6 +255,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         const wasNew = f.status !== 'verified';
         f.status = 'verified';
         session!.aal = 'aal2';
+        session!.codeAt = Math.floor(Date.now() / 1000);
         // Turning on a new factor signs out every other session.
         if (wasNew) db.sessions = db.sessions.filter((x) => x.id === session!.id);
         return json(route, 200, tokenResponse(session!));
@@ -314,8 +324,16 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       const prefix = String(body()?.prefix ?? '').replace(/\/$/, '');
       if (!accessOk() || prefix !== USER_ID) return json(route, 200, []);
       const limit = Number(body()?.limit ?? 100);
-      const names = [...db.images.keys()].filter((k) => k.startsWith(prefix + '/')).map((k) => k.slice(prefix.length + 1));
-      return json(route, 200, names.slice(0, limit).map((name) => ({ name, id: crypto.randomUUID(), metadata: { size: db.images!.get(`${prefix}/${name}`)!.body.length } })));
+      const offset = Number(body()?.offset ?? 0);
+      const names = [...db.images.keys()].filter((k) => k.startsWith(prefix + '/')).map((k) => k.slice(prefix.length + 1)).sort();
+      return json(
+        route,
+        200,
+        names.slice(offset, offset + limit).map((name) => {
+          const f = db.images!.get(`${prefix}/${name}`)!;
+          return { name, id: crypto.randomUUID(), metadata: { size: f.body.length, mimetype: f.type } };
+        }),
+      );
     }
     if (path === '/storage/v1/object/images' && method === 'DELETE') {
       db.images ??= new Map();
@@ -326,8 +344,13 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     }
 
     // ---- deleting the account ----
+    /** The schema's recently_authenticated(): the token shows a sign-in or code from the last 10 minutes. */
+    const proofs = ['password', 'otp', 'magiclink', 'recovery', 'totp', 'mfa/totp', 'mfa/phone', 'mfa/webauthn', 'webauthn', 'passkey', 'oauth', 'sso/saml'];
+    const recentAuth = () => (claims.amr ?? []).some((a) => proofs.includes(a.method) && a.timestamp > Date.now() / 1000 - 600);
+    if (path === '/rest/v1/rpc/recently_authenticated') return json(route, 200, recentAuth());
     if (path === '/rest/v1/rpc/delete_my_account') {
       if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
+      if (!recentAuth()) return json(route, 403, { code: '42501', message: 'Lineboard: a recent sign-in is needed to delete the account' });
       Object.assign(db, { notebooks: [], notes: [], strokes: [], versions: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], deleted: true });
       return route.fulfill({ status: 204, headers: cors, body: '' });
     }
@@ -380,6 +403,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       db.notes = db.notes.filter((n) => !ids.includes(n.id));
       db.strokes = db.strokes.filter((s) => !ids.includes(s.note_id));
       db.versions = (db.versions ?? []).filter((v) => !ids.includes(v.note_id));
+      db.imageUses = (db.imageUses ?? []).filter((u) => !ids.includes(u.note_id));
     };
 
     // ---- notebooks / notes ----
@@ -503,6 +527,30 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       }
     }
 
+    // ---- note_images / note_images_state ----
+    if (path === '/rest/v1/note_images') {
+      db.imageUses ??= [];
+      if (method === 'GET') return json(route, 200, paginate(url, db.imageUses.filter(match)));
+      if (method === 'POST') {
+        for (const r of [body()].flat() as Row[]) {
+          if (!db.notes.some((n) => n.id === r.note_id)) return json(route, 409, { code: '23503', message: 'insert or update on table "note_images" violates foreign key constraint "note_images_note_id_fkey"' });
+          if (!db.imageUses.some((u) => u.note_id === r.note_id && u.image_id === r.image_id)) db.imageUses.push(r);
+        }
+        return route.fulfill({ status: 201, headers: cors });
+      }
+      if (method === 'DELETE') {
+        db.imageUses = db.imageUses.filter((u) => !match(u));
+        return route.fulfill({ status: 204, headers: cors });
+      }
+    }
+    if (path === '/rest/v1/note_images_state') {
+      if (method === 'GET') return json(route, 200, db.imageUsesComplete ? [{ user_id: USER_ID }] : []);
+      if (method === 'POST') {
+        db.imageUsesComplete = true;
+        return route.fulfill({ status: 201, headers: cors });
+      }
+    }
+
     // ---- user_settings / user_keys (one row per user) ----
     if (path === '/rest/v1/user_settings' || path === '/rest/v1/user_keys') {
       const k = path.endsWith('settings') ? 'settings' : 'keys';
@@ -511,11 +559,15 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         return json(route, 200, db[k] ? [db[k]] : []);
       }
       if (method === 'POST') {
+        // One row per user (primary key): a plain insert over an existing row is a conflict.
+        if (db[k] && !prefer.includes('resolution=merge-duplicates')) return json(route, 409, { code: '23505', message: `duplicate key value violates unique constraint "${k === 'keys' ? 'user_keys' : 'user_settings'}_pkey"` });
         db[k] = [body()].flat()[0] as Row;
         return route.fulfill({ status: 201, headers: cors });
       }
       if (method === 'PATCH') {
-        if (db[k]) db[k] = { ...db[k], ...body() };
+        const hit = !!db[k] && match(db[k]!);
+        if (hit) db[k] = { ...db[k], ...body() };
+        if (prefer.includes('return=representation')) return json(route, 200, hit ? [db[k]] : []);
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {

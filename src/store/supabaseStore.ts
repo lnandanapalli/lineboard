@@ -65,6 +65,15 @@ function imageError(error: { message?: string; statusCode?: string | number; sta
   return new StoreError(msg, false);
 }
 
+/** An image's type from its first bytes (for a file no stroke names the type of). */
+function sniffImageType(b: Uint8Array): string {
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+  if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg';
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return 'image/gif';
+  if (b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp';
+  return 'application/octet-stream';
+}
+
 /** The file is simply not there (as opposed to a network or server failure, which should be retried). */
 function isMissing(error: { message?: string; statusCode?: string | number; status?: number }) {
   return String(error.statusCode) === '404' || error.status === 404 || /not.?found/i.test(error.message ?? '');
@@ -358,16 +367,20 @@ export class SupabaseStore implements Store {
   }
 
   async deleteNotebook(id: string) {
+    const unused = await this.pictureCandidates(await this.noteIdsIn(id));
     const { error } = await this.sb.from('notebooks').delete().eq('id', id);
     check(error);
+    await this.removeUnusedPictures(unused);
   }
 
   async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
     // One conditional delete: nothing happens if it has left the trash (or went in again later).
     let q = kind === 'note' ? this.sb.from('notes').delete().eq('id', id).eq('notebook_id', this.trashId) : this.sb.from('notebooks').delete().eq('id', id).not('deleted_at', 'is', null);
     if (olderThan) q = q.lt('deleted_at', olderThan);
+    const unused = await this.pictureCandidates(kind === 'note' ? [id] : await this.noteIdsIn(id));
     const { data, error } = await q.select('id');
     check(error);
+    if (data?.length) await this.removeUnusedPictures(unused);
     return !!data?.length;
   }
 
@@ -476,7 +489,121 @@ export class SupabaseStore implements Store {
   }
 
   async deleteNote(id: string) {
+    const unused = await this.pictureCandidates([id]);
     const { error } = await this.sb.from('notes').delete().eq('id', id);
+    check(error);
+    await this.removeUnusedPictures(unused);
+  }
+
+  // ----------------------------- which notes use which pictures -----------------------------
+  // note_images records every note that uses a picture file (in its ink or its version history), so
+  // a note deleted for good can take with it the files no other note uses. See supabase/schema.sql.
+
+  private imageUsesProbe: Promise<boolean> | null = null;
+  /** False when the database predates note_images: then no picture file is ever removed. */
+  private supportsImageUses(): Promise<boolean> {
+    this.imageUsesProbe ??= (async () => {
+      const { error } = await this.sb.from('note_images').select('note_id').limit(1);
+      if (!error) return true;
+      const missing = error.code === '42P01' || error.code === 'PGRST205' || /note_images/.test(error.message ?? '');
+      if (!missing) this.imageUsesProbe = null;
+      return !missing;
+    })();
+    return this.imageUsesProbe;
+  }
+
+  /** Record that these notes use these picture files (ink just saved, or a version). */
+  private async recordImageUses(uses: { note_id: string; image_id: string }[]) {
+    if (!uses.length || !(await this.supportsImageUses())) return;
+    const rows = [...new Map(uses.map((u) => [`${u.note_id}/${u.image_id}`, { ...u, user_id: this.userId }])).values()];
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await this.sb.from('note_images').upsert(rows.slice(i, i + CHUNK), { onConflict: 'note_id,image_id', ignoreDuplicates: true });
+      check(error);
+    }
+  }
+
+  /** The ids of the notes in a notebook. */
+  private async noteIdsIn(notebookId: string): Promise<string[]> {
+    const ids: string[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('notes').select('id').eq('notebook_id', notebookId).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      ids.push(...((data ?? []) as { id: string }[]).map((r) => r.id));
+      if ((data ?? []).length < PAGE) return ids;
+    }
+  }
+
+  /**
+   * The picture files these notes use, to check once they are deleted. Empty until every older note's
+   * uses have been recorded (backfillImageUses): until then, which files other notes use is unknown.
+   */
+  private async pictureCandidates(noteIds: string[]): Promise<string[]> {
+    if (!noteIds.length || !(await this.supportsImageUses())) return [];
+    const { data: state, error: se } = await this.sb.from('note_images_state').select('user_id').limit(1);
+    if (se || !state?.length) return [];
+    const out = new Set<string>();
+    for (let i = 0; i < noteIds.length; i += CHUNK) {
+      const { data, error } = await this.sb.from('note_images').select('image_id').in('note_id', noteIds.slice(i, i + CHUNK));
+      check(error);
+      for (const r of (data ?? []) as { image_id: string }[]) out.add(r.image_id);
+    }
+    return [...out];
+  }
+
+  /** After a delete: remove the candidate files that no remaining note uses. Failures are left for later. */
+  private async removeUnusedPictures(candidates: string[]) {
+    const unused: string[] = [];
+    for (let i = 0; i < candidates.length; i += CHUNK) {
+      const chunk = candidates.slice(i, i + CHUNK);
+      const { data, error } = await this.sb.from('note_images').select('image_id').in('image_id', chunk);
+      if (error) return console.warn('Pictures not tidied', error);
+      const used = new Set(((data ?? []) as { image_id: string }[]).map((r) => r.image_id));
+      unused.push(...chunk.filter((c) => !used.has(c) && c !== SupabaseStore.PICTURE_ID));
+    }
+    if (!unused.length) return;
+    const { error } = await this.sb.storage.from(IMAGE_BUCKET).remove(unused.map((id) => this.imagePath(id)));
+    if (error) console.warn('Pictures not removed', error);
+  }
+
+  /**
+   * Record the picture uses of every note made before note_images existed (ink and version history),
+   * once per account. Until it has finished, deleting a note removes no picture files. Needs the key
+   * when notes are encrypted; without it, it waits for another time.
+   */
+  async backfillImageUses() {
+    if (!(await this.supportsImageUses())) return;
+    const { data: state, error: se } = await this.sb.from('note_images_state').select('user_id').limit(1);
+    check(se);
+    if (state?.length) return;
+    if (this.vault?.needsKey && !this.vault.key) return;
+    await this.supportsText();
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('strokes').select(this.strokeCols()).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      const rows = (data ?? []) as unknown as StrokeRow[];
+      const decoded = await Promise.all(rows.map((r) => this.decodeStroke(r)));
+      if (decoded.some((x) => !x)) return; // something cannot be read here: try again another time
+      await this.recordImageUses(decoded.filter((x): x is Stroke => x!.tool === 'image' && !!x!.text).map((x) => ({ note_id: x.note_id, image_id: x.text! })));
+      if (rows.length < PAGE) break;
+    }
+    if (await this.supportsHistory()) {
+      for (let from = 0; ; from += VERSION_PAGE) {
+        const { data, error } = await this.sb.from('note_versions').select(VERSION_COLS + ',data,data_enc').order('id', { ascending: true }).range(from, from + VERSION_PAGE - 1);
+        check(error);
+        const rows = (data ?? []) as unknown as VersionRow[];
+        for (const r of rows) {
+          let snap: SnapStroke[];
+          try {
+            snap = await decodeSnapshot(await this.versionBytes(r));
+          } catch {
+            return; // cannot be read here: try again another time
+          }
+          await this.recordImageUses(snap.filter((x) => x.tool === 'image' && x.text).map((x) => ({ note_id: r.note_id, image_id: x.text! })));
+        }
+        if (rows.length < VERSION_PAGE) break;
+      }
+    }
+    const { error } = await this.sb.from('note_images_state').upsert({ user_id: this.userId }, { onConflict: 'user_id', ignoreDuplicates: true });
     check(error);
   }
 
@@ -514,6 +641,8 @@ export class SupabaseStore implements Store {
         return error;
       });
     }
+    // Record which notes use which pictures (a failure here retries the whole save).
+    await this.recordImageUses(strokes.filter((s) => s.tool === 'image' && s.text).map((s) => ({ note_id: s.note_id, image_id: s.text! })));
   }
 
   async deleteStrokes(ids: string[]) {
@@ -612,6 +741,7 @@ export class SupabaseStore implements Store {
   }
 
   async saveVersion(v: VersionMeta, strokes: SnapStroke[]) {
+    await this.recordImageUses(strokes.filter((s) => s.tool === 'image' && s.text).map((s) => ({ note_id: v.note_id, image_id: s.text! })));
     const bytes = await encodeSnapshot(strokes);
     if (bytes.length > MAX_SNAPSHOT_BYTES) throw new StoreError('This note is too large to keep in its version history.', true);
     await this.write(async (key) => {
@@ -725,7 +855,7 @@ export class SupabaseStore implements Store {
     const sealed = isSealedBytes(bytes);
     if (sealed === encrypt) return;
     const plain = sealed ? await openBytes(key, ctx.image(id), bytes) : bytes;
-    await this.storeImage(id, plain, s.color || 'image/png', encrypt ? key : null);
+    await this.storeImage(id, plain, s.color || sniffImageType(plain), encrypt ? key : null);
   }
 
   // ----------------------------- settings -----------------------------
@@ -759,9 +889,7 @@ export class SupabaseStore implements Store {
     const needs = (sealed: string | null | undefined) => (encrypting ? !sealed : !!sealed);
     const target = encrypting ? key : null;
 
-    const { data: books, error: be } = await this.sb.from('notebooks').select(this.bookCols());
-    check(be);
-    for (const r of (books ?? []) as unknown as BookRow[]) {
+    for (const r of await this.allRows<BookRow>('notebooks', this.bookCols())) {
       if (!needs(r.name_enc)) continue;
       const b = await this.decodeBook(r);
       if (!encrypting && b.name === LOCKED_TITLE) continue; // unreadable: leave it encrypted
@@ -769,9 +897,8 @@ export class SupabaseStore implements Store {
       check(error);
     }
 
-    const { data: notes, error: ne } = await this.sb.from('notes').select(this.noteCols());
-    check(ne);
-    const list = (notes ?? []) as unknown as NoteRow[];
+    // Every note, page by page (the API returns at most 1000 rows per request).
+    const list = await this.allRows<NoteRow>('notes', this.noteCols());
     onProgress(0, list.length);
     for (let i = 0; i < list.length; i++) {
       const r = list[i];
@@ -795,13 +922,60 @@ export class SupabaseStore implements Store {
     // Anything written meanwhile by another device (notes made after the list above was read).
     await this.convertStrokes(target, encrypting, null);
     await this.convertVersions(target, encrypting, null);
-    await this.convertProfilePicture(encrypting);
+    // Every picture file, including ones only old versions (or the profile) point at.
+    await this.convertStoredImages(encrypting);
+    // Only call it done when nothing is left in the wrong form (the caller then marks encryption on).
+    if (encrypting) await this.checkAllEncrypted();
   }
 
-  /** The profile picture is a picture no stroke points at: bring it in line with the account too. */
-  private async convertProfilePicture(encrypt: boolean) {
-    const p = await this.loadProfile();
-    if (p.picture) await this.convertImage({ text: SupabaseStore.PICTURE_ID, color: p.pictureType ?? 'image/jpeg' } as Stroke, encrypt);
+  /** Every row of a table, page by page, in a stable order. */
+  private async allRows<T>(table: 'notebooks' | 'notes', cols: string): Promise<T[]> {
+    const rows: T[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from(table).select(cols).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      const page = (data ?? []) as unknown as T[];
+      rows.push(...page);
+      if (page.length < PAGE) return rows;
+    }
+  }
+
+  /**
+   * Bring every file in the account's picture folder in line with the account: a picture that only
+   * an old version (or the profile) points at is converted too. Encrypted files are stored with a
+   * neutral type and plaintext ones with their image type, so only files that look wrong are opened.
+   */
+  private async convertStoredImages(encrypt: boolean) {
+    const key = this.vault?.key;
+    if (!key) return;
+    const bucket = this.sb.storage.from(IMAGE_BUCKET);
+    const sealedType = 'application/octet-stream';
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await bucket.list(this.userId, { limit: 1000, offset, sortBy: { column: 'name', order: 'asc' } });
+      if (error) {
+        if (/bucket not found/i.test(error.message ?? '')) return; // pictures were never set up
+        throw imageError(error);
+      }
+      const files = (data ?? []).filter((f) => f.name && f.id !== null);
+      for (const f of files) {
+        const type = (f.metadata as { mimetype?: string } | null)?.mimetype ?? '';
+        if (encrypt ? type === sealedType : type !== sealedType && type !== '') continue;
+        await this.convertImage({ text: f.name, color: '' } as Stroke, encrypt);
+      }
+      if (files.length < 1000) return;
+    }
+  }
+
+  /** Throws if anything is still stored in plaintext (written meanwhile by another device, say). */
+  private async checkAllEncrypted() {
+    const left = async (table: 'notebooks' | 'notes' | 'strokes' | 'note_versions', col: string) => {
+      const { data, error } = await this.sb.from(table).select('id').is(col, null).limit(1);
+      check(error);
+      return !!data?.length;
+    };
+    const plain =
+      (await left('notebooks', 'name_enc')) || (await left('notes', 'title_enc')) || (await left('strokes', 'enc')) || ((await this.supportsHistory()) && (await left('note_versions', 'data_enc')));
+    if (plain) throw new StoreError('Some notes were changed while they were being encrypted. Lineboard will finish them the next time you open it.', false);
   }
 
   /**
@@ -816,25 +990,40 @@ export class SupabaseStore implements Store {
     const pick = <T extends { is: (c: string, v: null) => T; not: (c: string, op: string, v: null) => T }>(q: T, col: string) =>
       encrypting ? q.is(col, null) : q.not(col, 'is', null);
 
-    const { data: books, error: be } = await pick(this.sb.from('notebooks').select(this.bookCols()), 'name_enc');
-    check(be);
-    for (const r of (books ?? []) as unknown as BookRow[]) {
-      const b = await this.decodeBook(r);
-      if (!encrypting && b.name === LOCKED_TITLE) continue;
-      const { error } = await this.sb.from('notebooks').update(await this.encodeName(target, b.id, b.name)).eq('id', b.id);
-      check(error);
+    // Page by page; converted rows drop out of the query, unreadable ones are stepped over.
+    for (let skip = 0; ; ) {
+      const { data: books, error: be } = await pick(this.sb.from('notebooks').select(this.bookCols()), 'name_enc').order('id', { ascending: true }).range(skip, skip + PAGE - 1);
+      check(be);
+      const rows = (books ?? []) as unknown as BookRow[];
+      for (const r of rows) {
+        const b = await this.decodeBook(r);
+        if (!encrypting && b.name === LOCKED_TITLE) {
+          skip++;
+          continue;
+        }
+        const { error } = await this.sb.from('notebooks').update(await this.encodeName(target, b.id, b.name)).eq('id', b.id);
+        check(error);
+      }
+      if (rows.length < PAGE) break;
     }
-    const { data: notes, error: ne } = await pick(this.sb.from('notes').select(this.noteCols()), 'title_enc');
-    check(ne);
-    for (const r of (notes ?? []) as unknown as NoteRow[]) {
-      const n = await this.decodeNote(r);
-      if (!encrypting && n.title === LOCKED_TITLE) continue;
-      const { error } = await this.sb.from('notes').update(await this.encodeTitle(target, n.id, n.title)).eq('id', n.id);
-      check(error);
+    for (let skip = 0; ; ) {
+      const { data: notes, error: ne } = await pick(this.sb.from('notes').select(this.noteCols()), 'title_enc').order('id', { ascending: true }).range(skip, skip + PAGE - 1);
+      check(ne);
+      const rows = (notes ?? []) as unknown as NoteRow[];
+      for (const r of rows) {
+        const n = await this.decodeNote(r);
+        if (!encrypting && n.title === LOCKED_TITLE) {
+          skip++;
+          continue;
+        }
+        const { error } = await this.sb.from('notes').update(await this.encodeTitle(target, n.id, n.title)).eq('id', n.id);
+        check(error);
+      }
+      if (rows.length < PAGE) break;
     }
     await this.convertStrokes(target, encrypting, null);
     await this.convertVersions(target, encrypting, null);
-    await this.convertProfilePicture(encrypting);
+    await this.convertStoredImages(encrypting);
   }
 
   /** Convert one note's strokes (or every remaining one, with noteId null). Returns how many changed. */

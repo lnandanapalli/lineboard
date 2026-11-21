@@ -279,3 +279,38 @@ test('with two-step verification on, changing the password needs a code too', as
   await dlg.getByRole('button', { name: 'Change password' }).click();
   await expect.poll(() => db.passwordChanges).toBe(1);
 });
+
+test('with two-step verification on, deleting the account takes the password and a fresh code, which the server sees', async ({ page }) => {
+  const db = await mockSupabase(page);
+  db.factors.push({ id: 'f1', factor_type: 'totp', friendly_name: 'Phone', status: 'verified', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' });
+  await signIn(page);
+  await page.getByLabel('Code').fill(MOCK_TOTP);
+  await expect(board(page)).toBeVisible();
+  // Signed in long ago: this session's token shows only old proofs.
+  const old = Math.floor(Date.now() / 1000) - 3600;
+  for (const s of db.sessions) Object.assign(s, { authAt: old, codeAt: old });
+  await page.evaluate(() => {
+    for (const k of Object.keys(localStorage)) {
+      if (!/^sb-.*-auth-token$/.test(k)) continue;
+      const v = JSON.parse(localStorage.getItem(k)!);
+      v.expires_at = Math.floor(Date.now() / 1000) - 10;
+      localStorage.setItem(k, JSON.stringify(v));
+    }
+  });
+  await page.reload();
+  await expect(board(page)).toBeVisible();
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
+  await page.getByRole('button', { name: 'Delete account', exact: true }).click();
+  const dlg = page.locator('dialog.modal.small[open]');
+  await dlg.locator('input').fill('DELETE');
+  await dlg.getByRole('button', { name: 'Delete account', exact: true }).click();
+  const confirm = page.locator('dialog.confirm-dialog');
+  await confirm.locator('input[type=password]').fill('secret123');
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  await confirm.getByLabel('6-digit code').fill(MOCK_TOTP);
+  await confirm.getByRole('button', { name: 'Confirm' }).click();
+  await expect(page).toHaveURL(/\/home$/);
+  expect(db.deleted).toBe(true);
+});

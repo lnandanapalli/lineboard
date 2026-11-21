@@ -1,6 +1,14 @@
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import { DEFAULT_NOTEBOOK_NAME, TRASH_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { lsGet, lsSet, uuid } from '../util';
+
+/**
+ * Save to localStorage or fail loudly: a write the browser refused (storage full) must not look
+ * saved. Not permanent, so the save queue keeps the change and tries again.
+ */
+function put(key: string, value: unknown) {
+  if (!lsSet(key, value)) throw new StoreError('This device\'s storage is full, so the change is not saved yet. Free some space (delete old notes or pictures) and it will be saved.', false);
+}
 import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
 import { GoneError, StoreError, type Store } from './store';
 
@@ -65,13 +73,13 @@ export class LocalStore implements Store {
     return lsGet<NoteMeta[]>('lb-local-notes', []).map((n) => ({ ...n, notebook_id: n.notebook_id ?? null }));
   }
   private saveNotes(n: NoteMeta[]) {
-    lsSet('lb-local-notes', n);
+    put('lb-local-notes', n);
   }
   private notebooks(): Notebook[] {
     return lsGet<Notebook[]>('lb-local-notebooks', []);
   }
   private saveNotebooks(n: Notebook[]) {
-    lsSet('lb-local-notebooks', n);
+    put('lb-local-notebooks', n);
   }
   private strokesKey(id: string) {
     return 'lb-local-strokes-' + id;
@@ -121,8 +129,11 @@ export class LocalStore implements Store {
     if (!b || (b.deleted_at && id !== this.trashId)) throw new GoneError('notebook');
   }
   async deleteNotebook(id: string) {
-    for (const n of this.notes().filter((m) => m.notebook_id === id)) await this.deleteNote(n.id);
+    const ids = this.notes().filter((m) => m.notebook_id === id).map((m) => m.id);
+    const candidates = await this.picturesOf(ids);
+    for (const n of ids) await this.removeNote(n);
     this.saveNotebooks(this.notebooks().filter((b) => b.id !== id));
+    await this.removeUnusedPictures(candidates);
   }
   async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
     const before = (at?: string | null) => !!at && (!olderThan || at < olderThan);
@@ -165,7 +176,34 @@ export class LocalStore implements Store {
     x.title = title;
     this.saveNotes(n);
   }
+  /** Delete a note for good, and the picture files no other note (or version) uses. */
   async deleteNote(id: string) {
+    const candidates = await this.picturesOf([id]);
+    await this.removeNote(id);
+    await this.removeUnusedPictures(candidates);
+  }
+
+  /** Picture files used by these notes, in their ink or their version history. */
+  private async picturesOf(noteIds: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (const id of noteIds) {
+      for (const s of lsGet<Stroke[]>(this.strokesKey(id), [])) if (s.tool === 'image' && s.text) out.add(s.text);
+      for (const v of await this.listVersions(id).catch(() => [])) {
+        for (const s of await this.loadVersion(v).catch(() => [])) if (s.tool === 'image' && s.text) out.add(s.text);
+      }
+    }
+    return out;
+  }
+
+  /** Remove the candidate picture files that no remaining note or version uses. */
+  private async removeUnusedPictures(candidates: Set<string>) {
+    candidates.delete('profile-picture');
+    if (!candidates.size) return;
+    const used = await this.picturesOf(this.notes().map((m) => m.id));
+    for (const id of candidates) if (!used.has(id)) await imageTx('readwrite', (st) => st.delete(id)).catch(() => {});
+  }
+
+  private async removeNote(id: string) {
     this.saveNotes(this.notes().filter((m) => m.id !== id));
     await this.deleteVersions((await this.listVersions(id)).map((v) => v.id)).catch(() => {});
     try {
@@ -186,7 +224,7 @@ export class LocalStore implements Store {
     for (const [noteId, list] of byNote) {
       const cur = lsGet<Stroke[]>(this.strokesKey(noteId), []);
       const ids = new Set(list.map((s) => s.id));
-      lsSet(this.strokesKey(noteId), [...cur.filter((s) => !ids.has(s.id)), ...list]);
+      put(this.strokesKey(noteId), [...cur.filter((s) => !ids.has(s.id)), ...list]);
       this.touch(noteId);
     }
   }
@@ -196,7 +234,7 @@ export class LocalStore implements Store {
       const cur = lsGet<Stroke[]>(this.strokesKey(m.id), []);
       const next = cur.filter((s) => !set.has(s.id));
       if (next.length !== cur.length) {
-        lsSet(this.strokesKey(m.id), next);
+        put(this.strokesKey(m.id), next);
         this.touch(m.id);
       }
     }
@@ -226,7 +264,7 @@ export class LocalStore implements Store {
       p.picture = uuid();
       p.pictureType = change.picture.type;
     }
-    lsSet('lb-local-profile', p);
+    put('lb-local-profile', p);
     return p;
   }
   async loadProfilePicture(p: Profile): Promise<Blob | null> {
@@ -303,6 +341,6 @@ export class LocalStore implements Store {
     return lsGet<Partial<Settings> | null>('lb-local-settings', null);
   }
   async saveSettings(s: Settings) {
-    lsSet('lb-local-settings', s);
+    put('lb-local-settings', s);
   }
 }

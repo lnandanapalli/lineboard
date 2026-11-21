@@ -48,7 +48,8 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 - **Trash.** The trash is a notebook of its own, opened from the bottom of the sidebar (or Settings → Data
   controls). Deleting a note asks, then moves it there; taking it out asks which notebook to put it in. A
   deleted notebook goes to the trash whole, its notes listed under it, and can only be restored whole.
-  After 30 days it is deleted for good, or sooner with Delete forever or Empty trash.
+  After 30 days it is deleted for good, or sooner with Delete forever or Empty trash. Deleting for good
+  also removes the note's picture files, unless another note (a copy, say) still uses them.
 - **Changes from other devices.** Coming back to the tab picks up notes and notebooks changed elsewhere. An
   action on something another device has deleted meanwhile (renaming it, moving a note into it) fails with
   a clear message instead of silently doing nothing, and the app catches up.
@@ -200,6 +201,7 @@ To enable accounts and sync, point Lineboard at a Supabase project:
 | `SUPABASE_URL` | `VITE_SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` (no path) |
 | `SUPABASE_ANON_KEY` | `VITE_SUPABASE_ANON_KEY` | Anon or publishable key |
 | `CANONICAL_HOST` (optional) | (not used) | The one address to serve, e.g. `example.com`. The other spelling (`www.example.com`, or the reverse) gets a permanent redirect to it. |
+| `TRUSTED_PROXIES` (optional) | (not used) | Networks whose `X-Forwarded-For` names the client for rate limiting (the last entry, which that proxy added). Default: private and link-local networks, where Azure App Service's front end connects from. `none` keys every client by its own address. If another proxy (a CDN, say) sits in front of the platform's, list its addresses too. To check a deployment, open `/healthz/client`: it shows the headers your request arrived with and the address the rate limit used. Try it again with a made-up `X-Forwarded-For` (`curl -H 'X-Forwarded-For: 1.2.3.4' https://<site>/healthz/client`): the address used must still be yours. |
 | `TURNSTILE_SITE_KEY` (optional) | `VITE_TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key: turns on the bot check at sign-in, sign-up and password reset. Pair it with the secret key in Supabase (see [Security](#security-and-abuse-protection)). |
 
 Serve the app from one address. Browsers keep sign-ins, notes made without an account, the remembered
@@ -227,15 +229,19 @@ Built in:
 
 - **Data isolation:** row-level security: every account reaches only its own rows and picture files, and a device that was signed out elsewhere loses access at once (`access_ok()` in the schema).
 - **Optional user protections:** end-to-end encryption, two-step verification, passkeys, a list of signed-in devices, and a fresh password check before sensitive changes ("Confirm it's you"), plus an authenticator code when two-step verification is on.
+- **Deleting the account** needs a sign-in or confirmation from the last 10 minutes, checked by the database itself (`delete_my_account()`), so a session left signed in cannot delete the account on its own.
+- **Signing out** in any way (here, from another device, by a password change, or when the session ends) forgets the encryption key remembered on the device.
 - **Fair-use limits, enforced by the database:**
   - 500 notebooks and 20,000 notes per account;
   - 50,000 strokes per note and 2,000,000 strokes in all;
   - version history: 500 versions per note and 1 GB per account;
   - pictures: image types only, at most 15 MB each, and 5,000 files or 2 GB per account.
+  - The limits apply to changes as well as additions: replacing a picture, rewriting a version or
+    moving ink into another note cannot get round them.
   - The app explains a refused save instead of retrying it.
   - Every input and stored value has a range; see [Limits](#limits).
 - **Web server:**
-  - per-client request rate limiting, with HTTP 429 for floods;
+  - per-client request rate limiting, with HTTP 429 for floods (the client is named by a trusted proxy only, see `TRUSTED_PROXIES`, so a spoofed `X-Forwarded-For` does not help);
   - GET and HEAD only, with a tiny request-body limit;
   - security headers: CSP, HSTS, COOP, `X-Frame-Options`, `nosniff` and a referrer policy.
 - **Your data:** Settings > Account > Download my data / Delete account. A one-time notice explains the browser storage, which is essential-only, so no consent banner is needed.
@@ -271,6 +277,13 @@ npm run screenshot  # regenerate docs/screenshot.png
 
 The tests simulate stylus and palm contacts of different sizes, and cover the signed-in flows against an
 in-memory Supabase stand-in, so they need no backend or keys.
+
+The database rules in `supabase/schema.sql` are checked on real PostgreSQL too (CI does this; locally,
+against an empty database):
+
+```bash
+createdb lb && for f in supabase/test/supabase-stub.sql supabase/schema.sql supabase/test/checks.sql; do psql -d lb -v ON_ERROR_STOP=1 -q -f "$f"; done
+```
 
 ```
 src/board.ts        canvas engine: split / strips, palm filtering, eraser, rendering, export

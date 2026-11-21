@@ -1,14 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PEN, expectStrokes, send, setup, stripY, tapMargin, tp } from './helpers';
+import { PEN, expectStrokes, send, setup, stripY, tapMargin, tp, savesDone } from './helpers';
 import { MOCK_URL, mockSupabase } from './mockSupabase';
 
 /** Text boxes: tap with the Text tool, type, and tap again to edit. */
 
-const texts = (page: Page) =>
-  page.evaluate(() => {
+const texts = async (page: Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'));
     return k ? (JSON.parse(localStorage[k]) as { tool: string; text?: string }[]).filter((s) => s.tool === 'text').map((s) => s.text) : [];
   });
+};
 
 async function tap(cdp: import('@playwright/test').CDPSession, x: number, y: number) {
   await send(cdp, 'touchStart', [tp(x, y, PEN, 3)]);
@@ -134,11 +136,13 @@ test('text longer than the database allows is capped instead of being refused', 
 // ---------------- formatting ----------------
 
 type T = { text?: string; width: number; color: string; font?: Record<string, unknown> };
-const textBoxes = (page: Page) =>
-  page.evaluate(() => {
+const textBoxes = async (page: Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'));
     return k ? (JSON.parse(localStorage[k]) as (T & { tool: string })[]).filter((s) => s.tool === 'text') : [];
   });
+};
 const bar = (page: Page) => page.getByRole('toolbar', { name: 'Text format' });
 
 test('the format bar sets font, size, bold / italic / underline, alignment and colour; the next box starts the same', async ({ page }) => {
@@ -280,7 +284,7 @@ test(`the box being typed in never clips leaning letters (${align}): it shows as
 
 // ---------------- moving text boxes ----------------
 
-const firstBox = async (page: Page) => (await page.evaluate(() => {
+const firstBox = async (page: Page) => (await savesDone(page), await page.evaluate(() => {
   const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
   return (JSON.parse(localStorage[k]) as { tool: string; text?: string; points: number[] }[]).filter((s) => s.tool === 'text');
 }))[0];

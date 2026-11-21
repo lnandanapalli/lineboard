@@ -1,6 +1,6 @@
 import { AccountError } from './account';
 import { logo } from './brand';
-import { MIN_PASSPHRASE, WrongSecretError, type KeyVault } from './crypto/vault';
+import { KeysChangedError, MIN_PASSPHRASE, WrongSecretError, type KeyVault } from './crypto/vault';
 import { MAX_PASSPHRASE } from './limits';
 import type { SupabaseStore } from './store/supabaseStore';
 import { FORM_SENT, h, toast, withReveal } from './util';
@@ -278,6 +278,12 @@ export async function enableEncryption(c: EnableContext): Promise<boolean> {
     } catch (e) {
       console.error(e);
       d.closable = true;
+      if (e instanceof KeysChangedError) {
+        // Another device's keys are in place: these were not saved, and trying again cannot help.
+        result = false;
+        d.show(h('h3', {}, 'Encryption was set up elsewhere'), h('p', {}, e.message), actions(button('Reload', 'primary', () => location.reload())));
+        return;
+      }
       result = committed;
       d.show(
         h('h3', {}, committed ? 'Encryption is not finished yet' : 'Encryption was not turned on'),

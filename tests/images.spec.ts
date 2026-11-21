@@ -285,3 +285,33 @@ test('pictures added together land where their placeholders were, not on top of 
   expect(b[0] - a[0]).toBeGreaterThan(10);
   expect(b[1] - a[1]).toBeGreaterThan(10);
 });
+
+test('a picture still uploading when another note is opened lands in the note it was added to', async ({ page }) => {
+  const db = await mockSupabase(page);
+  // Hold the upload until released.
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  await page.route('**/storage/v1/object/images/**', async (route) => {
+    if (route.request().method() === 'POST' || route.request().method() === 'PUT') await held;
+    await route.fallback();
+  });
+  await signIn(page);
+  await expect(page.locator('.title-input')).not.toHaveValue('');
+  const first = (await page.locator('.title-input').inputValue())!;
+  const firstId = await page.locator('.canvas-area').getAttribute('data-note');
+  await insertPicture(page);
+  await expect(page.locator('.canvas-area')).toHaveAttribute('aria-busy', 'true'); // the placeholder shows
+  // Open another note while it uploads.
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await page.getByRole('button', { name: 'New note', exact: true }).click();
+  await page.locator('dialog[open] .dlg-input').fill('Second');
+  await page.locator('dialog[open]').getByRole('button', { name: 'Create' }).click();
+  await expect(page.locator('.title-input')).toHaveValue('Second');
+  const secondId = await page.locator('.canvas-area').getAttribute('data-note');
+  // The placeholder did not follow to the new note.
+  await expect(page.locator('.canvas-area')).not.toHaveAttribute('aria-busy', 'true');
+  release();
+  await expect(page.locator('#toast')).toContainText(`The picture was added to “${first}”`);
+  await expect.poll(() => db.strokes.filter((s) => s.tool === 'image').map((s) => s.note_id)).toEqual([firstId]);
+  expect(db.strokes.some((s) => s.note_id === secondId)).toBe(false);
+});
