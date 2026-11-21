@@ -200,6 +200,7 @@ To enable accounts and sync, point Lineboard at a Supabase project:
 | `SUPABASE_URL` | `VITE_SUPABASE_URL` | Project URL, e.g. `https://<ref>.supabase.co` (no path) |
 | `SUPABASE_ANON_KEY` | `VITE_SUPABASE_ANON_KEY` | Anon or publishable key |
 | `CANONICAL_HOST` (optional) | (not used) | The one address to serve, e.g. `example.com`. The other spelling (`www.example.com`, or the reverse) gets a permanent redirect to it. |
+| `TRUSTED_PROXIES` (optional) | (not used) | Networks whose `X-Forwarded-For` names the client for rate limiting (the last entry, which that proxy added). Default: private and link-local networks, where Azure App Service's front end connects from. `none` keys every client by its own address. If another proxy (a CDN, say) sits in front of the platform's, list its addresses too. |
 | `TURNSTILE_SITE_KEY` (optional) | `VITE_TURNSTILE_SITE_KEY` | Cloudflare Turnstile site key: turns on the bot check at sign-in, sign-up and password reset. Pair it with the secret key in Supabase (see [Security](#security-and-abuse-protection)). |
 
 Serve the app from one address. Browsers keep sign-ins, notes made without an account, the remembered
@@ -235,7 +236,7 @@ Built in:
   - The app explains a refused save instead of retrying it.
   - Every input and stored value has a range; see [Limits](#limits).
 - **Web server:**
-  - per-client request rate limiting, with HTTP 429 for floods;
+  - per-client request rate limiting, with HTTP 429 for floods (the client is named by a trusted proxy only, see `TRUSTED_PROXIES`, so a spoofed `X-Forwarded-For` does not help);
   - GET and HEAD only, with a tiny request-body limit;
   - security headers: CSP, HSTS, COOP, `X-Frame-Options`, `nosniff` and a referrer policy.
 - **Your data:** Settings > Account > Download my data / Delete account. A one-time notice explains the browser storage, which is essential-only, so no consent banner is needed.

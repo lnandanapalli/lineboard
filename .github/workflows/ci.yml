@@ -55,10 +55,23 @@ jobs:
           limited=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/app; done | grep -c 429 || true)
           echo "429s in a burst of 250: $limited"; test "$limited" -gt 0
           sleep 6
+          # Spoofed X-Forwarded-For entries do not dodge the limit: only the last one, added by the
+          # trusted proxy in front (here the Docker gateway), names the client.
+          spoofed=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 10.$i.0.1, 198.51.100.7" http://localhost:8080/app; done | grep -c 429 || true)
+          echo "429s with a rotating spoofed prefix: $spoofed"; test "$spoofed" -gt 0
+          sleep 6
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/app)" = 200
           # No CANONICAL_HOST: www is served, not redirected.
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.example.com' http://localhost:8080/app)" = 200
           docker rm -f lb
+      - name: Smoke test rate limiting without a trusted proxy
+        run: |
+          docker run -d --name lbn -p 8082:80 -e TRUSTED_PROXIES=none lineboard:ci
+          for i in $(seq 1 20); do curl -fsS http://localhost:8082/healthz && break; sleep 1; done
+          # A client talking to nginx directly cannot change its bucket with the header at all.
+          limited=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 198.51.100.$i" http://localhost:8082/app; done | grep -c 429 || true)
+          echo "429s with a rotating header and no trusted proxy: $limited"; test "$limited" -gt 0
+          docker rm -f lbn
       - name: Smoke test the www redirect
         run: |
           docker run -d --name lbc -p 8081:80 -e CANONICAL_HOST=example.com lineboard:ci
