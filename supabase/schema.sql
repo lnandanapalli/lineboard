@@ -317,14 +317,17 @@ begin
   return found;
 end $$;
 
--- True when the caller's token shows a sign-in or confirmation (password, emailed code, passkey or
--- authenticator code) from the last 10 minutes: each entry of the "amr" claim says when that method
--- was last used for the session, and refreshing a token does not renew it.
+-- True when the caller's token shows a sign-in or confirmation (password, emailed code or link,
+-- passkey, authenticator code, or a sign-in with Google and the like) from the last 10 minutes. Each
+-- entry of the token's "amr" claim names a method and when it was last used for the session. Only
+-- methods that prove who the person is count: not "token_refresh" (a token renewed on its own,
+-- which happens every hour) and not "anonymous".
 create or replace function public.recently_authenticated() returns boolean
 language sql stable security invoker set search_path = '' as $$
   select exists (
     select 1 from jsonb_array_elements(coalesce((select auth.jwt()) -> 'amr', '[]'::jsonb)) a
      where jsonb_typeof(a) = 'object'
+       and a ->> 'method' in ('password', 'otp', 'magiclink', 'recovery', 'totp', 'mfa/totp', 'mfa/phone', 'mfa/webauthn', 'webauthn', 'passkey', 'oauth', 'sso/saml')
        and (a ->> 'timestamp') ~ '^[0-9]+$'
        and (a ->> 'timestamp')::bigint > extract(epoch from now()) - 600
   )

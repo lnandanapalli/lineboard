@@ -8,10 +8,10 @@ insert into auth.sessions (id, user_id) values
   ('aaaaaaaa-0000-4000-8000-000000000002', '22222222-2222-4222-8222-222222222222');
 
 -- Act as a user whose token shows a sign-in `auth_age` seconds ago.
-create function pg_temp.as_user(uid text, sid text, auth_age int) returns void language plpgsql as $$
+create function pg_temp.as_user(uid text, sid text, auth_age int, method text default 'password') returns void language plpgsql as $$
 begin
   perform set_config('request.jwt.claims', json_build_object('sub', uid, 'session_id', sid, 'aal', 'aal1',
-    'amr', json_build_array(json_build_object('method', 'password', 'timestamp', extract(epoch from now())::bigint - auth_age)))::text, false);
+    'amr', json_build_array(json_build_object('method', method, 'timestamp', extract(epoch from now())::bigint - auth_age)))::text, false);
   execute 'set role authenticated';
 end $$;
 -- Run `stmt` as that user and expect it to fail with a message matching `pattern`.
@@ -37,6 +37,10 @@ end $$;
 
 \echo 'account deletion needs a recent sign-in'
 select pg_temp.refused('11111111-1111-4111-8111-111111111111', 'aaaaaaaa-0000-4000-8000-000000000001', 3600, 'select public.delete_my_account()', 'recent sign-in');
+-- A token that was only renewed just now (no fresh sign-in) is not proof either.
+select pg_temp.as_user('11111111-1111-4111-8111-111111111111', 'aaaaaaaa-0000-4000-8000-000000000001', 5, 'token_refresh');
+do $$ begin if public.recently_authenticated() then raise exception 'a token refresh counted as a sign-in'; end if; end $$;
+reset role;
 do $$ begin if (select count(*) from auth.users) <> 2 then raise exception 'an old session deleted the account'; end if; end $$;
 select pg_temp.ok('22222222-2222-4222-8222-222222222222', 'aaaaaaaa-0000-4000-8000-000000000002', 60, 'select public.delete_my_account()');
 do $$ begin if exists (select 1 from auth.users where id = '22222222-2222-4222-8222-222222222222') then raise exception 'a fresh sign-in could not delete the account'; end if; end $$;

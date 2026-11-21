@@ -69,10 +69,11 @@ export const MOCK_TOTP = '123456';
 const b64url = (v: string | Uint8Array) => Buffer.from(v).toString('base64url');
 
 /** An unsigned JWT in the shape Supabase issues; the client only decodes it. */
-function jwt(session: Session) {
+function jwt(session: Session, refreshed = false) {
   const now = Math.floor(Date.now() / 1000);
   // Like Supabase: amr says when each method was used for the session; a refresh does not renew it.
-  const amr = [{ method: 'password', timestamp: session.authAt ?? now }, ...(session.codeAt ? [{ method: 'totp', timestamp: session.codeAt }] : [])];
+  // A renewed token may also carry a fresh "token_refresh" entry, which is no proof of identity.
+  const amr = [{ method: 'password', timestamp: session.authAt ?? now }, ...(session.codeAt ? [{ method: 'totp', timestamp: session.codeAt }] : []), ...(refreshed ? [{ method: 'token_refresh', timestamp: now }] : [])];
   const payload = { sub: USER_ID, role: 'authenticated', aud: 'authenticated', aal: session.aal, session_id: session.id, amr, iat: now, exp: now + 3600 };
   return `${b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${b64url(JSON.stringify(payload))}.sig`;
 }
@@ -146,9 +147,9 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     factors: db.factors,
   });
 
-  const tokenResponse = (session: Session) => {
+  const tokenResponse = (session: Session, refreshed = false) => {
     const now = Math.floor(Date.now() / 1000);
-    return { access_token: jwt(session), token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh-' + session.id, user: user() };
+    return { access_token: jwt(session, refreshed), token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh-' + session.id, user: user() };
   };
   const newSession = (ua: string): Session => {
     const session: Session = { id: crypto.randomUUID(), aal: 'aal1', authAt: Math.floor(Date.now() / 1000), user_agent: ua, ip: '203.0.113.' + (db.sessions.length + 7), created_at: new Date().toISOString() };
@@ -201,7 +202,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         const id = String(body()?.refresh_token ?? '').replace(/^refresh-/, '');
         const existing = db.sessions.find((x) => x.id === id);
         if (!existing) return authError(route, 400, 'refresh_token_not_found', 'Invalid Refresh Token: Refresh Token Not Found');
-        return json(route, 200, tokenResponse(existing));
+        return json(route, 200, tokenResponse(existing, true));
       }
       if (grant === 'password' && (db.deleted || body()?.password !== db.password)) return authError(route, 400, 'invalid_credentials', 'Invalid login credentials');
       return json(route, 200, tokenResponse(newSession(ua)));
@@ -344,7 +345,8 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
 
     // ---- deleting the account ----
     /** The schema's recently_authenticated(): the token shows a sign-in or code from the last 10 minutes. */
-    const recentAuth = () => (claims.amr ?? []).some((a) => a.timestamp > Date.now() / 1000 - 600);
+    const proofs = ['password', 'otp', 'magiclink', 'recovery', 'totp', 'mfa/totp', 'mfa/phone', 'mfa/webauthn', 'webauthn', 'passkey', 'oauth', 'sso/saml'];
+    const recentAuth = () => (claims.amr ?? []).some((a) => proofs.includes(a.method) && a.timestamp > Date.now() / 1000 - 600);
     if (path === '/rest/v1/rpc/recently_authenticated') return json(route, 200, recentAuth());
     if (path === '/rest/v1/rpc/delete_my_account') {
       if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
