@@ -6,7 +6,7 @@
   "description": "Handwriting whiteboard for tablets without an active pen: write above a movable line, rest your hand on the locked part below it.",
   "license": "MIT",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=26"
   },
   "scripts": {
     "dev": "vite",

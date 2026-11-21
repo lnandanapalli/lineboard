@@ -158,7 +158,7 @@ in the browser's local storage on the device.
 
 ## Quick start
 
-Requires Node.js 20.19+.
+Requires Node.js 26 (the current LTS; see `.nvmrc`).
 
 ```bash
 npm install

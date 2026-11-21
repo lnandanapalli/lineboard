@@ -10,7 +10,7 @@ Settings for both your stylus and your palm. That data helps tune the defaults.
 
 ## Development setup
 
-Requirements: Node.js 20.19 or newer (see `.nvmrc`).
+Requirements: Node.js 26 or newer (see `.nvmrc`).
 
 ```bash
 npm install
