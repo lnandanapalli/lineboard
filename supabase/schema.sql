@@ -48,6 +48,30 @@ alter table public.notes     add column if not exists archived_at timestamptz;
 alter table public.notebooks add column if not exists starred boolean not null default false;
 alter table public.notebooks add column if not exists archived_at timestamptz;
 
+-- The trash. It is a notebook of its own (one per user, made by the app): deleting a note moves it
+-- there (notes.deleted_at says since when), and taking it out moves it into a notebook the user picks.
+-- A deleted notebook moves to the trash whole (notebooks.deleted_at set), its notes with it, and can
+-- only be restored whole. The app deletes for good what has been in the trash for 30 days.
+alter table public.notes     add column if not exists deleted_at timestamptz;
+alter table public.notebooks add column if not exists deleted_at timestamptz;
+
+-- A note cannot be put into a notebook that is in the trash (say, deleted on another device a moment
+-- ago): the move fails instead, and the app says so.
+create or replace function public.note_notebook_live() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+begin
+  if new.notebook_id is not null
+     and (tg_op = 'INSERT' or new.notebook_id is distinct from old.notebook_id)
+     and exists (select 1 from public.notebooks b where b.id = new.notebook_id and b.deleted_at is not null) then
+    raise exception 'Lineboard: that notebook is in the trash' using errcode = '23503';
+  end if;
+  return new;
+end $$;
+drop trigger if exists notes_notebook_live on public.notes;
+create trigger notes_notebook_live
+  before insert or update of notebook_id on public.notes
+  for each row execute function public.note_notebook_live();
+
 -- ------------- End-to-end encryption (optional, per user) -------------
 -- When a user turns encryption on, the app encrypts titles, names and ink on the device. Encrypted
 -- rows keep the ciphertext in *_enc columns and leave the plaintext columns empty (or null).
@@ -338,8 +362,10 @@ language plpgsql security definer set search_path = '' as $$
 declare bad text;
 begin
   if tg_table_name = 'notebooks' then
+    -- The trash (the user's id with its version digit set to 8, made by the app) does not count.
     select format('%s notebooks', 500) into bad from (select distinct user_id from added) a
-     where (select count(*) from public.notebooks b where b.user_id = a.user_id) > 500 limit 1;
+     where (select count(*) from public.notebooks b
+             where b.user_id = a.user_id and b.id <> overlay(a.user_id::text placing '8' from 15 for 1)::uuid) > 500 limit 1;
   elsif tg_table_name = 'notes' then
     select format('%s notes', 20000) into bad from (select distinct user_id from added) a
      where (select count(*) from public.notes n where n.user_id = a.user_id) > 20000 limit 1;

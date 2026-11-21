@@ -47,10 +47,18 @@ export interface NoteMeta {
   starred?: boolean;
   /** Archived: hidden from the sidebar and search, kept in Settings > Data controls. */
   archived_at?: string | null;
+  /** In the trash since then: hidden everywhere, deleted for good after TRASH_DAYS. */
+  deleted_at?: string | null;
 }
 
 /** Flags a note or notebook can have, changed without touching its content or date. */
-export type Flags = { starred?: boolean; archived_at?: string | null };
+export type Flags = { starred?: boolean; archived_at?: string | null; deleted_at?: string | null };
+
+/** The trash notebook's name. */
+export const TRASH_NAME = 'Trash';
+
+/** Days a note or notebook stays in the trash before it is deleted for good. */
+export const TRASH_DAYS = 30;
 
 export interface Notebook {
   id: string;
@@ -59,6 +67,8 @@ export interface Notebook {
   updated_at: string;
   starred?: boolean;
   archived_at?: string | null;
+  /** In the trash since then (its notes go with it). */
+  deleted_at?: string | null;
 }
 
 export const DEFAULT_NOTEBOOK_NAME = 'My Notebook';

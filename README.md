@@ -45,6 +45,15 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 - **Stars and the archive.** Star notes (pinned under "Starred", whatever notebook they are in) and notebooks
   (listed first). Archive notes or notebooks to hide them; Settings → Data controls lists them to restore or
   delete. Each row's actions are in its ⋯ menu.
+- **Trash.** The trash is a notebook of its own, opened from the bottom of the sidebar (or Settings → Data
+  controls). Deleting a note asks, then moves it there; taking it out asks which notebook to put it in. A
+  deleted notebook goes to the trash whole, its notes listed under it, and can only be restored whole.
+  After 30 days it is deleted for good, or sooner with Delete forever or Empty trash.
+- **Changes from other devices.** Coming back to the tab picks up notes and notebooks changed elsewhere. An
+  action on something another device has deleted meanwhile (renaming it, moving a note into it) fails with
+  a clear message instead of silently doing nothing, and the app catches up.
+- **Clear page.** The toolbar button next to Undo and Redo erases everything on the page after asking. It is
+  one undo step, and the page as it was stays in version history.
 - **Search** (Ctrl/⌘ K, or Search in the sidebar): note titles and notebook names, each result labelled. Forgiving
   like most apps' search: case and accents ignored, words in any order, word starts and small typos match, the
   closest matches first; "quotes" for an exact phrase. Archived ones only when asked for.
@@ -205,7 +214,8 @@ For development, copy `.env.example` to `.env.local`. Never use the `service_rol
 Run [`supabase/schema.sql`](supabase/schema.sql) once in your project (SQL editor or `psql`). It creates the
 `notebooks`, `notes`, `strokes`, `user_settings` and `user_keys` tables with row-level security, and is safe to
 re-run. **When upgrading, run it again**: until you do, the app keeps working, but features that need newer
-tables or columns (the encryption switch, text boxes, pictures, account deletion) say they need the database update,
+tables or columns (the encryption switch, text boxes, pictures, account deletion) say they need the database update
+(and deleting stays permanent, without the trash, until it has run),
 and the fair-use limits only apply once it has run.
 
 In Supabase Auth, add your site's URL to the allowed redirect URLs so that confirmation, sign-in-link and

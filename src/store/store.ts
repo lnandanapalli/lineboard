@@ -12,18 +12,47 @@ export class StoreError extends Error {
   }
 }
 
+/**
+ * The note or notebook an action was aimed at is not there any more (or, for a notebook, is in the
+ * trash): most likely another device or tab deleted it. Permanent: trying again cannot help.
+ */
+export class GoneError extends StoreError {
+  constructor(public what: 'note' | 'notebook') {
+    super(what === 'note' ? 'That note no longer exists. It may have been deleted on another device.' : 'That notebook no longer exists. It may have been deleted on another device.', true);
+  }
+}
+
 export interface Store {
   readonly mode: 'cloud' | 'local';
   listNotebooks(): Promise<Notebook[]>;
   /** The user's default notebook, created if missing (safe to call from several devices at once). */
   ensureDefaultNotebook(): Promise<Notebook>;
   createNotebook(name: string): Promise<Notebook>;
+  /** Renames it; GoneError if it no longer exists. */
   renameNotebook(id: string, name: string): Promise<void>;
-  /** Deletes the notebook and every note in it. */
+  /** Deletes the notebook and every note in it, for good. */
   deleteNotebook(id: string): Promise<void>;
+  /**
+   * The trash: a notebook of its own, hidden from the notebook list. Notes in it have deleted_at set.
+   * Made if missing (safe to call from several devices at once).
+   */
+  readonly trashId: string;
+  ensureTrash(): Promise<Notebook>;
+  /**
+   * Delete for good a note in the trash, or a notebook in the trash (with its notes), but only if it
+   * is still there (and, with olderThan, went in before then): a restore made meanwhile on another
+   * device is never erased. The check and the delete are one step. Resolves whether it was deleted.
+   */
+  deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string): Promise<boolean>;
   listNotes(): Promise<NoteMeta[]>;
+  /** GoneError if the notebook no longer exists or is in the trash. */
   createNote(title: string, notebookId: string): Promise<NoteMeta>;
+  /**
+   * Move notes into a notebook, or into the trash (trashId: deleted_at is set, star and archive
+   * cleared). GoneError if the notebook no longer exists or is in the trash, or a note is gone.
+   */
   moveNotes(noteIds: string[], notebookId: string): Promise<void>;
+  /** Renames it; GoneError if it no longer exists. */
   renameNote(id: string, title: string): Promise<void>;
   deleteNote(id: string): Promise<void>;
   loadStrokes(noteId: string): Promise<Stroke[]>;
@@ -41,11 +70,16 @@ export interface Store {
   saveProfile(change: { name?: string; picture?: Blob | null }): Promise<Profile>;
   /** The profile picture's file, or null when there is none (or it cannot be read here). */
   loadProfilePicture(p: Profile): Promise<Blob | null>;
-  /** Star / archive a note or notebook (its content and date are left alone). */
+  /**
+   * Star / archive a note or notebook, or move a notebook to the trash and back (deleted_at); its
+   * content and date are left alone. GoneError if it no longer exists.
+   */
   setNoteFlags(id: string, flags: Flags): Promise<void>;
   setNotebookFlags(id: string, flags: Flags): Promise<void>;
   /** False when the cloud database predates stars and the archive (schema not updated yet). */
   supportsFlags?(): Promise<boolean>;
+  /** False when the cloud database predates the trash (schema not updated yet): deleting is then permanent. */
+  supportsTrash?(): Promise<boolean>;
   /** A note's versions, newest first (without their content). */
   listVersions(noteId: string): Promise<VersionMeta[]>;
   /** One version's strokes. */

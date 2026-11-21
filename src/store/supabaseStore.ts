@@ -3,11 +3,11 @@ import { cleanStyle, isPlain } from '../textStyle';
 import { fromB64, isSealedBytes, open, openBytes, seal, sealBytes, toB64 } from '../crypto/cipher';
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import type { KeyVault } from '../crypto/vault';
-import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
+import { DEFAULT_NOTEBOOK_NAME, TRASH_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { uuid } from '../util';
 import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
 import { MAX_SNAPSHOT_BYTES } from '../limits';
-import { StoreError, type Store } from './store';
+import { GoneError, StoreError, type Store } from './store';
 
 const PAGE = 1000; // PostgREST default max rows per request
 const CHUNK = 200;
@@ -22,6 +22,9 @@ const isRlsDenied = (e: PgErr | null) => e?.code === '42501';
 
 function check(error: PgErr | null) {
   if (!error) return;
+  // A foreign key with nothing to point at: the note or notebook was deleted (maybe on another device),
+  // or the notebook is in the trash (supabase/schema.sql refuses notes there the same way).
+  if (error.code === '23503') throw new GoneError(/notebook/.test(error.message ?? '') ? 'notebook' : 'note');
   // SQLSTATE classes 22 (data), 23 (constraint), 42 (syntax/permission) won't succeed on retry.
   const permanent = !!error.code && /^(22|23|42)/.test(error.code);
   throw new StoreError(readable(error.message || 'Request failed'), permanent);
@@ -99,10 +102,10 @@ export class SupabaseStore implements Store {
     return this.vault?.supported !== false;
   }
   private bookCols() {
-    return 'id,name,created_at,updated_at' + (this.encCols ? ',name_enc' : '') + (this.flagCols ? ',starred,archived_at' : '');
+    return 'id,name,created_at,updated_at' + (this.encCols ? ',name_enc' : '') + (this.flagCols ? ',starred,archived_at' : '') + (this.trashCols ? ',deleted_at' : '');
   }
   private noteCols() {
-    return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '') + (this.flagCols ? ',starred,archived_at' : '');
+    return 'id,title,notebook_id,created_at,updated_at' + (this.encCols ? ',title_enc' : '') + (this.flagCols ? ',starred,archived_at' : '') + (this.trashCols ? ',deleted_at' : '');
   }
 
   /** Whether the database has the starred / archived_at columns (stars and the archive). */
@@ -118,13 +121,33 @@ export class SupabaseStore implements Store {
     })();
     return this.flagProbe;
   }
-  private flagsOf(r: { starred?: boolean | null; archived_at?: string | null }): Flags {
-    return { ...(r.starred ? { starred: true } : {}), ...(r.archived_at ? { archived_at: r.archived_at } : {}) };
+  /** Whether the database has the deleted_at columns (the trash). */
+  private trashCols = false;
+  private trashProbe: Promise<boolean> | null = null;
+  supportsTrash(): Promise<boolean> {
+    this.trashProbe ??= (async () => {
+      const { error } = await this.sb.from('notes').select('deleted_at').limit(1);
+      const missing = !!error && (error.code === '42703' || /deleted_at/.test(error.message ?? ''));
+      if (error && !missing) this.trashProbe = null; // offline or similar: ask again next time
+      this.trashCols = !missing;
+      return this.trashCols;
+    })();
+    return this.trashProbe;
+  }
+  /** Both optional column sets, checked once before notes and notebooks are read or written. */
+  private probeCols() {
+    return Promise.all([this.supportsFlags(), this.supportsTrash()]);
+  }
+  private flagsOf(r: { starred?: boolean | null; archived_at?: string | null; deleted_at?: string | null }): Flags {
+    return { ...(r.starred ? { starred: true } : {}), ...(r.archived_at ? { archived_at: r.archived_at } : {}), ...(r.deleted_at ? { deleted_at: r.deleted_at } : {}) };
   }
   private async writeFlags(table: 'notes' | 'notebooks', id: string, flags: Flags) {
-    if (!(await this.supportsFlags())) throw new StoreError('Stars and the archive need a database update: the site operator re-runs supabase/schema.sql.', true);
-    const { error } = await this.sb.from(table).update(flags).eq('id', id);
+    if ('deleted_at' in flags) {
+      if (!(await this.supportsTrash())) throw new StoreError('The trash needs a database update: the site operator re-runs supabase/schema.sql.', true);
+    } else if (!(await this.supportsFlags())) throw new StoreError('Stars and the archive need a database update: the site operator re-runs supabase/schema.sql.', true);
+    const { data, error } = await this.sb.from(table).update(flags).eq('id', id).select('id');
     check(error);
+    if (!data?.length) throw new GoneError(table === 'notes' ? 'note' : 'notebook');
   }
   setNoteFlags(id: string, flags: Flags) {
     return this.writeFlags('notes', id, flags);
@@ -250,14 +273,14 @@ export class SupabaseStore implements Store {
   // ----------------------------- notebooks -----------------------------
 
   async listNotebooks(): Promise<Notebook[]> {
-    await this.supportsFlags();
+    await this.probeCols();
     const { data, error } = await this.sb.from('notebooks').select(this.bookCols()).order('created_at', { ascending: true });
     check(error);
     return Promise.all(((data ?? []) as unknown as BookRow[]).map((r) => this.decodeBook(r)));
   }
 
   async ensureDefaultNotebook(): Promise<Notebook> {
-    const existing = await this.listNotebooks();
+    const existing = (await this.listNotebooks()).filter((b) => b.id !== this.trashId);
     if (existing.length) return existing[0];
     // The default notebook's id is the user's own id, so two devices creating it at once end up with one.
     await this.write(async (key) => {
@@ -266,11 +289,11 @@ export class SupabaseStore implements Store {
         .upsert({ id: this.userId, user_id: this.userId, ...(await this.encodeName(key, this.userId, DEFAULT_NOTEBOOK_NAME)) }, { onConflict: 'id', ignoreDuplicates: true });
       return error;
     });
-    return (await this.listNotebooks())[0];
+    return (await this.listNotebooks()).find((b) => b.id !== this.trashId)!;
   }
 
   async createNotebook(name: string): Promise<Notebook> {
-    await this.supportsFlags();
+    await this.probeCols();
     const id = uuid();
     let row: BookRow | null = null;
     await this.write(async (key) => {
@@ -286,13 +309,52 @@ export class SupabaseStore implements Store {
   }
 
   async renameNotebook(id: string, name: string) {
+    let found = 0;
+    await this.write(async (key) => {
+      const { data, error } = await this.sb
+        .from('notebooks')
+        .update({ ...(await this.encodeName(key, id, name)), updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select('id');
+      found = data?.length ?? 0;
+      return error;
+    });
+    if (!found) throw new GoneError('notebook');
+  }
+
+  /** The trash's id: the user's id with its version digit changed (a random id never has an 8 there). */
+  get trashId() {
+    return this.userId.slice(0, 14) + '8' + this.userId.slice(15);
+  }
+
+  async ensureTrash(): Promise<Notebook> {
+    await this.probeCols();
+    const find = async () => {
+      const { data, error } = await this.sb.from('notebooks').select(this.bookCols()).eq('id', this.trashId);
+      check(error);
+      const row = (data as unknown as BookRow[] | null)?.[0];
+      return row ? { ...(await this.decodeBook(row)), name: TRASH_NAME } : null;
+    };
+    const found = await find();
+    if (found) return found;
+    // Like the default notebook: a fixed id, so two devices making it at once end up with one.
     await this.write(async (key) => {
       const { error } = await this.sb
         .from('notebooks')
-        .update({ ...(await this.encodeName(key, id, name)), updated_at: new Date().toISOString() })
-        .eq('id', id);
+        .upsert({ id: this.trashId, user_id: this.userId, ...(await this.encodeName(key, this.trashId, TRASH_NAME)) }, { onConflict: 'id', ignoreDuplicates: true });
       return error;
     });
+    return (await find())!;
+  }
+
+  /** A notebook notes can go into: it exists and is not in the trash (the trash itself is fine). */
+  private async liveNotebook(id: string) {
+    if (id === this.trashId) return;
+    await this.probeCols();
+    const { data, error } = await this.sb.from('notebooks').select(this.trashCols ? 'id,deleted_at' : 'id').eq('id', id);
+    check(error);
+    const row = (data as unknown as { deleted_at?: string | null }[] | null)?.[0];
+    if (!row || row.deleted_at) throw new GoneError('notebook');
   }
 
   async deleteNotebook(id: string) {
@@ -300,10 +362,19 @@ export class SupabaseStore implements Store {
     check(error);
   }
 
+  async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
+    // One conditional delete: nothing happens if it has left the trash (or went in again later).
+    let q = kind === 'note' ? this.sb.from('notes').delete().eq('id', id).eq('notebook_id', this.trashId) : this.sb.from('notebooks').delete().eq('id', id).not('deleted_at', 'is', null);
+    if (olderThan) q = q.lt('deleted_at', olderThan);
+    const { data, error } = await q.select('id');
+    check(error);
+    return !!data?.length;
+  }
+
   /** Insert notebooks keeping their ids (used to move notebooks made without an account). Idempotent. */
   async importNotebooks(notebooks: Notebook[]) {
     if (!notebooks.length) return;
-    await this.supportsFlags();
+    await this.probeCols();
     await this.write(async (key) => {
       const rows = await Promise.all(
         notebooks.map(async (b) => ({
@@ -313,6 +384,7 @@ export class SupabaseStore implements Store {
           created_at: b.created_at,
           updated_at: b.updated_at,
           ...(this.flagCols ? { starred: !!b.starred, archived_at: b.archived_at ?? null } : {}),
+          ...(this.trashCols ? { deleted_at: b.deleted_at ?? null } : {}),
         })),
       );
       const { error } = await this.sb.from('notebooks').upsert(rows, { onConflict: 'id' });
@@ -323,14 +395,25 @@ export class SupabaseStore implements Store {
   // ----------------------------- notes -----------------------------
 
   async moveNotes(noteIds: string[], notebookId: string) {
+    await this.liveNotebook(notebookId);
+    // Into the trash: since when, and no longer starred or archived. Out of it: back in use.
+    const toTrash = notebookId === this.trashId;
+    const change = {
+      notebook_id: notebookId,
+      ...(this.trashCols ? { deleted_at: toTrash ? new Date().toISOString() : null } : {}),
+      ...(toTrash && this.flagCols ? { starred: false, archived_at: null } : {}),
+    };
+    let moved = 0;
     for (let i = 0; i < noteIds.length; i += CHUNK) {
-      const { error } = await this.sb.from('notes').update({ notebook_id: notebookId }).in('id', noteIds.slice(i, i + CHUNK));
+      const { data, error } = await this.sb.from('notes').update(change).in('id', noteIds.slice(i, i + CHUNK)).select('id');
       check(error);
+      moved += data?.length ?? 0;
     }
+    if (moved < noteIds.length) throw new GoneError('note');
   }
 
   async listNotes(): Promise<NoteMeta[]> {
-    await this.supportsFlags();
+    await this.probeCols();
     // Page through: the API returns at most 1000 rows per request, and an account may have more notes.
     const rows: NoteRow[] = [];
     for (let from = 0; ; from += PAGE) {
@@ -344,7 +427,8 @@ export class SupabaseStore implements Store {
   }
 
   async createNote(title: string, notebookId: string): Promise<NoteMeta> {
-    await this.supportsFlags();
+    await this.probeCols();
+    await this.liveNotebook(notebookId);
     const id = uuid();
     let row: NoteRow | null = null;
     await this.write(async (key) => {
@@ -362,7 +446,7 @@ export class SupabaseStore implements Store {
   /** Insert or update notes keeping their ids (used to move notes made without an account). Idempotent. */
   async importNotes(notes: NoteMeta[]) {
     if (!notes.length) return;
-    await this.supportsFlags();
+    await this.probeCols();
     await this.write(async (key) => {
       const rows = await Promise.all(
         notes.map(async (n) => ({
@@ -373,6 +457,7 @@ export class SupabaseStore implements Store {
           created_at: n.created_at,
           updated_at: n.updated_at,
           ...(this.flagCols ? { starred: !!n.starred, archived_at: n.archived_at ?? null } : {}),
+          ...(this.trashCols ? { deleted_at: n.deleted_at ?? null } : {}),
         })),
       );
       const { error } = await this.sb.from('notes').upsert(rows, { onConflict: 'id' });
@@ -381,10 +466,13 @@ export class SupabaseStore implements Store {
   }
 
   async renameNote(id: string, title: string) {
+    let found = 0;
     await this.write(async (key) => {
-      const { error } = await this.sb.from('notes').update(await this.encodeTitle(key, id, title)).eq('id', id);
+      const { data, error } = await this.sb.from('notes').update(await this.encodeTitle(key, id, title)).eq('id', id).select('id');
+      found = data?.length ?? 0;
       return error;
     });
+    if (!found) throw new GoneError('note');
   }
 
   async deleteNote(id: string) {

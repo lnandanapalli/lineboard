@@ -25,6 +25,12 @@ export interface MockDb {
   meta?: Record<string, unknown>;
   /** Set to make the database look as if schema.sql predates stars and the archive. */
   noFlags?: boolean;
+  /** Set to make the database look as if schema.sql predates the trash. */
+  noTrash?: boolean;
+  /** Most notebooks an account may have (the trash not counted), like enforce_row_limits. */
+  notebookLimit?: number;
+  /** Like a database whose limit predates the trash: the trash counts too. */
+  notebookLimitCountsTrash?: boolean;
   settings: Row | null;
   keys: Row | null;
   /** Auth server state: signed-in sessions, MFA factors, passkeys, password changes. */
@@ -83,6 +89,7 @@ function matches(url: URL) {
       tests.push((r) => set.includes(String(r[col])));
     } else if (raw === 'is.null') tests.push((r) => r[col] == null);
     else if (raw === 'not.is.null') tests.push((r) => r[col] != null);
+    else if (raw.startsWith('lt.')) tests.push((r) => r[col] != null && String(r[col]) < raw.slice(3));
   }
   return (r: Row) => tests.every((t) => t(r));
 }
@@ -378,10 +385,21 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     // ---- notebooks / notes ----
     if (db.noFlags && (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') && /starred|archived_at/.test((url.searchParams.get('select') ?? '') + (req.postData() ?? '')))
       return json(route, 400, { code: '42703', message: `column ${path.slice(9)}.starred does not exist` });
+    if (db.noTrash && (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') && /deleted_at/.test((url.searchParams.get('select') ?? '') + (req.postData() ?? '')))
+      return json(route, 400, { code: '42703', message: `column ${path.slice(9)}.deleted_at does not exist` });
     if (path === '/rest/v1/notebooks' || path === '/rest/v1/notes') {
       const table = path.endsWith('notebooks') ? 'notebooks' : 'notes';
       const rows = () => db[table];
       const set = (v: Row[]) => (db[table] = v);
+      // Like the foreign key and the notes_notebook_live trigger (supabase/schema.sql): a note's
+      // notebook must exist and not be in the trash.
+      const badNotebook = (row: Row, before?: Row) => {
+        if (table !== 'notes' || row.notebook_id == null || (before && before.notebook_id === row.notebook_id)) return null;
+        const b = db.notebooks.find((x) => x.id === row.notebook_id);
+        if (!b) return 'insert or update on table "notes" violates foreign key constraint "notes_notebook_id_fkey"';
+        if (b.deleted_at) return 'Lineboard: that notebook is in the trash';
+        return null;
+      };
       if (method === 'GET') {
         const sorted = [...rows()].sort((a, b) =>
           table === 'notebooks' ? String(a.created_at).localeCompare(String(b.created_at)) : String(b.updated_at).localeCompare(String(a.updated_at)),
@@ -399,6 +417,12 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
           }
           const row = { id: r.id ?? crypto.randomUUID(), created_at: now(), updated_at: now(), ...(table === 'notes' ? { notebook_id: null } : {}), ...existing, ...r };
           if (!allowed(table, row)) return denied(route);
+          const fk = badNotebook(row, existing);
+          if (fk) return json(route, 409, { code: '23503', message: fk });
+          if (table === 'notebooks' && !existing && db.notebookLimit != null && (db.notebookLimitCountsTrash || !String(row.id).match(/^.{14}8/))) {
+            if (rows().filter((b) => db.notebookLimitCountsTrash || !String(b.id).match(/^.{14}8/)).length + 1 > db.notebookLimit)
+              return json(route, 400, { code: '23514', message: `Lineboard limit: an account can have at most ${db.notebookLimit} notebooks` });
+          }
           set(rows().filter((b) => b.id !== row.id).concat(row));
           saved.push(row);
         }
@@ -408,14 +432,23 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         const patch = body();
         const next = rows().map((b) => (match(b) ? { ...b, ...patch } : b));
         if (next.some((b, i) => b !== rows()[i] && !allowed(table, b))) return denied(route);
+        for (const [i, b] of next.entries()) {
+          const fk = b !== rows()[i] ? badNotebook(b, rows()[i]) : null;
+          if (fk) return json(route, 409, { code: '23503', message: fk });
+        }
+        const changed = next.filter((b, i) => b !== rows()[i]);
         set(next);
+        // With .select(): the rows it changed (none when the row is gone).
+        if (prefer.includes('return=representation')) return json(route, 200, wantsObject ? (changed[0] ?? null) : changed);
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {
-        const gone = rows().filter(match).map((r) => r.id);
+        const removed = rows().filter(match);
+        const gone = removed.map((r) => r.id);
         set(rows().filter((r) => !match(r)));
         if (table === 'notebooks') cascadeNotes(db.notes.filter((n) => gone.includes(n.notebook_id)).map((n) => n.id));
         else cascadeNotes(gone);
+        if (prefer.includes('return=representation')) return json(route, 200, removed);
         return route.fulfill({ status: 204, headers: cors });
       }
     }
@@ -426,6 +459,8 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       if (method === 'POST') {
         const incoming = [body()].flat() as Row[];
         if (incoming.some((r) => !allowed('strokes', r))) return denied(route);
+        if (incoming.some((r) => !db.notes.some((n) => n.id === r.note_id)))
+          return json(route, 409, { code: '23503', message: 'insert or update on table "strokes" violates foreign key constraint "strokes_note_id_fkey"' });
         for (const r of incoming) db.strokes = db.strokes.filter((s) => s.id !== r.id).concat(r);
         // touch_note trigger
         for (const r of incoming) db.notes = db.notes.map((n) => (n.id === r.note_id ? { ...n, updated_at: now() } : n));

@@ -1,8 +1,11 @@
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
-import { DEFAULT_NOTEBOOK_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
+import { DEFAULT_NOTEBOOK_NAME, TRASH_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
 import { lsGet, lsSet, uuid } from '../util';
 import { cleanName, EMPTY_PROFILE, type Profile } from '../profile';
-import { StoreError, type Store } from './store';
+import { GoneError, StoreError, type Store } from './store';
+
+/** The trash notebook's id on this device (other notebooks have random ids). */
+export const LOCAL_TRASH_ID = 'trash';
 import { MAX_SNAPSHOT_BYTES } from '../limits';
 
 /** Images on this device: IndexedDB, since localStorage is far too small for pictures. */
@@ -86,7 +89,7 @@ export class LocalStore implements Store {
     return this.notebooks().sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
   async ensureDefaultNotebook() {
-    return (await this.listNotebooks())[0] ?? this.createNotebook(DEFAULT_NOTEBOOK_NAME);
+    return (await this.listNotebooks()).find((b) => b.id !== this.trashId) ?? this.createNotebook(DEFAULT_NOTEBOOK_NAME);
   }
   async createNotebook(name: string) {
     const now = new Date().toISOString();
@@ -95,21 +98,61 @@ export class LocalStore implements Store {
     return b;
   }
   async renameNotebook(id: string, name: string) {
-    this.saveNotebooks(this.notebooks().map((b) => (b.id === id ? { ...b, name } : b)));
+    const all = this.notebooks();
+    const b = all.find((x) => x.id === id);
+    if (!b) throw new GoneError('notebook');
+    b.name = name;
+    this.saveNotebooks(all);
+  }
+
+  readonly trashId = LOCAL_TRASH_ID;
+  async ensureTrash(): Promise<Notebook> {
+    const found = this.notebooks().find((b) => b.id === this.trashId);
+    if (found) return found;
+    const now = new Date().toISOString();
+    const b: Notebook = { id: this.trashId, name: TRASH_NAME, created_at: now, updated_at: now };
+    this.saveNotebooks([...this.notebooks(), b]);
+    return b;
+  }
+
+  /** A notebook notes can go into: it exists and is not in the trash (the trash itself is fine). */
+  private liveNotebook(id: string) {
+    const b = this.notebooks().find((x) => x.id === id);
+    if (!b || (b.deleted_at && id !== this.trashId)) throw new GoneError('notebook');
   }
   async deleteNotebook(id: string) {
     for (const n of this.notes().filter((m) => m.notebook_id === id)) await this.deleteNote(n.id);
     this.saveNotebooks(this.notebooks().filter((b) => b.id !== id));
   }
+  async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
+    const before = (at?: string | null) => !!at && (!olderThan || at < olderThan);
+    if (kind === 'note') {
+      const n = this.notes().find((m) => m.id === id);
+      if (!n || n.notebook_id !== this.trashId || (olderThan && !before(n.deleted_at))) return false;
+      await this.deleteNote(id);
+      return true;
+    }
+    const b = this.notebooks().find((x) => x.id === id);
+    if (!b || b.id === this.trashId || !before(b.deleted_at)) return false;
+    await this.deleteNotebook(id);
+    return true;
+  }
   async moveNotes(noteIds: string[], notebookId: string) {
+    this.liveNotebook(notebookId);
+    const all = this.notes();
     const ids = new Set(noteIds);
-    this.saveNotes(this.notes().map((m) => (ids.has(m.id) ? { ...m, notebook_id: notebookId } : m)));
+    if (all.filter((m) => ids.has(m.id)).length < ids.size) throw new GoneError('note');
+    // Into the trash: since when, and no longer starred or archived. Out of it: back in use.
+    const toTrash = notebookId === this.trashId;
+    const change = toTrash ? { notebook_id: notebookId, deleted_at: new Date().toISOString(), starred: false, archived_at: null } : { notebook_id: notebookId, deleted_at: null };
+    this.saveNotes(all.map((m) => (ids.has(m.id) ? { ...m, ...change } : m)));
   }
 
   async listNotes() {
     return this.notes().sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   }
   async createNote(title: string, notebookId: string) {
+    this.liveNotebook(notebookId);
     const now = new Date().toISOString();
     const m: NoteMeta = { id: uuid(), title, notebook_id: notebookId, created_at: now, updated_at: now };
     this.saveNotes([m, ...this.notes()]);
@@ -118,7 +161,8 @@ export class LocalStore implements Store {
   async renameNote(id: string, title: string) {
     const n = this.notes();
     const x = n.find((m) => m.id === id);
-    if (x) x.title = title;
+    if (!x) throw new GoneError('note');
+    x.title = title;
     this.saveNotes(n);
   }
   async deleteNote(id: string) {
@@ -136,6 +180,9 @@ export class LocalStore implements Store {
   async upsertStrokes(strokes: Stroke[]) {
     const byNote = new Map<string, Stroke[]>();
     for (const s of strokes) byNote.set(s.note_id, [...(byNote.get(s.note_id) ?? []), s]);
+    // Ink for a note another tab deleted would be kept by nothing.
+    const known = new Set(this.notes().map((m) => m.id));
+    if ([...byNote.keys()].some((id) => !known.has(id))) throw new GoneError('note');
     for (const [noteId, list] of byNote) {
       const cur = lsGet<Stroke[]>(this.strokesKey(noteId), []);
       const ids = new Set(list.map((s) => s.id));
@@ -188,10 +235,14 @@ export class LocalStore implements Store {
   }
 
   async setNoteFlags(id: string, flags: Flags) {
-    this.saveNotes(this.notes().map((m) => (m.id === id ? { ...m, ...flags } : m)));
+    const all = this.notes();
+    if (!all.some((m) => m.id === id)) throw new GoneError('note');
+    this.saveNotes(all.map((m) => (m.id === id ? { ...m, ...flags } : m)));
   }
   async setNotebookFlags(id: string, flags: Flags) {
-    this.saveNotebooks(this.notebooks().map((b) => (b.id === id ? { ...b, ...flags } : b)));
+    const all = this.notebooks();
+    if (!all.some((b) => b.id === id)) throw new GoneError('notebook');
+    this.saveNotebooks(all.map((b) => (b.id === id ? { ...b, ...flags } : b)));
   }
 
   async listVersions(noteId: string): Promise<VersionMeta[]> {
