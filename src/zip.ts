@@ -131,6 +131,35 @@ export interface UnzipBudget {
   bytes: number;
 }
 
+/**
+ * The names in a zip archive, from its central directory only (nothing is unpacked), to decide which
+ * limits to read it with. Damaged or unsupported archives throw, like unzip.
+ */
+export function zipNames(buf: Uint8Array): string[] {
+  const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i--) {
+    if (v.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new ZipError('Not a zip archive (or it is damaged).');
+  const count = v.getUint16(eocd + 10, true);
+  const cdOffset = v.getUint32(eocd + 16, true);
+  if (count === 0xffff || cdOffset === 0xffffffff) throw new ZipError('Very large (zip64) archives are not supported.');
+  const dec = new TextDecoder();
+  const names: string[] = [];
+  let p = cdOffset;
+  for (let n = 0; n < count; n++) {
+    if (p + 46 > eocd || v.getUint32(p, true) !== 0x02014b50) throw new ZipError('The archive is damaged.');
+    const nameLen = v.getUint16(p + 28, true);
+    names.push(dec.decode(buf.subarray(p + 46, p + 46 + nameLen)));
+    p += 46 + nameLen + v.getUint16(p + 30, true) + v.getUint16(p + 32, true);
+  }
+  return names;
+}
+
 export async function unzip(buf: Uint8Array, limits: UnzipLimits, budget?: UnzipBudget): Promise<Map<string, Uint8Array>> {
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   // End of central directory: the last 22 bytes, or up to 64 KiB earlier with a comment.

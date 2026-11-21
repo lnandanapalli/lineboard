@@ -985,6 +985,8 @@ export class App {
     }
     await this.ready; // a picture pasted right after the page opened waits for the note
     if (!this.current) return toast('Open a note first.', 'error');
+    // The pictures belong to the note they were added in, even if another is opened while they upload.
+    const note = this.current;
     let last: Stroke | null = null;
     // A placeholder for each picture shows at once, where it will land, until it is saved.
     const slots = pics.map(() => this.board.addPending());
@@ -995,9 +997,17 @@ export class App {
         const img = await prepareImage(file);
         const bitmap = await createImageBitmap(img.blob);
         this.board.sizePending(slots[i], bitmap.width, bitmap.height);
+        const box = this.board.pictureBox(slots[i], bitmap.width, bitmap.height);
         const id = uuid();
         await this.store.putImage(id, img.blob);
-        last = this.board.insertImage(id, img.type, bitmap, slots[i]);
+        if (this.loadedNote === note.id) last = this.board.insertImage(id, img.type, bitmap, slots[i]);
+        else {
+          // Another note is open now: save the picture into the one it was added to, where it was shown.
+          this.queue.upsert([Board.imageStroke(id, img.type, box, note.id)]);
+          note.updated_at = new Date().toISOString();
+          this.history.changed(note.id);
+          toast(`The picture was added to “${note.title || 'Untitled'}”.`);
+        }
       } catch (e) {
         toast('Could not add the picture: ' + (e as Error).message, 'error');
       } finally {
