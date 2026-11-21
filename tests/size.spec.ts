@@ -1,14 +1,16 @@
 import { expect, test } from '@playwright/test';
-import { drag, setup, stripY } from './helpers';
+import { drag, setup, stripY, savesDone } from './helpers';
 
 /** Pen and highlighter size come from a slider (with quick presets), and each tool keeps its own. */
 
-const lastWidth = (page: import('@playwright/test').Page) =>
-  page.evaluate(() => {
+const lastWidth = async (page: import('@playwright/test').Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
     const list = JSON.parse(localStorage[k]);
     return list[list.length - 1].width as number;
   });
+};
 
 test('the size slider sets the width of new strokes, per tool', async ({ page }) => {
   const { cdp, geo } = await setup(page);

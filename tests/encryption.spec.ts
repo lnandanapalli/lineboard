@@ -28,7 +28,7 @@ async function openSecurity(page: Page) {
 }
 
 /** Turn encryption on through the wizard and return the recovery key it showed. */
-async function enableEncryption(page: Page): Promise<string> {
+async function enableEncryption(page: Page, timeout = 20_000): Promise<string> {
   await openSecurity(page);
   await page.getByRole('switch', { name: 'End-to-end encryption' }).click();
   // Turning encryption on asks for the account password first.
@@ -56,7 +56,7 @@ async function enableEncryption(page: Page): Promise<string> {
   await dlg.getByLabel('Last 4 characters of the recovery key').fill(key.slice(-4).toLowerCase());
   await dlg.locator('input[type=checkbox]').check();
   await dlg.getByRole('button', { name: 'Continue' }).click();
-  await expect(dlg).toContainText('Your notes are encrypted', { timeout: 20_000 });
+  await expect(dlg).toContainText('Your notes are encrypted', { timeout });
   await dlg.getByRole('button', { name: 'Done' }).click();
   return key;
 }
@@ -256,7 +256,7 @@ test('turning encryption on covers every note (past 1000) and pictures only vers
 
   await signIn(page);
   await attachBoard(page);
-  await enableEncryption(page);
+  await enableEncryption(page, 150_000); // 1005 notes, one by one
   expect(db.keys!.state).toBe('on');
   const plainTitles = db.notes.filter((n) => !n.title_enc || n.title);
   expect(plainTitles).toHaveLength(0);

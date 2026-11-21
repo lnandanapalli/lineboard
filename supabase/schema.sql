@@ -145,6 +145,25 @@ create table if not exists public.note_versions (
 create index if not exists note_versions_note_idx on public.note_versions (note_id, created_at desc);
 create index if not exists note_versions_user_idx on public.note_versions (user_id);
 
+-- ------------- Which notes use which picture files -------------
+-- A picture file can be used by several notes (a copied note or version keeps the same file), and by
+-- old versions of a note. The app records each use here (from ink and from version history), so
+-- deleting a note for good can remove the files no other note uses. Image ids are random; this says
+-- nothing about what a picture shows. A note's rows go with it.
+create table if not exists public.note_images (
+  note_id   uuid not null references public.notes (id) on delete cascade,
+  image_id  text not null check (char_length(image_id) <= 100),
+  user_id   uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  primary key (note_id, image_id)
+);
+create index if not exists note_images_user_image_idx on public.note_images (user_id, image_id);
+-- Set once the app has recorded the uses in notes made before this table existed. Until then it
+-- removes no picture files (it cannot yet know which ones other notes use).
+create table if not exists public.note_images_state (
+  user_id      uuid primary key default auth.uid() references auth.users (id) on delete cascade,
+  complete_at  timestamptz not null default now()
+);
+
 -- ------------- Keep notes.updated_at fresh when ink changes -------------
 
 create or replace function public.touch_note() returns trigger
@@ -168,6 +187,8 @@ alter table public.strokes       enable row level security;
 alter table public.user_settings enable row level security;
 alter table public.user_keys     enable row level security;
 alter table public.note_versions enable row level security;
+alter table public.note_images enable row level security;
+alter table public.note_images_state enable row level security;
 
 drop policy if exists "own notebooks" on public.notebooks;
 create policy "own notebooks" on public.notebooks
@@ -206,6 +227,17 @@ create policy "own versions" on public.note_versions
     and exists (select 1 from public.notes n where n.id = note_id and n.user_id = (select auth.uid()))
   );
 
+drop policy if exists "own picture uses" on public.note_images;
+create policy "own picture uses" on public.note_images
+  for all to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()) and exists (select 1 from public.notes n where n.id = note_id and n.user_id = (select auth.uid())));
+drop policy if exists "own picture use state" on public.note_images_state;
+create policy "own picture use state" on public.note_images_state
+  for all to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
+
 drop policy if exists "own settings" on public.user_settings;
 create policy "own settings" on public.user_settings
   for all to authenticated
@@ -243,7 +275,7 @@ $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['notebooks', 'notes', 'strokes', 'user_settings', 'user_keys', 'note_versions'] loop
+  foreach t in array array['notebooks', 'notes', 'strokes', 'user_settings', 'user_keys', 'note_versions', 'note_images', 'note_images_state'] loop
     execute format('drop policy if exists "active session with required MFA" on public.%I', t);
     execute format(
       'create policy "active session with required MFA" on public.%I as restrictive for all to authenticated '
@@ -406,6 +438,9 @@ begin
       select format('%s strokes in all', 2000000) into bad from (select distinct user_id from added) a
        where (select count(*) from public.strokes s where s.user_id = a.user_id) > 2000000 limit 1;
     end if;
+  elsif tg_table_name = 'note_images' then
+    select format('%s picture uses', 100000) into bad from (select distinct user_id from added) a
+     where (select count(*) from public.note_images i where i.user_id = a.user_id) > 100000 limit 1;
   elsif tg_table_name = 'note_versions' then
     select format('%s versions of one note', 500) into bad from (select distinct note_id from added) a
      where (select count(*) from public.note_versions v where v.note_id = a.note_id) > 500 limit 1;
@@ -434,6 +469,9 @@ drop trigger if exists note_versions_row_limits on public.note_versions;
 create trigger note_versions_row_limits after insert on public.note_versions
   referencing new table as added for each statement execute function public.enforce_row_limits();
 drop trigger if exists note_versions_size_limits on public.note_versions;
+drop trigger if exists note_images_row_limits on public.note_images;
+create trigger note_images_row_limits after insert on public.note_images
+  referencing new table as added for each statement execute function public.enforce_row_limits();
 -- Changing rows is checked too: rewriting a version larger, or moving ink or versions to another
 -- note, must not get round the limits that adding them is held to.
 drop trigger if exists strokes_row_limits_on_update on public.strokes;
@@ -444,7 +482,7 @@ create trigger note_versions_row_limits_on_update after update on public.note_ve
   referencing new table as added for each statement execute function public.enforce_row_limits();
 
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
-grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions to authenticated;
-revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions from anon;
+grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions, public.note_images, public.note_images_state to authenticated;
+revoke all on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions, public.note_images, public.note_images_state from anon;
 grant execute on function public.encryption_required() to authenticated;
 revoke execute on function public.encryption_required() from anon, public;

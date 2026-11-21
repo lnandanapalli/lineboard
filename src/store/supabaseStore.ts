@@ -367,16 +367,20 @@ export class SupabaseStore implements Store {
   }
 
   async deleteNotebook(id: string) {
+    const unused = await this.pictureCandidates(await this.noteIdsIn(id));
     const { error } = await this.sb.from('notebooks').delete().eq('id', id);
     check(error);
+    await this.removeUnusedPictures(unused);
   }
 
   async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
     // One conditional delete: nothing happens if it has left the trash (or went in again later).
     let q = kind === 'note' ? this.sb.from('notes').delete().eq('id', id).eq('notebook_id', this.trashId) : this.sb.from('notebooks').delete().eq('id', id).not('deleted_at', 'is', null);
     if (olderThan) q = q.lt('deleted_at', olderThan);
+    const unused = await this.pictureCandidates(kind === 'note' ? [id] : await this.noteIdsIn(id));
     const { data, error } = await q.select('id');
     check(error);
+    if (data?.length) await this.removeUnusedPictures(unused);
     return !!data?.length;
   }
 
@@ -485,7 +489,121 @@ export class SupabaseStore implements Store {
   }
 
   async deleteNote(id: string) {
+    const unused = await this.pictureCandidates([id]);
     const { error } = await this.sb.from('notes').delete().eq('id', id);
+    check(error);
+    await this.removeUnusedPictures(unused);
+  }
+
+  // ----------------------------- which notes use which pictures -----------------------------
+  // note_images records every note that uses a picture file (in its ink or its version history), so
+  // a note deleted for good can take with it the files no other note uses. See supabase/schema.sql.
+
+  private imageUsesProbe: Promise<boolean> | null = null;
+  /** False when the database predates note_images: then no picture file is ever removed. */
+  private supportsImageUses(): Promise<boolean> {
+    this.imageUsesProbe ??= (async () => {
+      const { error } = await this.sb.from('note_images').select('note_id').limit(1);
+      if (!error) return true;
+      const missing = error.code === '42P01' || error.code === 'PGRST205' || /note_images/.test(error.message ?? '');
+      if (!missing) this.imageUsesProbe = null;
+      return !missing;
+    })();
+    return this.imageUsesProbe;
+  }
+
+  /** Record that these notes use these picture files (ink just saved, or a version). */
+  private async recordImageUses(uses: { note_id: string; image_id: string }[]) {
+    if (!uses.length || !(await this.supportsImageUses())) return;
+    const rows = [...new Map(uses.map((u) => [`${u.note_id}/${u.image_id}`, { ...u, user_id: this.userId }])).values()];
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await this.sb.from('note_images').upsert(rows.slice(i, i + CHUNK), { onConflict: 'note_id,image_id', ignoreDuplicates: true });
+      check(error);
+    }
+  }
+
+  /** The ids of the notes in a notebook. */
+  private async noteIdsIn(notebookId: string): Promise<string[]> {
+    const ids: string[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('notes').select('id').eq('notebook_id', notebookId).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      ids.push(...((data ?? []) as { id: string }[]).map((r) => r.id));
+      if ((data ?? []).length < PAGE) return ids;
+    }
+  }
+
+  /**
+   * The picture files these notes use, to check once they are deleted. Empty until every older note's
+   * uses have been recorded (backfillImageUses): until then, which files other notes use is unknown.
+   */
+  private async pictureCandidates(noteIds: string[]): Promise<string[]> {
+    if (!noteIds.length || !(await this.supportsImageUses())) return [];
+    const { data: state, error: se } = await this.sb.from('note_images_state').select('user_id').limit(1);
+    if (se || !state?.length) return [];
+    const out = new Set<string>();
+    for (let i = 0; i < noteIds.length; i += CHUNK) {
+      const { data, error } = await this.sb.from('note_images').select('image_id').in('note_id', noteIds.slice(i, i + CHUNK));
+      check(error);
+      for (const r of (data ?? []) as { image_id: string }[]) out.add(r.image_id);
+    }
+    return [...out];
+  }
+
+  /** After a delete: remove the candidate files that no remaining note uses. Failures are left for later. */
+  private async removeUnusedPictures(candidates: string[]) {
+    const unused: string[] = [];
+    for (let i = 0; i < candidates.length; i += CHUNK) {
+      const chunk = candidates.slice(i, i + CHUNK);
+      const { data, error } = await this.sb.from('note_images').select('image_id').in('image_id', chunk);
+      if (error) return console.warn('Pictures not tidied', error);
+      const used = new Set(((data ?? []) as { image_id: string }[]).map((r) => r.image_id));
+      unused.push(...chunk.filter((c) => !used.has(c) && c !== SupabaseStore.PICTURE_ID));
+    }
+    if (!unused.length) return;
+    const { error } = await this.sb.storage.from(IMAGE_BUCKET).remove(unused.map((id) => this.imagePath(id)));
+    if (error) console.warn('Pictures not removed', error);
+  }
+
+  /**
+   * Record the picture uses of every note made before note_images existed (ink and version history),
+   * once per account. Until it has finished, deleting a note removes no picture files. Needs the key
+   * when notes are encrypted; without it, it waits for another time.
+   */
+  async backfillImageUses() {
+    if (!(await this.supportsImageUses())) return;
+    const { data: state, error: se } = await this.sb.from('note_images_state').select('user_id').limit(1);
+    check(se);
+    if (state?.length) return;
+    if (this.vault?.needsKey && !this.vault.key) return;
+    await this.supportsText();
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await this.sb.from('strokes').select(this.strokeCols()).order('id', { ascending: true }).range(from, from + PAGE - 1);
+      check(error);
+      const rows = (data ?? []) as unknown as StrokeRow[];
+      const decoded = await Promise.all(rows.map((r) => this.decodeStroke(r)));
+      if (decoded.some((x) => !x)) return; // something cannot be read here: try again another time
+      await this.recordImageUses(decoded.filter((x): x is Stroke => x!.tool === 'image' && !!x!.text).map((x) => ({ note_id: x.note_id, image_id: x.text! })));
+      if (rows.length < PAGE) break;
+    }
+    if (await this.supportsHistory()) {
+      for (let from = 0; ; from += VERSION_PAGE) {
+        const { data, error } = await this.sb.from('note_versions').select(VERSION_COLS + ',data,data_enc').order('id', { ascending: true }).range(from, from + VERSION_PAGE - 1);
+        check(error);
+        const rows = (data ?? []) as unknown as VersionRow[];
+        for (const r of rows) {
+          let snap: SnapStroke[];
+          try {
+            snap = await decodeSnapshot(await this.versionBytes(r));
+          } catch {
+            return; // cannot be read here: try again another time
+          }
+          await this.recordImageUses(snap.filter((x) => x.tool === 'image' && x.text).map((x) => ({ note_id: r.note_id, image_id: x.text! })));
+        }
+        if (rows.length < VERSION_PAGE) break;
+      }
+    }
+    const { error } = await this.sb.from('note_images_state').upsert({ user_id: this.userId }, { onConflict: 'user_id', ignoreDuplicates: true });
     check(error);
   }
 
@@ -523,6 +641,8 @@ export class SupabaseStore implements Store {
         return error;
       });
     }
+    // Record which notes use which pictures (a failure here retries the whole save).
+    await this.recordImageUses(strokes.filter((s) => s.tool === 'image' && s.text).map((s) => ({ note_id: s.note_id, image_id: s.text! })));
   }
 
   async deleteStrokes(ids: string[]) {
@@ -621,6 +741,7 @@ export class SupabaseStore implements Store {
   }
 
   async saveVersion(v: VersionMeta, strokes: SnapStroke[]) {
+    await this.recordImageUses(strokes.filter((s) => s.tool === 'image' && s.text).map((s) => ({ note_id: v.note_id, image_id: s.text! })));
     const bytes = await encodeSnapshot(strokes);
     if (bytes.length > MAX_SNAPSHOT_BYTES) throw new StoreError('This note is too large to keep in its version history.', true);
     await this.write(async (key) => {

@@ -129,8 +129,11 @@ export class LocalStore implements Store {
     if (!b || (b.deleted_at && id !== this.trashId)) throw new GoneError('notebook');
   }
   async deleteNotebook(id: string) {
-    for (const n of this.notes().filter((m) => m.notebook_id === id)) await this.deleteNote(n.id);
+    const ids = this.notes().filter((m) => m.notebook_id === id).map((m) => m.id);
+    const candidates = await this.picturesOf(ids);
+    for (const n of ids) await this.removeNote(n);
     this.saveNotebooks(this.notebooks().filter((b) => b.id !== id));
+    await this.removeUnusedPictures(candidates);
   }
   async deleteFromTrash(kind: 'note' | 'notebook', id: string, olderThan?: string) {
     const before = (at?: string | null) => !!at && (!olderThan || at < olderThan);
@@ -173,7 +176,34 @@ export class LocalStore implements Store {
     x.title = title;
     this.saveNotes(n);
   }
+  /** Delete a note for good, and the picture files no other note (or version) uses. */
   async deleteNote(id: string) {
+    const candidates = await this.picturesOf([id]);
+    await this.removeNote(id);
+    await this.removeUnusedPictures(candidates);
+  }
+
+  /** Picture files used by these notes, in their ink or their version history. */
+  private async picturesOf(noteIds: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (const id of noteIds) {
+      for (const s of lsGet<Stroke[]>(this.strokesKey(id), [])) if (s.tool === 'image' && s.text) out.add(s.text);
+      for (const v of await this.listVersions(id).catch(() => [])) {
+        for (const s of await this.loadVersion(v).catch(() => [])) if (s.tool === 'image' && s.text) out.add(s.text);
+      }
+    }
+    return out;
+  }
+
+  /** Remove the candidate picture files that no remaining note or version uses. */
+  private async removeUnusedPictures(candidates: Set<string>) {
+    candidates.delete('profile-picture');
+    if (!candidates.size) return;
+    const used = await this.picturesOf(this.notes().map((m) => m.id));
+    for (const id of candidates) if (!used.has(id)) await imageTx('readwrite', (st) => st.delete(id)).catch(() => {});
+  }
+
+  private async removeNote(id: string) {
     this.saveNotes(this.notes().filter((m) => m.id !== id));
     await this.deleteVersions((await this.listVersions(id)).map((v) => v.id)).catch(() => {});
     try {

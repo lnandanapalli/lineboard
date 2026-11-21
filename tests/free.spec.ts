@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PALM, PEN, attachBoard, drag, expectStrokes, send, setup, stripY, tp } from './helpers';
+import { PALM, PEN, attachBoard, drag, expectStrokes, send, setup, stripY, tp, savesDone } from './helpers';
 
 /** Free whiteboard mode: no strips or locks, whole page takes ink, two fingers scroll. */
 
@@ -10,21 +10,25 @@ async function chooseMode(page: Page, name: 'Strips' | 'Multi-strip' | 'Free whi
 }
 
 /** Y (page units) of the first point of the newest stroke. */
-const lastStrokeY = (page: Page) =>
-  page.evaluate(() => {
+const lastStrokeY = async (page: Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
     const list = JSON.parse(localStorage[k]);
     return list[list.length - 1].points[1] as number;
   });
+};
 
 /** Horizontal span (page units) of the newest stroke. */
-const lastStrokeSpan = (page: Page) =>
-  page.evaluate(() => {
+const lastStrokeSpan = async (page: Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
     const list = JSON.parse(localStorage[k]);
     const xs = (list[list.length - 1].points as number[]).filter((_, i) => i % 3 === 0);
     return Math.max(...xs) - Math.min(...xs);
   });
+};
 
 /** Switch free mode on/off and return fresh board geometry (the margin hides/shows, so the page moves). */
 async function toggleFree(page: Page) {

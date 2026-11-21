@@ -1,5 +1,5 @@
 import { expect, test, type CDPSession, type Page } from '@playwright/test';
-import { PEN, attachBoard, drag, expectStrokes, send, setup, tp, type Geo } from './helpers';
+import { PEN, attachBoard, drag, expectStrokes, send, setup, tp, type Geo, savesDone } from './helpers';
 
 /** Split mode: two screen panes, each lockable; the page scrolls under them; the divider moves only when armed. */
 
@@ -20,12 +20,14 @@ async function marginDrag(cdp: CDPSession, geo: Geo, y0: number, y1: number) {
   for (let i = 1; i <= 10; i++) await send(cdp, 'touchMove', [tp(geo.marginX, y0 + ((y1 - y0) * i) / 10, PEN, 8)]);
   await send(cdp, 'touchEnd', []);
 }
-const firstY = (page: Page) =>
-  page.evaluate(() => {
+const firstY = async (page: Page) => {
+  await savesDone(page);
+  return page.evaluate(() => {
     const k = Object.keys(localStorage).find((x) => x.startsWith('lb-local-strokes-'))!;
     const list = JSON.parse(localStorage[k]);
     return list[list.length - 1].points[1] as number;
   });
+};
 
 test('panes lock and unlock independently', async ({ page }) => {
   await setup(page);

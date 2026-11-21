@@ -17,6 +17,9 @@ export interface MockDb {
   strokes: Row[];
   /** note_versions (version history). */
   versions?: Row[];
+  /** note_images (which notes use which picture files) and whether older notes' uses are recorded. */
+  imageUses?: Row[];
+  imageUsesComplete?: boolean;
   /** Set to make the database look as if schema.sql predates version history. */
   noHistory?: boolean;
   /** Auth emails sent (sign-up confirmation, links, resets): address and time, like Supabase's 60 s wait. */
@@ -398,6 +401,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       db.notes = db.notes.filter((n) => !ids.includes(n.id));
       db.strokes = db.strokes.filter((s) => !ids.includes(s.note_id));
       db.versions = (db.versions ?? []).filter((v) => !ids.includes(v.note_id));
+      db.imageUses = (db.imageUses ?? []).filter((u) => !ids.includes(u.note_id));
     };
 
     // ---- notebooks / notes ----
@@ -518,6 +522,30 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       if (method === 'DELETE') {
         db.versions = db.versions.filter((v) => !match(v));
         return route.fulfill({ status: 204, headers: cors });
+      }
+    }
+
+    // ---- note_images / note_images_state ----
+    if (path === '/rest/v1/note_images') {
+      db.imageUses ??= [];
+      if (method === 'GET') return json(route, 200, paginate(url, db.imageUses.filter(match)));
+      if (method === 'POST') {
+        for (const r of [body()].flat() as Row[]) {
+          if (!db.notes.some((n) => n.id === r.note_id)) return json(route, 409, { code: '23503', message: 'insert or update on table "note_images" violates foreign key constraint "note_images_note_id_fkey"' });
+          if (!db.imageUses.some((u) => u.note_id === r.note_id && u.image_id === r.image_id)) db.imageUses.push(r);
+        }
+        return route.fulfill({ status: 201, headers: cors });
+      }
+      if (method === 'DELETE') {
+        db.imageUses = db.imageUses.filter((u) => !match(u));
+        return route.fulfill({ status: 204, headers: cors });
+      }
+    }
+    if (path === '/rest/v1/note_images_state') {
+      if (method === 'GET') return json(route, 200, db.imageUsesComplete ? [{ user_id: USER_ID }] : []);
+      if (method === 'POST') {
+        db.imageUsesComplete = true;
+        return route.fulfill({ status: 201, headers: cors });
       }
     }
 

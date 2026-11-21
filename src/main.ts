@@ -297,6 +297,8 @@ if (!hasCloud) {
       toast('Your account and all its data have been deleted.');
     };
     app = new App(root, store, { id: uid, email }, { signOut, account, onAccountDeleted });
+    // Once per account: record which notes use which pictures, so deleting notes can tidy files up.
+    void store.backfillImageUses().catch((e) => console.warn('Picture uses not recorded yet', e));
   };
 
   window.addEventListener(navigationEvent, () => {
