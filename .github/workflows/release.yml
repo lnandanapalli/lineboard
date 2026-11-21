@@ -1,7 +1,8 @@
 name: Publish image and deploy
 
-# On every push to main (and on version tags) this builds the Docker image and publishes it to
-# GitHub Container Registry: ghcr.io/<owner>/<repo>.
+# On every push to main (and on version tags) this first runs the full CI checks (tests, the
+# container smoke test, the database rules) on that exact commit. Only if they pass does it build
+# the Docker image and publish it to GitHub Container Registry: ghcr.io/<owner>/<repo>.
 # If the repository variables AZURE_WEBAPP_NAME, AZURE_CLIENT_ID, AZURE_TENANT_ID and
 # AZURE_SUBSCRIPTION_ID are set, it then deploys that exact image to Azure App Service.
 # Azure sign-in uses OpenID Connect: no passwords or publish profiles are stored in GitHub.
@@ -22,7 +23,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   publish:
+    # Nothing is published (or deployed) unless every check passed on this commit.
+    needs: checks
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.ref.outputs.image }}

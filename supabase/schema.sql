@@ -315,6 +315,7 @@ begin
 end $$;
 
 revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account(), public.recently_authenticated() from anon, public;
+grant execute on function public.recently_authenticated() to authenticated;
 grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account() to authenticated;
 
 -- ------------- Pictures -------------
@@ -339,6 +340,17 @@ $$;
 revoke execute on function public.image_quota_ok() from anon, public;
 grant execute on function public.image_quota_ok() to authenticated;
 
+-- Replacing a file: the account's other files must be within the quota, so replacing small files
+-- with large ones cannot grow the account past it (one file is at most 15 MB on top).
+create or replace function public.image_quota_ok_replacing(target text) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select count(*) < 5000 and coalesce(sum((o.metadata ->> 'size')::bigint), 0) < 2147483648
+    from storage.objects o
+   where o.bucket_id = 'images' and (storage.foldername(o.name))[1] = (select auth.uid())::text and o.name <> target
+$$;
+revoke execute on function public.image_quota_ok_replacing(text) from anon, public;
+grant execute on function public.image_quota_ok_replacing(text) to authenticated;
+
 drop policy if exists "own images: read" on storage.objects;
 drop policy if exists "own images: add" on storage.objects;
 drop policy if exists "own images: change" on storage.objects;
@@ -350,7 +362,8 @@ create policy "own images: add" on storage.objects for insert to authenticated
               and (select public.image_quota_ok()));
 create policy "own images: change" on storage.objects for update to authenticated
   using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()))
-  with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
+  with check (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok())
+              and public.image_quota_ok_replacing(name));
 create policy "own images: remove" on storage.objects for delete to authenticated
   using (bucket_id = 'images' and (storage.foldername(name))[1] = (select auth.uid())::text and (select public.access_ok()));
 
@@ -421,6 +434,14 @@ drop trigger if exists note_versions_row_limits on public.note_versions;
 create trigger note_versions_row_limits after insert on public.note_versions
   referencing new table as added for each statement execute function public.enforce_row_limits();
 drop trigger if exists note_versions_size_limits on public.note_versions;
+-- Changing rows is checked too: rewriting a version larger, or moving ink or versions to another
+-- note, must not get round the limits that adding them is held to.
+drop trigger if exists strokes_row_limits_on_update on public.strokes;
+create trigger strokes_row_limits_on_update after update on public.strokes
+  referencing new table as added for each statement execute function public.enforce_row_limits();
+drop trigger if exists note_versions_row_limits_on_update on public.note_versions;
+create trigger note_versions_row_limits_on_update after update on public.note_versions
+  referencing new table as added for each statement execute function public.enforce_row_limits();
 
 -- Signed-in users get table access (RLS above still limits them to their own rows); anonymous users get none.
 grant select, insert, update, delete on public.notebooks, public.notes, public.strokes, public.user_settings, public.user_keys, public.note_versions to authenticated;
