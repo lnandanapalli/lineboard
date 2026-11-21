@@ -122,10 +122,49 @@ export class AccountSecurity {
       throw new AccountError('That password is not right.', 'invalid_credentials');
     }
     const { access_token } = (await res.json()) as { access_token?: string };
+    // Kept for a few minutes (then ended): its token shows the server a sign-in made just now, which
+    // deleting the account requires. A newer check replaces it.
+    this.endFreshSession();
     if (access_token) {
-      await fetch(`${base}/logout?scope=local`, { method: 'POST', headers: { ...headers, Authorization: `Bearer ${access_token}` } }).catch(() => {});
+      const timer = setTimeout(() => this.endFreshSession(), AccountSecurity.CONFIRM_WINDOW_MS);
+      this.fresh = { token: access_token, timer };
     }
     this.passwordAt = Date.now();
+  }
+
+  /** The side session from the last password check, while it is recent. */
+  private fresh: { token: string; timer: ReturnType<typeof setTimeout> } | null = null;
+
+  private endFreshSession() {
+    const f = this.fresh;
+    if (!f) return;
+    this.fresh = null;
+    clearTimeout(f.timer);
+    const base = config.supabaseUrl.replace(/\/+$/, '') + '/auth/v1';
+    void fetch(`${base}/logout?scope=local`, { method: 'POST', headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${f.token}` } }).catch(() => {});
+  }
+
+  /**
+   * Call a database function as the session that shows the most recent proof it's you: after an
+   * authenticator code, this device's session (the code is recorded in it); after a password check,
+   * the side session made by that check.
+   */
+  private async rpcAsConfirmed<T>(fn: string): Promise<{ data: T | null; error: AnyErr }> {
+    const token = !this.codeRecent && this.passwordRecent ? this.fresh?.token : undefined;
+    if (!token) {
+      const { data, error } = await this.sb.rpc(fn);
+      return { data: (data as T) ?? null, error };
+    }
+    const url = config.supabaseUrl.replace(/\/+$/, '') + '/rest/v1/rpc/' + fn;
+    let res: Response;
+    try {
+      res = await fetch(url, { method: 'POST', headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
+    } catch {
+      return { data: null, error: { message: 'Could not reach the server. Check your connection and try again.' } };
+    }
+    const text = await res.text();
+    const body = text ? (JSON.parse(text) as unknown) : null;
+    return res.ok ? { data: body as T, error: null } : { data: null, error: body as AnyErr };
   }
 
   /** Prove it's you with a code from an authenticator app (two-step verification users). */
@@ -225,6 +264,11 @@ export class AccountSecurity {
    * authenticator and device with it. The caller confirms identity first (confirmItsYou).
    */
   async deleteAccount(userId: string) {
+    // The server only deletes an account for a sign-in or confirmation from the last few minutes.
+    // Ask it first, so the pictures are not removed for a deletion it would then refuse.
+    const { data: recent, error: re0 } = await this.rpcAsConfirmed<boolean>('recently_authenticated');
+    if (re0 && !/function .*recently_authenticated|PGRST202/i.test(`${re0.message} ${re0.code}`)) fail(re0, 'Could not delete your account');
+    if (!re0 && recent === false) this.needConfirmAgain();
     const bucket = this.sb.storage.from('images');
     for (let round = 0; round < 1000; round++) {
       const { data, error } = await bucket.list(userId, { limit: 1000 });
@@ -237,12 +281,21 @@ export class AccountSecurity {
       const { error: re } = await bucket.remove(names);
       if (re) fail(re as AnyErr, 'Could not remove your pictures');
     }
-    const { error } = await this.sb.rpc('delete_my_account');
+    const { error } = await this.rpcAsConfirmed<null>('delete_my_account');
     if (error) {
-      if (/function .*delete_my_account|PGRST202/i.test(`${error.message} ${(error as AnyErr)?.code}`))
+      if (/function .*delete_my_account|PGRST202/i.test(`${error.message} ${error.code}`))
         throw new AccountError('Account deletion needs a database update: the site operator re-runs supabase/schema.sql.');
+      if (/recent sign-in/i.test(error.message ?? '')) this.needConfirmAgain();
       fail(error, 'Could not delete your account');
     }
+    this.endFreshSession();
+  }
+
+  /** The server wants a fresh proof: forget the earlier ones so the next try asks again. */
+  private needConfirmAgain(): never {
+    this.passwordAt = this.codeAt = 0;
+    this.endFreshSession();
+    throw new AccountError('For your security, confirm it’s you again, then delete the account.', 'reauthentication_needed');
   }
 
   // ----------------------------- passkeys -----------------------------

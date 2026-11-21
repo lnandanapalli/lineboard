@@ -285,19 +285,36 @@ begin
   return found;
 end $$;
 
+-- True when the caller's token shows a sign-in or confirmation (password, emailed code, passkey or
+-- authenticator code) from the last 10 minutes: each entry of the "amr" claim says when that method
+-- was last used for the session, and refreshing a token does not renew it.
+create or replace function public.recently_authenticated() returns boolean
+language sql stable security invoker set search_path = '' as $$
+  select exists (
+    select 1 from jsonb_array_elements(coalesce((select auth.jwt()) -> 'amr', '[]'::jsonb)) a
+     where jsonb_typeof(a) = 'object'
+       and (a ->> 'timestamp') ~ '^[0-9]+$'
+       and (a ->> 'timestamp')::bigint > extract(epoch from now()) - 600
+  )
+$$;
+
 -- Delete the signed-in user's account (right to erasure). Removing the auth user removes every
 -- row that references it (notebooks, notes, strokes, versions, settings, keys, sessions, factors, passkeys).
--- The app deletes the user's picture files through the Storage API first.
+-- The app deletes the user's picture files through the Storage API first. It needs a fresh proof
+-- of identity: a session left signed in (or a stolen token) alone cannot delete the account.
 create or replace function public.delete_my_account() returns void
 language plpgsql volatile security definer set search_path = '' as $$
 begin
   if not public.access_ok() then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
+  if not public.recently_authenticated() then
+    raise exception 'Lineboard: a recent sign-in is needed to delete the account' using errcode = '42501';
+  end if;
   delete from auth.users where id = (select auth.uid());
 end $$;
 
-revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account() from anon, public;
+revoke execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account(), public.recently_authenticated() from anon, public;
 grant execute on function public.access_ok(), public.list_my_sessions(), public.revoke_my_session(uuid), public.delete_my_account() to authenticated;
 
 -- ------------- Pictures -------------

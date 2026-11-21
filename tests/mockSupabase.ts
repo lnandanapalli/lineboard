@@ -52,6 +52,9 @@ export interface MockDb {
 export interface Session {
   id: string;
   aal: 'aal1' | 'aal2';
+  /** When it signed in, and last passed an authenticator code (seconds): the token's "amr" claim. */
+  authAt?: number;
+  codeAt?: number;
   user_agent: string;
   ip: string;
   created_at: string;
@@ -65,7 +68,9 @@ const b64url = (v: string | Uint8Array) => Buffer.from(v).toString('base64url');
 /** An unsigned JWT in the shape Supabase issues; the client only decodes it. */
 function jwt(session: Session) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = { sub: USER_ID, role: 'authenticated', aud: 'authenticated', aal: session.aal, session_id: session.id, amr: [{ method: 'password', timestamp: now }], iat: now, exp: now + 3600 };
+  // Like Supabase: amr says when each method was used for the session; a refresh does not renew it.
+  const amr = [{ method: 'password', timestamp: session.authAt ?? now }, ...(session.codeAt ? [{ method: 'totp', timestamp: session.codeAt }] : [])];
+  const payload = { sub: USER_ID, role: 'authenticated', aud: 'authenticated', aal: session.aal, session_id: session.id, amr, iat: now, exp: now + 3600 };
   return `${b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))}.${b64url(JSON.stringify(payload))}.sig`;
 }
 
@@ -143,7 +148,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     return { access_token: jwt(session), token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, refresh_token: 'refresh-' + session.id, user: user() };
   };
   const newSession = (ua: string): Session => {
-    const session: Session = { id: crypto.randomUUID(), aal: 'aal1', user_agent: ua, ip: '203.0.113.' + (db.sessions.length + 7), created_at: new Date().toISOString() };
+    const session: Session = { id: crypto.randomUUID(), aal: 'aal1', authAt: Math.floor(Date.now() / 1000), user_agent: ua, ip: '203.0.113.' + (db.sessions.length + 7), created_at: new Date().toISOString() };
     db.sessions.push(session);
     return session;
   };
@@ -168,7 +173,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
 
     // The session the request's access token belongs to (null: none, or signed out elsewhere).
     const bearer = (req.headers()['authorization'] ?? '').replace(/^Bearer /, '');
-    let claims: { session_id?: string; aal?: string } = {};
+    let claims: { session_id?: string; aal?: string; amr?: { method: string; timestamp: number }[] } = {};
     try {
       claims = JSON.parse(Buffer.from(bearer.split('.')[1] ?? '', 'base64url').toString() || '{}');
     } catch {
@@ -246,6 +251,7 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         const wasNew = f.status !== 'verified';
         f.status = 'verified';
         session!.aal = 'aal2';
+        session!.codeAt = Math.floor(Date.now() / 1000);
         // Turning on a new factor signs out every other session.
         if (wasNew) db.sessions = db.sessions.filter((x) => x.id === session!.id);
         return json(route, 200, tokenResponse(session!));
@@ -334,8 +340,12 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     }
 
     // ---- deleting the account ----
+    /** The schema's recently_authenticated(): the token shows a sign-in or code from the last 10 minutes. */
+    const recentAuth = () => (claims.amr ?? []).some((a) => a.timestamp > Date.now() / 1000 - 600);
+    if (path === '/rest/v1/rpc/recently_authenticated') return json(route, 200, recentAuth());
     if (path === '/rest/v1/rpc/delete_my_account') {
       if (!accessOk()) return json(route, 403, { code: '42501', message: 'Not allowed' });
+      if (!recentAuth()) return json(route, 403, { code: '42501', message: 'Lineboard: a recent sign-in is needed to delete the account' });
       Object.assign(db, { notebooks: [], notes: [], strokes: [], versions: [], settings: null, keys: null, sessions: [], factors: [], passkeys: [], deleted: true });
       return route.fulfill({ status: 204, headers: cors, body: '' });
     }
