@@ -1,5 +1,3 @@
-import { h } from './util';
-
 /**
  * The user's profile: a display name (one field, as many names do not split into first and last)
  * and an optional picture. Without either, a neutral person icon stands in.
@@ -37,42 +35,15 @@ export function initials(name: string): string {
 }
 
 /** A calm background colour picked from the name, so each person's initials keep their colour. */
-function hue(name: string) {
+export function nameHue(name: string) {
   let n = 0;
   for (const ch of name) n = (n * 31 + ch.codePointAt(0)!) % 360;
   return n;
 }
 
-const PERSON =
+/** Stands in for a picture when there is no name either. */
+export const PERSON_ICON =
   '<svg viewBox="0 0 24 24" width="60%" height="60%" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>';
-
-/** The round avatar: the picture, else the initials, else a person icon. */
-export function avatar(profile: Profile, pictureUrl: string | null, size = 32): HTMLElement {
-  const el = h('span', { class: 'avatar-circle', 'aria-hidden': 'true' });
-  el.style.width = el.style.height = `${size}px`;
-  el.style.fontSize = `${Math.round(size * 0.4)}px`;
-  const text = initials(profile.name);
-  if (pictureUrl) {
-    const img = h('img', { src: pictureUrl, alt: '' }) as HTMLImageElement;
-    // A picture that cannot be shown (encrypted and locked, offline) falls back to the initials.
-    img.addEventListener('error', () => {
-      img.remove();
-      fill();
-    });
-    el.append(img);
-  } else fill();
-  function fill() {
-    if (text) {
-      el.textContent = text;
-      el.style.background = `hsl(${hue(profile.name)} 55% 88%)`;
-      el.style.color = `hsl(${hue(profile.name)} 45% 28%)`;
-    } else {
-      el.innerHTML = PERSON;
-      el.classList.add('blank');
-    }
-  }
-  return el;
-}
 
 /** A picture made into a small square (centre crop), ready to store. */
 export async function squarePicture(file: Blob): Promise<Blob> {

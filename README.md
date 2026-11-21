@@ -87,8 +87,8 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 
 ## How it works
 
-Lineboard is a static TypeScript app (Vite, no UI framework, HTML canvas). In production it is served by
-nginx in a Docker image.
+Lineboard is a static TypeScript app: React for the interface, with Zustand for the state it shows, and an
+HTML canvas engine for the board, built with Vite. In production it is served by nginx in a Docker image.
 
 The browser talks directly to Supabase using the public anon / publishable key. Access control lives in the
 database: row-level security in [`supabase/schema.sql`](supabase/schema.sql) limits every user to their own
@@ -189,7 +189,7 @@ Supabase, separately from page routing.
 
 Terms and privacy pages describe the app's current behavior. Before a public launch, the site
 operator should review them and confirm hosting-specific retention/privacy information in
-`src/public.ts`. They currently identify `@lnandanapalli` and link to GitHub Issues for support;
+`src/policies.ts`. They currently identify `@lnandanapalli` and link to GitHub Issues for support;
 self-hosters should update those details for their own installation.
 
 ## Configuration
@@ -287,11 +287,12 @@ createdb lb && for f in supabase/test/supabase-stub.sql supabase/schema.sql supa
 
 ```
 src/board.ts        canvas engine: split / strips, palm filtering, eraser, rendering, export
-src/app.ts          toolbar, notes, settings, undo / redo
+src/app.ts          the notes app's logic: notes, notebooks, tools, undo / redo (state for the UI)
+src/ui/             React components: screens, toolbar, sidebar, settings, dialogs
+src/boot.ts         start-up: routing, sign-in, encryption, which screen shows
 src/sync.ts         background save queue
 src/store/          Supabase and browser storage backends
 src/guest.ts        moving notes from "try without an account" into an account
-src/auth.ts         sign-in screens
 supabase/           database schema
 tests/              Playwright tests
 docker/, nginx.conf container start-up and security headers
