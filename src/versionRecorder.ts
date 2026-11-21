@@ -2,7 +2,8 @@ import { contentHash, IDLE_MS, MAX_WAIT_MS, toPrune, toSnap, type SnapStroke, ty
 import type { Store } from './store/store';
 import { StoreError } from './store/store';
 import type { Stroke } from './types';
-import { lsGet, lsSet, toast, uuid } from './util';
+import { lsGet, lsSet, uuid } from './util';
+import { toast } from './ui/Toast';
 
 /** Shown when the cloud database does not have version history yet. */
 export const HISTORY_NEEDS_UPDATE = 'Version history needs a database update: the site operator re-runs supabase/schema.sql.';

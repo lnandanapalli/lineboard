@@ -5,7 +5,9 @@ import { diff, fromSnap, restorePlan, toSnap, type SnapStroke, type VersionMeta 
 import { icons } from '../icons';
 import type { Store } from '../store/store';
 import type { NoteMeta, Stroke } from '../types';
-import { dialog, lsGet, lsSet, toast, uuid } from '../util';
+import { lsGet, lsSet, uuid } from '../util';
+import { dialog } from './overlays';
+import { toast } from './Toast';
 import { clip, MAX_NOTE_TITLE, MAX_VERSION_NAME } from '../limits';
 import type { VersionRecorder } from '../versionRecorder';
 import { Svg } from './Icon';

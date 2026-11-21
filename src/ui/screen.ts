@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import { flushSync } from 'react-dom';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Factor } from '@supabase/supabase-js';
 import type { App } from '../app';
+import type { AccountSecurity } from '../account';
+import type { UnlockOptions } from './Encryption';
 
 /**
- * The screen React shows (main.tsx). Null while a screen not yet converted to React renders itself
- * into the host element instead (see boot.ts).
+ * The screen React shows (main.tsx). Null only before boot.ts shows the first one.
  */
 export type Screen =
   | { kind: 'home'; cloud: boolean; signedIn: boolean; onStart: () => void }
@@ -22,16 +24,20 @@ export type Screen =
   | { kind: 'move-notes'; count: number; answer: (a: 'move' | 'keep') => void }
   /** A moment of work before the notes open (moving notes, finishing encryption). */
   | { kind: 'busy'; text: string }
+  /** Encrypted notes: the passphrase (or recovery key) unlocks them on this device. */
+  | { kind: 'unlock'; o: UnlockOptions; done: () => void }
+  /** Two-step verification: the code from the authenticator app, after signing in. */
+  | { kind: 'second-step'; account: AccountSecurity; factors: Factor[]; signOut: () => void; done: () => void }
   /** The notes app itself. */
   | { kind: 'app'; app: App };
 
 export const useScreen = create<{ screen: Screen | null; seq: number }>(() => ({ screen: null, seq: 0 }));
 
 /**
- * Show a React screen (a fresh one each time, so its state starts over), or none. The page changes
+ * Show a screen (a fresh one each time, so its state starts over). The page changes
  * at once, as it did when screens drew themselves: what follows (a message, the board measuring
  * itself) finds the new screen, not the old one.
  */
-export function showScreen(screen: Screen | null) {
+export function showScreen(screen: Screen) {
   flushSync(() => useScreen.setState((s) => ({ screen, seq: s.seq + 1 })));
 }

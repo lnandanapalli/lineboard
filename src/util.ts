@@ -71,9 +71,6 @@ export function debounce<A extends unknown[]>(fn: (...a: A) => void, ms: number)
   return d;
 }
 
-/** Show a short message (drawn by React: ui/Toast.tsx). */
-export { toast } from './ui/Toast';
-
 export function lsGet<T>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(key);
@@ -100,6 +97,3 @@ export function lsDel(key: string) {
     /* unavailable */
   }
 }
-
-/** In-page confirm / prompt dialog (drawn by React). Resolves null on cancel. */
-export { dialog } from './ui/overlays';

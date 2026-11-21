@@ -3,14 +3,15 @@ import { createPortal, flushSync } from 'react-dom';
 import { createStore } from 'zustand/vanilla';
 import { useStore } from 'zustand';
 import { PAGE_W } from '../board';
-import { changePassphrase, disableEncryption, enableEncryption, replaceRecoveryKey } from '../encryptionUi';
+import { changePassphrase, disableEncryption, enableEncryption, replaceRecoveryKey } from './Encryption';
 import { icons } from '../icons';
 import { SupabaseStore } from '../store/supabaseStore';
 import type { AccountSecurity } from '../account';
-import { confirmItsYou, SecurityPane } from '../securityUi';
+import { confirmItsYou, SecurityPane } from './Security';
 import type { Store } from '../store/store';
 import { TRASH_DAYS, type AppUser, type Paper, type Settings } from '../types';
-import { dialog, toast } from '../util';
+import { dialog } from './overlays';
+import { toast } from './Toast';
 import { isApple, shortcut } from '../keys';
 import { orientation } from '../orientation';
 import { avatar, MAX_NAME, type Profile } from '../profile';
@@ -18,6 +19,7 @@ import { setTheme, themeChoice, type ThemeChoice } from '../theme';
 import { IMAGE_TYPES } from '../images';
 import { InfoButton } from './overlays';
 import { Svg } from './Icon';
+import { Card } from './Card';
 import { Mount } from './Mount';
 
 /** What end-to-end encryption does, behind the ⓘ next to its switch. */
@@ -94,12 +96,7 @@ interface PanelState {
  */
 export class SettingsPanel {
   readonly state = createStore<PanelState>(() => ({ open: false, section: 'account', paneOpen: false, rev: 0, contact: 'Last contact on page: none yet' }));
-  /** The sign-in & devices section (password, two-step, passkeys, devices); not yet React. */
-  readonly securityPane: SecurityPane | null;
-
-  constructor(readonly host: SettingsHost) {
-    this.securityPane = host.account ? new SecurityPane(host.account, host.user.email) : null;
-  }
+  constructor(readonly host: SettingsHost) {}
 
   private bump(extra: Partial<PanelState> = {}) {
     this.state.setState((s) => ({ ...extra, rev: s.rev + 1 }));
@@ -107,7 +104,6 @@ export class SettingsPanel {
 
   open(section?: Section) {
     flushSync(() => this.bump({ open: true, ...(section ? { section, paneOpen: true } : {}) }));
-    if (section === 'signin') this.securityPane?.refresh();
   }
 
   /** Open at Data controls, with the trash in view. */
@@ -137,7 +133,6 @@ export class SettingsPanel {
 
   show(section: Section) {
     this.bump({ section, paneOpen: true });
-    if (section === 'signin') this.securityPane?.refresh();
   }
 }
 
@@ -176,7 +171,7 @@ export function SettingsDialog({ panel }: { panel: SettingsPanel }) {
         </div>
         <div className="settings-main">
           <div className="settings-content">
-            {/* Only the section shown is drawn (and drawn afresh each time the window opens). */}
+            {/* Every section is drawn afresh each time the window opens (Sign-in & devices only while shown: it loads from the server). */}
             {SECTIONS.map((s) => (
               <section key={s.id} className="settings-pane" data-section={s.id} aria-label={s.label} hidden={s.id !== section}>
                 <div className="pane-head">
@@ -185,7 +180,7 @@ export function SettingsDialog({ panel }: { panel: SettingsPanel }) {
                   </button>
                   <h3>{s.label}</h3>
                 </div>
-                {open && <Pane id={s.id} panel={panel} rev={rev} key={s.id} />}
+                {open && <Pane id={s.id} panel={panel} rev={rev} current={s.id === section} key={s.id} />}
               </section>
             ))}
           </div>
@@ -204,7 +199,7 @@ export function SettingsDialog({ panel }: { panel: SettingsPanel }) {
   );
 }
 
-function Pane({ id, panel, rev }: { id: Section; panel: SettingsPanel; rev: number }) {
+function Pane({ id, panel, rev, current }: { id: Section; panel: SettingsPanel; rev: number; current: boolean }) {
   const host = panel.host;
   switch (id) {
     case 'account':
@@ -212,7 +207,9 @@ function Pane({ id, panel, rev }: { id: Section; panel: SettingsPanel; rev: numb
     case 'data':
       return <DataPane host={host} rev={rev} />;
     case 'signin':
-      return panel.securityPane ? <Mount el={panel.securityPane.el} /> : <SigninPane host={host} />;
+      // Loaded from the server each time the section is shown.
+      if (!host.account) return <SigninPane host={host} />;
+      return current ? <SecurityPane account={host.account} email={host.user.email} /> : null;
     case 'security':
       return <EncryptionPane host={host} />;
     case 'writing':
@@ -225,24 +222,6 @@ function Pane({ id, panel, rev }: { id: Section; panel: SettingsPanel; rev: numb
 }
 
 // ----------------------------- helpers -----------------------------
-
-/** A card; with `info`, its heading has an ⓘ with what the card is about. */
-function Card({ title, info, children }: { title?: string; info?: string; children?: ReactNode }) {
-  return (
-    <div className="set-card">
-      {title &&
-        (info ? (
-          <h4 className="with-info">
-            <span>{title}</span>
-            <InfoButton topic={title} text={info} />
-          </h4>
-        ) : (
-          <h4>{title}</h4>
-        ))}
-      {children}
-    </div>
-  );
-}
 
 /** A setting: its label (with an ⓘ for the explanation, if any) and its control (named by `label`). */
 function Row({ label, help, children }: { label: string; help?: string; children: ReactNode }) {

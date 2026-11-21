@@ -3,7 +3,7 @@ import { isAuthSessionMissingError, type Factor, type SupabaseClient } from '@su
 
 /**
  * Account security on top of Supabase Auth: signed-in devices, password changes, authenticator-app
- * two-step verification (TOTP) and passkeys. UI lives in securityUi.ts.
+ * two-step verification (TOTP) and passkeys. UI lives in ui/Security.tsx.
  */
 
 export interface DeviceSession {

@@ -2,36 +2,30 @@ import { createClient, type Session } from '@supabase/supabase-js';
 import './styles.css';
 import { App } from './app';
 import { installRouter, navigate, navigationEvent, pageName, replaceRoute } from './router';
-import { showScreen, type Screen } from './ui/screen';
+import { showScreen } from './ui/screen';
 import { config, hasCloud } from './config';
 import { GUEST_MIGRATE, guestNotesWithInk, isGuestActive, keepSeparateKey, migrateGuestData, setGuestActive } from './guest';
 import { LocalStore } from './store/localStore';
 import { SupabaseStore } from './store/supabaseStore';
 import { forgetAllRememberedKeys, forgetRememberedKey, KeyVault } from './crypto/vault';
-import { renderUnlock } from './encryptionUi';
 import { AccountSecurity } from './account';
-import { renderSecondStep } from './securityUi';
-import { lsGet, lsSet, toast } from './util';
+import { lsGet, lsSet } from './util';
+import { toast } from './ui/Toast';
 
 /**
- * Start the app inside `root`: routing, sign-in, encryption, and the notes screen. The React root
- * (main.tsx) calls this once with the element the current, not yet converted, screens render into.
+ * Start the app: routing, sign-in, encryption, and the notes screen. The React root (main.tsx)
+ * calls this once; it shows each screen through ui/screen.ts.
  */
-export function boot(root: HTMLElement) {
-  /** Show a React screen: anything a not-yet-converted screen drew in the host goes. */
-  const showReact = (screen: Screen) => {
-    root.replaceChildren();
-    showScreen(screen);
-  };
-  /** The host element, for a screen that still renders itself (React shows nothing meanwhile). */
+export function boot() {
   /** Show the notes app (React draws it: ui/AppScreen.tsx). */
   const showApp = <T extends App>(app: T): T => {
-    showReact({ kind: 'app', app });
+    showScreen({ kind: 'app', app });
     return app;
   };
-  const host = () => {
-    showScreen(null);
-    return root;
+  /** Two-step verification: resolves once the code from the authenticator app was accepted. */
+  const secondStep = async (account: AccountSecurity, signOut: () => void) => {
+    const factors = await account.authenticators().catch(() => []);
+    await new Promise<void>((done) => showScreen({ kind: 'second-step', account, factors, signOut, done }));
   };
   installRouter();
   const LOCAL_USER = { id: 'local', email: null };
@@ -49,13 +43,13 @@ export function boot(root: HTMLElement) {
       localApp?.destroy();
       localApp = null;
       const page = pageName();
-      if (page === 'terms' || page === 'privacy') showReact({ kind: 'policy', page });
+      if (page === 'terms' || page === 'privacy') showScreen({ kind: 'policy', page });
       else if (page === 'app' || (!page && isGuestActive())) {
         replaceRoute('/app');
         setGuestActive(true);
         document.title = 'Lineboard';
         localApp = showApp(new App(new LocalStore(), LOCAL_USER));
-      } else showReact({ kind: 'home', cloud: false, signedIn: false, onStart: () => navigate('/app') });
+      } else showScreen({ kind: 'home', cloud: false, signedIn: false, onStart: () => navigate('/app') });
     };
     window.addEventListener(navigationEvent, route);
     route();
@@ -116,7 +110,7 @@ export function boot(root: HTMLElement) {
       current = null;
       const noteCount = (await guestNotesWithInk(new LocalStore())).length;
       if (!['login', 'signup'].includes(pageName()) || current !== null) return;
-      showReact({
+      showScreen({
         kind: 'auth',
         sb,
         initialMode: pageName() === 'signup' ? 'signup' : 'signin',
@@ -133,13 +127,13 @@ export function boot(root: HTMLElement) {
     const showSignIn = () => {
       clearApp();
       current = null;
-      showReact({ kind: 'auth', sb, initialMode: pageName() === 'signup' ? 'signup' : 'signin', onTryLocal: startGuest });
+      showScreen({ kind: 'auth', sb, initialMode: pageName() === 'signup' ? 'signup' : 'signin', onTryLocal: startGuest });
     };
 
     /** Ask a user who signed in normally whether this device's guest notes should join their account. */
-    const askToMove = (count: number) => new Promise<'move' | 'keep'>((resolve) => showReact({ kind: 'move-notes', count, answer: resolve }));
+    const askToMove = (count: number) => new Promise<'move' | 'keep'>((resolve) => showScreen({ kind: 'move-notes', count, answer: resolve }));
 
-    const showBusy = (text: string) => showReact({ kind: 'busy', text });
+    const showBusy = (text: string) => showScreen({ kind: 'busy', text });
 
     /** Move guest notes into the account when appropriate. Never throws; on failure the local copy is kept. */
     const maybeMoveGuestNotes = async (store: SupabaseStore, uid: string) => {
@@ -176,7 +170,7 @@ export function boot(root: HTMLElement) {
         console.warn('Could not check encryption state', e); // offline: the server still refuses plaintext if encryption is on
       }
       if (vault.needsKey && !(await vault.restore())) {
-        await renderUnlock(host(), { vault, store, email, signOut });
+        await new Promise<void>((done) => showScreen({ kind: 'unlock', o: { vault, store, email, signOut }, done }));
         if (current !== uid) return false;
       }
       if (vault.state === 'encrypting' || vault.state === 'decrypting') {
@@ -208,8 +202,8 @@ export function boot(root: HTMLElement) {
       if (page === 'terms' || page === 'privacy' || page === 'home' || page === 'how-it-works') {
         clearApp();
         current = null;
-        if (page === 'terms' || page === 'privacy') showReact({ kind: 'policy', page });
-        else showReact({ kind: 'home', cloud: true, signedIn: !!session, onStart: () => navigate('/app') });
+        if (page === 'terms' || page === 'privacy') showScreen({ kind: 'policy', page });
+        else showScreen({ kind: 'home', cloud: true, signedIn: !!session, onStart: () => navigate('/app') });
         return;
       }
       if (!session) {
@@ -230,7 +224,7 @@ export function boot(root: HTMLElement) {
         } else if (page === 'app' || isGuestActive()) startGuest();
         else {
           current = null;
-          showReact({ kind: 'home', cloud: true, signedIn: false, onStart: () => navigate('/app') });
+          showScreen({ kind: 'home', cloud: true, signedIn: false, onStart: () => navigate('/app') });
         }
         return;
       }
@@ -271,7 +265,7 @@ export function boot(root: HTMLElement) {
       };
       // Two-step verification: ask for the authenticator code before anything else.
       if (await account.needsSecondStep()) {
-        await renderSecondStep(host(), account, () => void signOut());
+        await secondStep(account, () => void signOut());
         if (current !== uid) return;
       }
       if (!(await prepareEncryption(vault, store, uid, email, () => void signOut()))) return;
@@ -331,8 +325,8 @@ export function boot(root: HTMLElement) {
           current = undefined;
           void (async () => {
             // With two-step verification on, the code is needed before the password can change.
-            if (await account.needsSecondStep()) await renderSecondStep(host(), account, () => void sb.auth.signOut());
-            showReact({
+            if (await account.needsSecondStep()) await secondStep(account, () => void sb.auth.signOut());
+            showScreen({
               kind: 'new-password',
               sb,
               done: () => {

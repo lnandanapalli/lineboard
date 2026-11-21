@@ -82,7 +82,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: non
 .sidebar, .note-list, .book-panel { overscroll-behavior: contain; }
 #app { height: 100%; }
 /* React's host for screens that render themselves (see main.tsx): adds no box of its own. */
-.screen-host { display: contents; }
 button { font: inherit; color: inherit; }
 
 /* ----- App layout ----- */

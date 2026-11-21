@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useRef } from 'react';
+import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { boot } from './boot';
 import { useScreen, type Screen } from './ui/screen';
@@ -6,6 +6,8 @@ import { HomePage, PolicyPage } from './ui/Public';
 import { AuthScreen, NewPasswordScreen } from './ui/Auth';
 import { BusyScreen, MoveNotesScreen, StorageNotice } from './ui/Startup';
 import { AppScreen } from './ui/AppScreen';
+import { UnlockScreen } from './ui/Encryption';
+import { SecondStepScreen } from './ui/Security';
 import { Overlays } from './ui/overlays';
 import { Toast } from './ui/Toast';
 
@@ -25,32 +27,29 @@ function ScreenView({ screen }: { screen: Screen }) {
       return <MoveNotesScreen count={screen.count} answer={screen.answer} />;
     case 'busy':
       return <BusyScreen text={screen.text} />;
+    case 'unlock':
+      return <UnlockScreen o={screen.o} done={screen.done} />;
+    case 'second-step':
+      return <SecondStepScreen account={screen.account} factors={screen.factors} signOut={screen.signOut} done={screen.done} />;
     case 'app':
       return <AppScreen app={screen.app} />;
   }
 }
 
-/**
- * The React root: the screen boot.ts asks for (ui/screen.ts). Screens not yet converted to React
- * render themselves into the host element instead; it uses `display: contents`, so the page lays
- * out exactly as before.
- */
+/** The React root: the screen boot.ts asks for (ui/screen.ts), and what shows over any screen. */
 function Root() {
   const { screen, seq } = useScreen();
-  const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Once per page (StrictMode runs effects twice in development).
-    if (booted || !host.current) return;
+    if (booted) return;
     booted = true;
     // Just after this first render: boot() changes screens at once (flushSync), which React does
     // not allow from inside its own render.
-    const el = host.current;
-    queueMicrotask(() => boot(el));
+    queueMicrotask(boot);
   }, []);
   return (
     <>
       {screen && <ScreenView key={seq} screen={screen} />}
-      <div className="screen-host" ref={host} />
       <Overlays />
       <Toast />
       <StorageNotice />
