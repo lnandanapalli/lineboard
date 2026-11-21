@@ -354,8 +354,11 @@ export function Dropdown<T extends string>(props: {
   // Place the menu under its button, within the screen, and focus the chosen option.
   useLayoutEffect(() => {
     const m = menu.current;
-    if (!open || !m || !wrap.current) return;
-    const r = appRect(wrap.current);
+    // A split button's group has a box; a plain dropdown's wrapper is `display: contents` (no box),
+    // so its button is measured instead.
+    const box = split ? wrap.current : btn.current;
+    if (!open || !m || !box) return;
+    const r = appRect(box);
     m.style.top = `${r.bottom + 6}px`;
     m.style.left = `${Math.max(8, Math.min(r.left, appViewport().width - m.offsetWidth - 8))}px`;
     fitBelow(m, r.bottom + 6);
