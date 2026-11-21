@@ -90,3 +90,30 @@ test('dialogs and menus turn with the app', async ({ page }) => {
   // The menu is inside the rotated app element.
   await expect(page.locator('.app .dropdown-menu')).toBeVisible();
 });
+
+test('the app stays turned when the sidebar or version history opens', async ({ page }) => {
+  await page.goto('/app');
+  await page.locator('.canvas-area canvas.live').waitFor();
+  if (await page.locator('.hint .link').isVisible()) await page.locator('.hint .link').click();
+  await turnOn(page);
+  await page.getByRole('button', { name: 'Rotate right' }).click();
+  const app = page.locator('.app');
+  await expect(app).toHaveClass(/\brotated\b/);
+  // The turned app covers the screen exactly.
+  const covers = () => app.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return Math.round(r.left) === 0 && Math.round(r.top) === 0 && Math.round(r.right) === innerWidth && Math.round(r.bottom) === innerHeight;
+  });
+  expect(await covers()).toBe(true);
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(app).toHaveClass(/\bsidebar-open\b/);
+  await expect(app).toHaveClass(/\brotated\b/);
+  expect(await covers()).toBe(true);
+  await page.getByRole('button', { name: 'Notes', exact: true }).click();
+  await expect(app).not.toHaveClass(/\bsidebar-open\b/);
+  await expect(app).toHaveClass(/\brotated\b/);
+  await page.getByRole('button', { name: 'Version history' }).click();
+  await expect(app).toHaveClass(/\bhistory-open\b/);
+  await expect(app).toHaveClass(/\brotated\b/);
+  expect(await covers()).toBe(true);
+});

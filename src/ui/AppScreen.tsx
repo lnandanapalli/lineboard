@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type CSSProperties } from 'react';
 import { SettingsDialog } from './Settings';
 import { createPortal } from 'react-dom';
 import { useStore } from 'zustand';
@@ -37,11 +37,14 @@ export function AppScreen({ app }: { app: App }) {
   const sidebarOpen = useView(app, 'sidebarOpen');
   const historyOpen = useView(app, 'historyOpen');
   const historyPanel = useView(app, 'historyPanel');
+  // orientation.ts turns the element and adds `rotated`; the class is kept here too, or React would
+  // drop it whenever it rewrites the class list (the sidebar or history opening).
+  const rotated = useSyncExternalStore(orientation.onChange, () => orientation.applied !== 0);
   useLayoutEffect(() => {
     if (appEl.current) app.attach(appEl.current);
   }, [app]);
   return (
-    <div ref={appEl} className={'app' + (sidebarOpen ? ' sidebar-open' : '') + (historyOpen ? ' history-open' : '')}>
+    <div ref={appEl} className={'app' + (sidebarOpen ? ' sidebar-open' : '') + (historyOpen ? ' history-open' : '') + (rotated ? ' rotated' : '')}>
       <Toolbar app={app} inert={historyOpen} />
       <div className="main">
         <Sidebar app={app} inert={historyOpen} />
