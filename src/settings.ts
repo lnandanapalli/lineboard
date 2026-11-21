@@ -62,8 +62,9 @@ export interface SettingsHost {
   archived: () => { notebooks: { id: string; name: string; notes: number }[]; notes: { id: string; title: string; notebook: string }[] };
   unarchive: (kind: 'note' | 'notebook', id: string) => Promise<void>;
   deleteArchived: (kind: 'note' | 'notebook', id: string) => Promise<void>;
-  /** What is in the trash: deleted notebooks (with how many notes) and notes deleted on their own. */
-  trash: () => { notebooks: { id: string; name: string; notes: number; deleted_at: string }[]; notes: { id: string; title: string; notebook: string; deleted_at: string }[] };
+  /** What is in the trash: notes moved there, and notebooks moved there whole (with their notes' titles). */
+  trash: () => { notebooks: { id: string; name: string; notes: string[]; deleted_at: string }[]; notes: { id: string; title: string; deleted_at: string }[] };
+  /** A note asks which notebook to go to; a notebook comes back whole. */
   restoreTrashed: (kind: 'note' | 'notebook', id: string) => Promise<void>;
   /** Delete one item for good (asks first). */
   deleteTrashed: (kind: 'note' | 'notebook', id: string) => Promise<void>;
@@ -136,6 +137,19 @@ export class SettingsPanel {
     });
     document.body.append(this.dlg);
     this.show('account', false);
+  }
+
+  /** The library changed (maybe on another device): redraw the archive and trash lists if open. */
+  refreshLists() {
+    if (!this.dlg.open) return;
+    this.renderArchived();
+    this.renderTrash();
+  }
+
+  /** Open at Data controls, with the trash in view. */
+  openTrash() {
+    this.open('data');
+    this.trashBody.closest('.card')?.scrollIntoView({ block: 'start' });
   }
 
   open(section?: Section) {
@@ -334,22 +348,29 @@ export class SettingsPanel {
   /** Data controls: what is archived, a copy of everything, moving notes, and erasing it all. */
   private dataPane(): HTMLElement[] {
     return [
-      this.infoCard('Trash', `Deleted notes and notebooks wait here for ${TRASH_DAYS} days, then they are deleted for good. Restore one to put it back where it was.`, this.trashBody),
+      this.infoCard(
+        'Trash',
+        `Deleted notes and notebooks wait here for ${TRASH_DAYS} days, then they are deleted for good. A note you restore goes into a notebook you pick. A deleted notebook comes back whole, with its notes.`,
+        this.trashBody,
+      ),
       this.infoCard('Archived', 'Archived notes and notebooks are hidden from the sidebar and search. They are kept, with their history, until you restore or delete them. Archive one from its ⋯ menu.', this.archivedBody),
       ...this.dataCards,
     ];
   }
   private trashBody = h('div', { class: 'archived-list trash-list' });
 
-  /** List what is in the trash, each with Restore and Delete forever, and a way to empty it. */
+  /**
+   * List what is in the trash. A note: Restore (pick a notebook) and Delete forever. A notebook: its
+   * notes listed under it (they cannot be taken out one by one), Restore and Delete forever, whole.
+   */
   private renderTrash() {
     const { notebooks, notes } = this.host.trash();
     const left = (at: string) => {
       const days = Math.max(0, Math.ceil(TRASH_DAYS - (Date.now() - Date.parse(at)) / 86_400_000));
       return days <= 1 ? 'deleted for good within a day' : `deleted for good in ${days} days`;
     };
-    const row = (kind: 'note' | 'notebook', id: string, name: string, sub: string) => {
-      const restore = h('button', { class: 'btn', type: 'button', 'aria-label': `Restore "${name}"` }, 'Restore') as HTMLButtonElement;
+    const row = (kind: 'note' | 'notebook', id: string, name: string, sub: string, inside?: string[]) => {
+      const restore = h('button', { class: 'btn', type: 'button', 'aria-label': `Restore "${name}"` }, kind === 'note' ? 'Restore…' : 'Restore') as HTMLButtonElement;
       restore.addEventListener('click', async () => {
         restore.disabled = true;
         await this.host.restoreTrashed(kind, id);
@@ -360,11 +381,17 @@ export class SettingsPanel {
         await this.host.deleteTrashed(kind, id);
         this.renderTrash();
       });
-      return h('li', {}, h('div', { class: 'archived-name' }, h('span', { class: 'archived-kind' }, kind === 'note' ? 'Note' : 'Notebook'), h('b', {}, name), h('small', {}, sub)), h('div', { class: 'row-actions' }, restore, del));
+      const kids = inside?.length ? h('ul', { class: 'trash-inside', 'aria-label': `Notes in "${name}"` }, ...inside.map((t) => h('li', {}, t))) : null;
+      return h(
+        'li',
+        { class: kind === 'notebook' ? 'trash-book' : '' },
+        h('div', { class: 'archived-name' }, h('span', { class: 'archived-kind' }, kind === 'note' ? 'Note' : 'Notebook'), h('b', {}, name), h('small', {}, sub), kids),
+        h('div', { class: 'row-actions' }, restore, del),
+      );
     };
     const items = [
-      ...notebooks.map((b) => row('notebook', b.id, b.name, `${b.notes === 1 ? '1 note' : `${b.notes} notes`} · ${left(b.deleted_at)}`)),
-      ...notes.map((n) => row('note', n.id, n.title || 'Untitled', `${n.notebook ? `from ${n.notebook} · ` : ''}${left(n.deleted_at)}`)),
+      ...notebooks.map((b) => row('notebook', b.id, b.name, `${b.notes.length === 1 ? '1 note' : `${b.notes.length} notes`} · ${left(b.deleted_at)}`, b.notes)),
+      ...notes.map((n) => row('note', n.id, n.title || 'Untitled', left(n.deleted_at))),
     ];
     if (!items.length) return this.trashBody.replaceChildren(h('p', { class: 'muted' }, 'The trash is empty.'));
     const empty = h('button', { class: 'btn danger-text', type: 'button' }, 'Empty trash') as HTMLButtonElement;
@@ -374,6 +401,7 @@ export class SettingsPanel {
     });
     this.trashBody.replaceChildren(h('ul', { class: 'archived-items' }, ...items), h('div', { class: 'row-actions trash-empty' }, empty));
   }
+
   private archivedBody = h('div', { class: 'archived-list' });
 
   /** List what is archived, each with Restore and Delete. */

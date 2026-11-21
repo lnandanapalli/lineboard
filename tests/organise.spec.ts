@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { attachBoard, drag, setup, stripY } from './helpers';
-import { mockSupabase } from './mockSupabase';
+import { mockSupabase, USER_ID } from './mockSupabase';
 
 /** The sidebar's ⋯ menus, stars, the archive (Settings > Data controls) and sharing as a file. */
 
@@ -18,7 +18,7 @@ const openSidebar = async (page: Page) => {
 
 async function newNote(page: Page, title: string) {
   await openSidebar(page);
-  await page.getByRole('button', { name: 'New note' }).click();
+  await page.getByRole('button', { name: 'New note', exact: true }).click();
   await page.locator('dialog[open] .dlg-input').fill(title);
   await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
   await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
@@ -117,6 +117,7 @@ test('archiving hides a note or notebook; Settings > Data controls lists them to
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
   await page.locator('.archived-list:not(.trash-list) .archived-items li').getByRole('button', { name: 'Delete "Old ideas"' }).click();
+  await page.locator('dialog[open]').getByRole('button', { name: 'Move to trash' }).click();
   await expect(page.locator('.archived-list:not(.trash-list)')).toContainText('Nothing is archived');
   await expect(page.locator('.trash-list')).toContainText('Old ideas');
 });
@@ -221,16 +222,36 @@ test('a PDF keeps a 200-character title ending in a bracket intact', async ({ pa
 });
 
 const strokesOf = (page: Page, id: string) => page.evaluate((id) => JSON.parse(localStorage.getItem('lb-local-strokes-' + id) ?? '[]').length as number, id);
+const dlg = (page: Page) => page.locator('dialog.modal.small[open]');
 
 async function openTrash(page: Page) {
-  if (await page.locator('.app.sidebar-open').count()) await page.locator('.scrim').click();
-  await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.locator('.settings-tab', { hasText: 'Data controls' }).click();
+  await openSidebar(page);
+  await page.locator('.trash-btn').click();
   return page.locator('.trash-list');
 }
 
-test('a deleted note goes to the trash: restored with its ink, or deleted forever after asking', async ({ page }) => {
+async function newNotebook(page: Page, name: string) {
+  await openSidebar(page);
+  if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
+  await page.getByRole('button', { name: 'New notebook' }).click();
+  await dlg(page).locator('.dlg-input').fill(name);
+  await dlg(page).getByRole('button', { name: 'Create' }).click();
+  await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
+}
+
+/** What another tab (or device) would do: change the saved notebooks behind this one's back. */
+const elsewhere = (page: Page, fn: (books: (N & { name: string })[], notes: N[]) => void) =>
+  page.evaluate((src) => {
+    const books = JSON.parse(localStorage.getItem('lb-local-notebooks') ?? '[]');
+    const notes = JSON.parse(localStorage.getItem('lb-local-notes') ?? '[]');
+    new Function('books', 'notes', `(${src})(books, notes)`)(books, notes);
+    localStorage.setItem('lb-local-notebooks', JSON.stringify(books));
+    localStorage.setItem('lb-local-notes', JSON.stringify(notes));
+  }, fn.toString());
+
+test('deleting a note asks, then moves it to the Trash notebook; restoring asks which notebook it goes into', async ({ page }) => {
   const { cdp, geo } = await setup(page);
+  await newNotebook(page, 'Physics');
   await newNote(page, 'Draft');
   if (await page.locator('.app.sidebar-open').count()) await page.locator('.scrim').click();
   await page.waitForTimeout(300);
@@ -238,91 +259,154 @@ test('a deleted note goes to the trash: restored with its ink, or deleted foreve
   const draft = (await notes(page)).find((n) => n.title === 'Draft')!;
   await expect.poll(() => strokesOf(page, draft.id)).toBe(1);
 
-  // Delete: no question, it moves to the trash and another note opens.
+  // Asks first; cancelling keeps it.
   await openSidebar(page);
+  await expect(page.locator('.trash-btn')).toHaveAttribute('aria-label', 'Trash, empty');
   await rowAction(page, noteRow(page, 'Draft'), 'Delete');
-  await expect(page.locator('dialog[open]')).toHaveCount(0);
+  await expect(dlg(page)).toContainText('Move to trash?');
+  await dlg(page).getByRole('button', { name: 'Cancel' }).click();
+  await expect(noteRow(page, 'Draft')).toHaveCount(1);
+
+  await rowAction(page, noteRow(page, 'Draft'), 'Delete');
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
   await expect(page.locator('#toast')).toContainText('Moved "Draft" to the trash');
   await expect(noteRow(page, 'Draft')).toHaveCount(0);
   await expect(page.locator('.title-input')).not.toHaveValue('Draft');
-  expect((await notes(page)).find((n) => n.id === draft.id)?.deleted_at).toBeTruthy();
+  // A move like any other: into the Trash notebook, ink kept.
+  const moved = (await notes(page)).find((n) => n.id === draft.id)!;
+  expect(moved.notebook_id).toBe('trash');
+  expect(moved.deleted_at).toBeTruthy();
   expect(await strokesOf(page, draft.id)).toBe(1);
-  // Not found by search either.
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+k' : 'Control+k');
+  await expect(page.locator('.trash-btn')).toHaveAttribute('aria-label', 'Trash, 1 item');
+  // The trash is not a notebook to pick, and search does not find what is in it.
+  if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
+  await expect(page.locator('.book-list li', { hasText: 'Trash' })).toHaveCount(0);
+  await page.keyboard.press('Control+k');
   await page.locator('.search-input').fill('Draft');
   await expect(page.locator('.search-results')).not.toContainText('Draft');
   await page.keyboard.press('Escape');
 
-  // Restore it from Settings > Data controls.
+  // The sidebar's Trash opens it; Restore asks which notebook, from the ones there are.
   const trash = await openTrash(page);
   await expect(trash.locator('li')).toHaveCount(1);
-  await expect(trash.locator('li')).toContainText('Draft');
-  await expect(trash.locator('li')).toContainText('from My Notebook · deleted for good in 30 days');
+  await expect(trash.locator('li')).toContainText('deleted for good in 30 days');
   await trash.getByRole('button', { name: 'Restore "Draft"' }).click();
+  await expect(dlg(page)).toContainText('Restore note');
+  await expect(dlg(page).locator('select option')).toHaveText(['Physics', 'My Notebook']);
+  await dlg(page).locator('select').selectOption({ label: 'My Notebook' });
+  await dlg(page).getByRole('button', { name: 'Restore' }).click();
+  await expect(page.locator('#toast')).toContainText('Restored "Draft" to "My Notebook"');
   await expect(trash).toContainText('The trash is empty');
-  await page.locator('.settings-close').click();
-  await openSidebar(page);
-  await expect(noteRow(page, 'Draft')).toHaveCount(1);
-  expect((await notes(page)).find((n) => n.id === draft.id)?.deleted_at).toBeFalsy();
+  const back = (await notes(page)).find((n) => n.id === draft.id)!;
+  expect(back.notebook_id).not.toBe('trash');
+  expect(back.deleted_at).toBeFalsy();
+  expect((await books(page)).find((b) => b.id === back.notebook_id)?.name).toBe('My Notebook');
   expect(await strokesOf(page, draft.id)).toBe(1);
 
-  // Delete again, then delete forever: that asks, and cancelling keeps it.
+  // Delete again, then delete forever: that asks too.
+  await page.locator('.settings-close').click();
+  await openSidebar(page);
+  if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
+  await page.locator('.book-list li', { hasText: 'My Notebook' }).locator('.book-open').click();
+  await openSidebar(page);
   await rowAction(page, noteRow(page, 'Draft'), 'Delete');
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
   await openTrash(page);
   await trash.getByRole('button', { name: 'Delete "Draft" forever' }).click();
-  await page.locator('dialog.modal.small').getByRole('button', { name: 'Cancel' }).click();
-  await expect(trash.locator('li')).toHaveCount(1);
-  await trash.getByRole('button', { name: 'Delete "Draft" forever' }).click();
-  await expect(page.locator('dialog.modal.small')).toContainText('cannot be undone');
-  await page.locator('dialog.modal.small').getByRole('button', { name: 'Delete forever' }).click();
+  await expect(dlg(page)).toContainText('cannot be undone');
+  await dlg(page).getByRole('button', { name: 'Delete forever' }).click();
   await expect(trash).toContainText('The trash is empty');
   expect((await notes(page)).map((n) => n.id)).not.toContain(draft.id);
   expect(await strokesOf(page, draft.id)).toBe(0);
 });
 
-test('a deleted notebook goes to the trash with its notes and comes back with them; Empty trash clears it all', async ({ page }) => {
+test('restoring into a notebook deleted elsewhere meanwhile fails and says so; the note stays in the trash', async ({ page }) => {
   await setup(page);
+  await newNotebook(page, 'Physics');
+  await newNote(page, 'Draft');
   await openSidebar(page);
-  await page.locator('.book-button').click();
-  await page.getByRole('button', { name: 'New notebook' }).click();
-  await page.locator('dialog[open] .dlg-input').fill('Old term');
-  await page.locator('dialog').getByRole('button', { name: 'Create' }).click();
-  await page.locator('.canvas-area[data-note]:not([aria-busy])').waitFor();
-  await newNote(page, 'Lecture 1');
+  await rowAction(page, noteRow(page, 'Draft'), 'Delete');
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
+  const trash = await openTrash(page);
+  await trash.getByRole('button', { name: 'Restore "Draft"' }).click();
+  await dlg(page).locator('select').selectOption({ label: 'Physics' });
+  // While the question is open, another tab deletes "Physics" for good.
+  await elsewhere(page, (books, notes) => {
+    const id = books.find((b) => b.name === 'Physics')!.id;
+    books.splice(books.findIndex((b) => b.id === id), 1);
+    for (let i = notes.length - 1; i >= 0; i--) if (notes[i].notebook_id === id) notes.splice(i, 1);
+  });
+  await dlg(page).getByRole('button', { name: 'Restore' }).click();
+  await expect(page.locator('#toast')).toContainText('Restore failed. That notebook no longer exists');
+  await expect(trash.locator('li')).toContainText('Draft');
+  expect((await notes(page)).find((n) => n.title === 'Draft')?.notebook_id).toBe('trash');
+  // The app caught up: it left "Physics", which is gone, for a notebook that is there.
+  await page.locator('.settings-close').click();
+  await expect(page.locator('.book-button')).toContainText('My Notebook');
+
+  // Same if it is moved to the trash elsewhere rather than deleted.
+  await newNotebook(page, 'Chemistry');
+  await openTrash(page);
+  await trash.getByRole('button', { name: 'Restore "Draft"' }).click();
+  await dlg(page).locator('select').selectOption({ label: 'Chemistry' });
+  await elsewhere(page, (books) => {
+    books.find((b) => b.name === 'Chemistry')!.deleted_at = new Date().toISOString();
+  });
+  await dlg(page).getByRole('button', { name: 'Restore' }).click();
+  await expect(page.locator('#toast')).toContainText('Restore failed. That notebook no longer exists');
+  expect((await notes(page)).find((n) => n.title === 'Draft')?.notebook_id).toBe('trash');
+});
+
+test('a deleted notebook goes to the trash whole: its notes are listed under it, and it comes back only whole', async ({ page }) => {
+  await setup(page);
+  await newNotebook(page, 'Old term');
+  await page.locator('.title-input').fill('Lecture 1');
+  await page.locator('.title-input').press('Enter');
+  await newNote(page, 'Lecture 2');
   await openSidebar(page);
   if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
   await page.locator('.book-list li', { hasText: 'Old term' }).locator('.more-btn').click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await expect(dlg(page)).toContainText('Move notebook to trash?');
+  await expect(dlg(page)).toContainText('its 2 notes');
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
   await expect(page.locator('.book-button')).toContainText('My Notebook');
 
   const trash = await openTrash(page);
-  await expect(trash.locator('li')).toHaveCount(1);
-  await expect(trash.locator('li')).toContainText('Old term');
-  await expect(trash.locator('li')).toContainText('2 notes');
+  const row = trash.locator('li.trash-book');
+  await expect(row).toContainText('Old term');
+  await expect(row).toContainText('2 notes');
+  // Its notes are shown under it, with nothing to do to them one by one.
+  await expect(row.locator('.trash-inside li')).toHaveText(['Lecture 2', 'Lecture 1']);
+  await expect(row.locator('.trash-inside button')).toHaveCount(0);
+  await expect(trash.getByRole('button', { name: /Restore "Lecture/ })).toHaveCount(0);
+
   await trash.getByRole('button', { name: 'Restore "Old term"' }).click();
+  await expect(page.locator('#toast')).toContainText('Restored "Old term"');
   await expect(trash).toContainText('The trash is empty');
   await page.locator('.settings-close').click();
   await openSidebar(page);
   if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
   await page.locator('.book-list li', { hasText: 'Old term' }).locator('.book-open').click();
-  await expect(page.locator('.book-button')).toContainText('Old term');
-  await expect(noteRow(page, 'Lecture 1')).toHaveCount(1);
-
-  // Delete the notebook and a note from the other one, then empty the trash.
-  await newNote(page, 'Scrap');
   await openSidebar(page);
-  await rowAction(page, noteRow(page, 'Scrap'), 'Delete');
+  await expect(noteRow(page, 'Lecture 1')).toHaveCount(1);
+  await expect(noteRow(page, 'Lecture 2')).toHaveCount(1);
+
+  // A note in the trash and a notebook in the trash: Empty trash deletes both for good.
+  await rowAction(page, noteRow(page, 'Lecture 2'), 'Delete');
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
   if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
   await page.locator('.book-list li', { hasText: 'Old term' }).locator('.more-btn').click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
   await openTrash(page);
-  await expect(trash.locator('li')).toHaveCount(1); // the note deleted inside the notebook goes with it
+  await expect(trash.locator('.archived-items > li')).toHaveCount(2);
   await trash.getByRole('button', { name: 'Empty trash' }).click();
-  await page.locator('dialog.modal.small').getByRole('button', { name: 'Empty trash' }).click();
+  await dlg(page).getByRole('button', { name: 'Empty trash' }).click();
   await expect(trash).toContainText('The trash is empty');
-  expect((await books(page)).map((b) => b.name)).toEqual(['My Notebook']);
+  expect((await books(page)).map((b) => b.name).sort()).toEqual(['My Notebook', 'Trash']);
   expect((await notes(page)).map((n) => n.title)).not.toContain('Lecture 1');
-  expect((await notes(page)).map((n) => n.title)).not.toContain('Scrap');
+  expect((await notes(page)).map((n) => n.title)).not.toContain('Lecture 2');
 });
 
 test('what has been in the trash for 30 days is deleted for good when the app starts', async ({ page }) => {
@@ -330,13 +414,13 @@ test('what has been in the trash for 30 days is deleted for good when the app st
   await newNote(page, 'Ancient');
   await newNote(page, 'Recent');
   await openSidebar(page);
-  await rowAction(page, noteRow(page, 'Ancient'), 'Delete');
-  await rowAction(page, noteRow(page, 'Recent'), 'Delete');
-  await expect.poll(async () => (await notes(page)).filter((n) => n.deleted_at).length).toBe(2);
-  await page.evaluate(() => {
-    const all = JSON.parse(localStorage.getItem('lb-local-notes')!);
-    for (const n of all) if (n.title === 'Ancient') n.deleted_at = new Date(Date.now() - 31 * 86_400_000).toISOString();
-    localStorage.setItem('lb-local-notes', JSON.stringify(all));
+  for (const t of ['Ancient', 'Recent']) {
+    await rowAction(page, noteRow(page, t), 'Delete');
+    await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
+  }
+  await expect.poll(async () => (await notes(page)).filter((n) => n.notebook_id === 'trash').length).toBe(2);
+  await elsewhere(page, (_books, notes) => {
+    notes.find((n) => n.title === 'Ancient')!.deleted_at = new Date(Date.now() - 31 * 86_400_000).toISOString();
   });
   await page.reload();
   await attachBoard(page);
@@ -347,29 +431,107 @@ test('what has been in the trash for 30 days is deleted for good when the app st
   await expect(trash.locator('li')).toContainText('Recent');
 });
 
-test('signed in: a deleted note is kept in the account, in the trash; without the database update, deleting asks and is permanent', async ({ page }) => {
+test('actions on a note or notebook changed in another tab fail with a clear message, and the app catches up', async ({ page }) => {
+  await setup(page);
+  await newNotebook(page, 'Physics');
+  await newNote(page, 'Waves');
+  await newNote(page, 'Optics');
+
+  // Renaming a note another tab deleted.
+  await elsewhere(page, (_books, notes) => {
+    notes.splice(notes.findIndex((n) => n.title === 'Waves'), 1);
+  });
+  await openSidebar(page);
+  await rowAction(page, noteRow(page, 'Waves'), 'Rename');
+  await dlg(page).locator('.dlg-input').fill('Sound');
+  await dlg(page).getByRole('button', { name: 'Rename' }).click();
+  await expect(page.locator('#toast')).toContainText('Rename failed. That note no longer exists');
+  await expect(noteRow(page, 'Waves')).toHaveCount(0); // the list caught up
+  await expect(noteRow(page, 'Sound')).toHaveCount(0);
+
+  // Moving a note into a notebook another tab moved to the trash.
+  await newNotebook(page, 'Chemistry');
+  await openSidebar(page);
+  if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
+  await page.locator('.book-list li', { hasText: 'Physics' }).locator('.book-open').click();
+  await openSidebar(page);
+  await rowAction(page, noteRow(page, 'Optics'), 'Move to notebook');
+  await elsewhere(page, (books) => {
+    books.find((b) => b.name === 'Chemistry')!.deleted_at = new Date().toISOString();
+  });
+  await dlg(page).locator('select').selectOption({ label: 'Chemistry' });
+  await dlg(page).getByRole('button', { name: 'Move' }).click();
+  await expect(page.locator('#toast')).toContainText('Move failed. That notebook no longer exists');
+  expect((await notes(page)).find((n) => n.title === 'Optics')?.notebook_id).toBe((await books(page)).find((b) => b.name === 'Physics')!.id);
+
+  // Making a note in the open notebook, which another tab deleted: the app moves to one that exists.
+  await elsewhere(page, (books, notes) => {
+    const id = books.find((b) => b.name === 'Physics')!.id;
+    books.splice(books.findIndex((b) => b.id === id), 1);
+    for (let i = notes.length - 1; i >= 0; i--) if (notes[i].notebook_id === id) notes.splice(i, 1);
+  });
+  await openSidebar(page);
+  await page.getByRole('button', { name: 'New note' }).click();
+  await dlg(page).getByRole('button', { name: 'Create' }).click();
+  await expect(page.locator('#toast')).toContainText('That notebook no longer exists');
+  await expect(page.locator('.book-button')).toContainText('My Notebook');
+});
+
+test('coming back to the tab picks up notes and notebooks changed elsewhere', async ({ page }) => {
+  await setup(page);
+  await newNote(page, 'Kept');
+  await newNote(page, 'Removed elsewhere');
+  await elsewhere(page, (books, notes) => {
+    notes.find((n) => n.title === 'Removed elsewhere')!.notebook_id = 'trash';
+    const now = new Date().toISOString();
+    books.push({ id: 'b-elsewhere', name: 'Made elsewhere', created_at: now, updated_at: now } as never);
+  });
+  await page.waitForTimeout(5100);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await openSidebar(page);
+  await expect(noteRow(page, 'Removed elsewhere')).toHaveCount(0);
+  await expect(page.locator('.title-input')).not.toHaveValue('Removed elsewhere');
+  await expect(page.locator('.trash-btn')).toHaveAttribute('aria-label', 'Trash, 1 item');
+  if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
+  await expect(page.locator('.book-list li', { hasText: 'Made elsewhere' })).toHaveCount(1);
+});
+
+test('signed in: the trash is a notebook in the account; another device deleting the target notebook makes a restore fail; an older database deletes for good', async ({ page }) => {
   const db = await mockSupabase(page);
   await page.goto('/login');
   await page.getByLabel('Email', { exact: true }).fill('friend@example.com');
   await page.getByLabel('Password', { exact: true }).fill(db.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await attachBoard(page);
+  const trashId = USER_ID.slice(0, 14) + '8' + USER_ID.slice(15);
+  await expect.poll(() => db.notebooks.find((b) => b.id === trashId)?.name).toBe('Trash');
+  await newNotebook(page, 'Physics');
   await newNote(page, 'Cloud draft');
-  await expect.poll(() => db.notes.length).toBe(2);
   await openSidebar(page);
   await rowAction(page, noteRow(page, 'Cloud draft'), 'Delete');
-  await expect(page.locator('#toast')).toContainText('to the trash');
-  await expect.poll(() => db.notes.find((n) => n.title === 'Cloud draft')?.deleted_at).toBeTruthy();
+  await dlg(page).getByRole('button', { name: 'Move to trash' }).click();
+  await expect.poll(() => db.notes.find((n) => n.title === 'Cloud draft')?.notebook_id).toBe(trashId);
 
-  // After a reload it is still in the trash, not in the sidebar.
+  // After a reload it is still in the trash.
   await page.reload();
   await attachBoard(page);
-  await openSidebar(page);
-  await expect(noteRow(page, 'Cloud draft')).toHaveCount(0);
   const trash = await openTrash(page);
   await expect(trash.locator('li')).toContainText('Cloud draft');
   await trash.getByRole('button', { name: 'Restore "Cloud draft"' }).click();
-  await expect.poll(() => db.notes.find((n) => n.title === 'Cloud draft')?.deleted_at ?? null).toBeNull();
+  await dlg(page).locator('select').selectOption({ label: 'Physics' });
+  // Another device moves "Physics" to the trash meanwhile: the database refuses the move.
+  db.notebooks.find((b) => b.name === 'Physics')!.deleted_at = new Date().toISOString();
+  await dlg(page).getByRole('button', { name: 'Restore' }).click();
+  await expect(page.locator('#toast')).toContainText('Restore failed. That notebook no longer exists');
+  expect(db.notes.find((n) => n.title === 'Cloud draft')?.notebook_id).toBe(trashId);
+  // Into one that is there, it works.
+  await trash.getByRole('button', { name: 'Restore "Cloud draft"' }).click();
+  await expect(dlg(page).locator('select option')).toHaveText(['My Notebook']);
+  await dlg(page).getByRole('button', { name: 'Restore' }).click();
+  await expect.poll(() => db.notes.find((n) => n.title === 'Cloud draft')?.notebook_id).toBe(USER_ID);
   await page.locator('.settings-close').click();
 
   // A database without the trash columns: deleting asks, then deletes for good.
@@ -377,8 +539,9 @@ test('signed in: a deleted note is kept in the account, in the trash; without th
   await page.reload();
   await attachBoard(page);
   await openSidebar(page);
+  await expect(page.locator('.trash-btn')).toBeHidden();
   await rowAction(page, noteRow(page, 'Cloud draft'), 'Delete');
-  await expect(page.locator('dialog[open] p')).toContainText('deleted permanently');
-  await page.locator('dialog[open]').getByRole('button', { name: 'Delete' }).click();
+  await expect(dlg(page).locator('p')).toContainText('deleted permanently');
+  await dlg(page).getByRole('button', { name: 'Delete' }).click();
   await expect.poll(() => db.notes.map((n) => n.title)).not.toContain('Cloud draft');
 });

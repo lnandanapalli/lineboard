@@ -386,6 +386,15 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       const table = path.endsWith('notebooks') ? 'notebooks' : 'notes';
       const rows = () => db[table];
       const set = (v: Row[]) => (db[table] = v);
+      // Like the foreign key and the notes_notebook_live trigger (supabase/schema.sql): a note's
+      // notebook must exist and not be in the trash.
+      const badNotebook = (row: Row, before?: Row) => {
+        if (table !== 'notes' || row.notebook_id == null || (before && before.notebook_id === row.notebook_id)) return null;
+        const b = db.notebooks.find((x) => x.id === row.notebook_id);
+        if (!b) return 'insert or update on table "notes" violates foreign key constraint "notes_notebook_id_fkey"';
+        if (b.deleted_at) return 'Lineboard: that notebook is in the trash';
+        return null;
+      };
       if (method === 'GET') {
         const sorted = [...rows()].sort((a, b) =>
           table === 'notebooks' ? String(a.created_at).localeCompare(String(b.created_at)) : String(b.updated_at).localeCompare(String(a.updated_at)),
@@ -403,6 +412,8 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
           }
           const row = { id: r.id ?? crypto.randomUUID(), created_at: now(), updated_at: now(), ...(table === 'notes' ? { notebook_id: null } : {}), ...existing, ...r };
           if (!allowed(table, row)) return denied(route);
+          const fk = badNotebook(row, existing);
+          if (fk) return json(route, 409, { code: '23503', message: fk });
           set(rows().filter((b) => b.id !== row.id).concat(row));
           saved.push(row);
         }
@@ -412,7 +423,14 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         const patch = body();
         const next = rows().map((b) => (match(b) ? { ...b, ...patch } : b));
         if (next.some((b, i) => b !== rows()[i] && !allowed(table, b))) return denied(route);
+        for (const [i, b] of next.entries()) {
+          const fk = b !== rows()[i] ? badNotebook(b, rows()[i]) : null;
+          if (fk) return json(route, 409, { code: '23503', message: fk });
+        }
+        const changed = next.filter((b, i) => b !== rows()[i]);
         set(next);
+        // With .select(): the rows it changed (none when the row is gone).
+        if (prefer.includes('return=representation')) return json(route, 200, wantsObject ? (changed[0] ?? null) : changed);
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {
@@ -430,6 +448,8 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       if (method === 'POST') {
         const incoming = [body()].flat() as Row[];
         if (incoming.some((r) => !allowed('strokes', r))) return denied(route);
+        if (incoming.some((r) => !db.notes.some((n) => n.id === r.note_id)))
+          return json(route, 409, { code: '23503', message: 'insert or update on table "strokes" violates foreign key constraint "strokes_note_id_fkey"' });
         for (const r of incoming) db.strokes = db.strokes.filter((s) => s.id !== r.id).concat(r);
         // touch_note trigger
         for (const r of incoming) db.notes = db.notes.map((n) => (n.id === r.note_id ? { ...n, updated_at: now() } : n));

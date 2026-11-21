@@ -4,11 +4,11 @@ import { SettingsPanel } from './settings';
 import type { AccountSecurity } from './account';
 import { icons } from './icons';
 import { logo } from './brand';
-import type { Store } from './store/store';
+import { GoneError, type Store } from './store/store';
 import { SyncQueue, type SyncState } from './sync';
 import { LINE_STYLE_NAMES, LINE_STYLES, LINE_WIDTHS, SHAPE_ICONS, SHAPE_NAMES, SHAPES } from './shapes';
 import { IMAGE_TYPES, prepareImage } from './images';
-import { withDefaults, type AppUser, type BoardMode, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool, TRASH_DAYS } from './types';
+import { withDefaults, type AppUser, type BoardMode, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke, type Tool, DEFAULT_NOTEBOOK_NAME, TRASH_DAYS } from './types';
 import { actionMenu, closeOpenMenu, dropdown, popover, type Dropdown } from './menu';
 import { isApple, withShortcut } from './keys';
 import { appRect, appViewport, attachOrientation, clientToApp, detachOrientation, orientation } from './orientation';
@@ -73,7 +73,14 @@ export class App {
   /** Notes and notebooks in use (archived ones included); what is in the trash is kept apart. */
   private notes: NoteMeta[] = [];
   private notebooks: Notebook[] = [];
-  /** The trash: notes deleted on their own, and deleted notebooks (whose notes are in trashedNotes too). */
+  /**
+   * The trash is a notebook of its own (trashBook, hidden from the notebook list). trashedNotes holds
+   * the notes in it and the notes of notebooks in the trash (trashedBooks), which go and come back
+   * only with their notebook.
+   */
+  private trashBook: Notebook | null = null;
+  /** False with a cloud database that predates the trash: deleting is then permanent. */
+  private trashOn = false;
   private trashedNotes: NoteMeta[] = [];
   private trashedBooks: Notebook[] = [];
   private currentBook: Notebook | null = null;
@@ -108,6 +115,8 @@ export class App {
   private rotateBtn!: HTMLButtonElement;
   private appEl!: HTMLElement;
   private settingsPanel!: SettingsPanel;
+  /** At the bottom of the sidebar: opens the trash (Settings > Data controls). */
+  private trashBtn!: HTMLButtonElement;
   private hint!: HTMLElement;
   private toolbarEl!: HTMLElement;
   private lockedHintShown = false;
@@ -134,7 +143,13 @@ export class App {
       if (id === this.current?.id) return this.loadedNote === id ? this.board.allStrokes() : null;
       return this.queue.overlay(id, await this.store.loadStrokes(id));
     });
-    this.queue.onDropped = (m) => toast('Not saved: ' + m, 'error');
+    this.queue.onDropped = (m, e) => {
+      // Ink for a note deleted elsewhere has nowhere to go: say what happened and catch up.
+      if (e instanceof GoneError) {
+        toast('Not saved: this note was deleted on another device.', 'error');
+        void this.resync();
+      } else toast('Not saved: ' + m, 'error');
+    };
     this.queue.onStorageFull = () => toast('This browser’s storage is full, so changes waiting to be saved are kept only until you close the page. Reconnect, or free some space, to keep them.', 'error');
     this.queue.onState = (s) => {
       this.syncState = s;
@@ -163,6 +178,18 @@ export class App {
         this.board.finishText();
         this.saveSettingsDebounced.flush();
         if (this.current && this.loadedNote === this.current.id) this.history.leave(this.current.id, this.board.allStrokes());
+      },
+      { signal: this.abort.signal },
+    );
+    // Coming back to the tab: catch up with what other devices and tabs changed meanwhile (notes and
+    // notebooks made, moved, renamed or deleted), at most every few seconds.
+    let lastSync = Date.now();
+    document.addEventListener(
+      'visibilitychange',
+      () => {
+        if (document.visibilityState !== 'visible' || Date.now() - lastSync < 5000) return;
+        lastSync = Date.now();
+        void this.ready.then(() => this.resync());
       },
       { signal: this.abort.signal },
     );
@@ -224,21 +251,29 @@ export class App {
 
   /** Split what the store lists into what is in use and what is in the trash. */
   private setLibrary(books: Notebook[], notes: NoteMeta[]) {
-    const binned = new Set(books.filter((b) => b.deleted_at).map((b) => b.id));
-    const inTrash = (n: NoteMeta) => !!n.deleted_at || binned.has(n.notebook_id ?? '');
-    this.notebooks = books.filter((b) => !b.deleted_at);
-    this.trashedBooks = books.filter((b) => b.deleted_at);
+    const trashId = this.store.trashId;
+    this.trashBook = books.find((b) => b.id === trashId) ?? null;
+    const binned = new Set(books.filter((b) => b.deleted_at && b.id !== trashId).map((b) => b.id));
+    const inTrash = (n: NoteMeta) => n.notebook_id === trashId || binned.has(n.notebook_id ?? '');
+    this.notebooks = books.filter((b) => b.id !== trashId && !binned.has(b.id));
+    this.trashedBooks = books.filter((b) => binned.has(b.id));
     this.notes = notes.filter((n) => !inTrash(n));
     this.trashedNotes = notes.filter(inTrash);
   }
 
-  /** Load notebooks and notes; create the default notebook and file older, notebook-less notes into it. */
-  private async loadLibrary() {
+  /**
+   * Load notebooks and notes; make sure there is a notebook to write in and a trash, and file older,
+   * notebook-less notes into the default notebook. Safe to run again at any time (see resync).
+   */
+  private async loadLibrary(quiet = false): Promise<boolean> {
     try {
+      const trashId = this.store.trashId;
       let books = await this.store.listNotebooks();
-      if (!books.length) books = [await this.store.ensureDefaultNotebook()];
+      if (!books.some((b) => b.id !== trashId)) books = [...books, await this.store.ensureDefaultNotebook()];
       // Every notebook in the trash (on another device): there must be somewhere to write.
-      if (!books.some((b) => !b.deleted_at)) books = [...books, await this.store.createNotebook('My Notebook')];
+      if (!books.some((b) => b.id !== trashId && !b.deleted_at)) books = [...books, await this.store.createNotebook(DEFAULT_NOTEBOOK_NAME)];
+      this.trashOn = await this.trashWorks();
+      if (!books.some((b) => b.id === trashId) && this.trashOn) books = [...books, await this.store.ensureTrash()];
       const notes = await this.store.listNotes();
       this.setLibrary(books, notes);
       // Every notebook archived (on another device): bring one back, there must be somewhere to write.
@@ -256,9 +291,54 @@ export class App {
         );
         for (const n of orphans) n.notebook_id = home.id;
       }
+      return true;
     } catch (e) {
-      toast('Could not load your notebooks: ' + (e as Error).message, 'error');
+      if (!quiet) toast('Could not load your notebooks: ' + (e as Error).message, 'error');
+      return false;
     }
+  }
+
+  /**
+   * Catch up with changes made elsewhere (another device, another tab): reload the lists and, if the
+   * open notebook or note is no longer there, move to one that is.
+   */
+  private async resync() {
+    if (this.resyncing) return this.resyncing;
+    this.resyncing = (async () => {
+      if (!(await this.loadLibrary(true))) return; // offline: keep what is on screen
+      const book = this.notebooks.find((b) => b.id === this.currentBook?.id && !b.archived_at);
+      const note = this.notes.find((n) => n.id === this.current?.id && n.notebook_id === book?.id);
+      if (!book) {
+        this.current = null;
+        await this.switchNotebook(this.activeBooks()[0]);
+      } else {
+        this.currentBook = book;
+        if (note) {
+          this.current = note;
+          if (document.activeElement !== this.titleInput) this.titleInput.value = note.title;
+        } else if (this.current) {
+          this.current = null;
+          const next = this.visibleNotes()[0];
+          if (next) await this.openNote(next);
+          else await this.newNote();
+        }
+      }
+      this.renderNoteList();
+      this.settingsPanel?.refreshLists();
+    })().finally(() => (this.resyncing = null));
+    return this.resyncing;
+  }
+  private resyncing: Promise<void> | null = null;
+
+  /**
+   * An action failed because its note or notebook is gone (deleted elsewhere): say so and catch up.
+   * True if that was the reason; otherwise the caller reports the error itself.
+   */
+  private async gone(e: unknown, action: string) {
+    if (!(e instanceof GoneError)) return false;
+    toast(`${action} failed. ${e.message}`, 'error');
+    await this.resync();
+    return true;
   }
 
   // ----------------------------- layout -----------------------------
@@ -402,6 +482,7 @@ export class App {
       h(
         'div',
         { class: 'sidebar-foot' },
+        (this.trashBtn = h('button', { class: 'trash-btn', type: 'button' }) as HTMLButtonElement),
         // Name and picture, not the email: the sidebar is on screen in recordings and screen shares.
         (this.accountChip = h('button', { class: 'account-chip', type: 'button' }) as HTMLButtonElement),
         h(
@@ -418,6 +499,8 @@ export class App {
     );
     // Your name and picture open Settings (profile, data controls and sign-out are all there).
     this.accountChip.addEventListener('click', () => this.settingsPanel.open('account'));
+    this.trashBtn.addEventListener('click', () => this.settingsPanel.openTrash());
+    this.renderTrashButton();
     this.renderAccountChip();
     this.sidebar.append(this.resizeHandle());
     attachNameTips(this.sidebar, '.note-title, .book-title, .book-name');
@@ -1124,6 +1207,7 @@ export class App {
   }
 
   private renderNoteList() {
+    this.renderTrashButton();
     const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
     const books = new Map(this.notebooks.map((b) => [b.id, b.name]));
     const row = (n: NoteMeta, starredList: boolean) => {
@@ -1271,7 +1355,7 @@ export class App {
     } catch (e) {
       Object.assign(item, before);
       this.renderNoteList();
-      toast((e as Error).message, 'error');
+      if (!(await this.gone(e, 'That change'))) toast((e as Error).message, 'error');
       return false;
     }
   }
@@ -1357,7 +1441,7 @@ export class App {
       this.notes.unshift(n);
       await this.openNote(n);
     } catch (e) {
-      toast('Could not create note: ' + (e as Error).message, 'error');
+      if (!(await this.gone(e, 'Creating the note'))) toast('Could not create note: ' + (e as Error).message, 'error');
     }
   }
 
@@ -1384,7 +1468,7 @@ export class App {
       n.title = old;
       if (n.id === this.current?.id) this.titleInput.value = old;
       this.renderNoteList();
-      toast('Rename failed: ' + (e as Error).message, 'error');
+      if (!(await this.gone(e, 'Rename'))) toast('Rename failed: ' + (e as Error).message, 'error');
     }
   }
 
@@ -1395,19 +1479,32 @@ export class App {
     return (await this.store.supportsTrash?.().catch(() => false)) ?? true;
   }
 
-  /** Delete a note: into the trash, where it can be restored for TRASH_DAYS days. */
+  /** Delete a note, after asking: it moves to the trash notebook, like a move to any notebook. */
   private async deleteNote(n: NoteMeta) {
-    if (!(await this.trashWorks())) {
+    if (!this.trashOn || !this.trashBook) {
       const ok = await dialog({ title: 'Delete note?', message: `"${n.title}" will be deleted permanently.`, ok: 'Delete', danger: true });
       if (ok) await this.eraseNote(n).catch((e: Error) => toast('Delete failed: ' + e.message, 'error'));
       return;
     }
-    if (!(await this.setFlags('note', n, { deleted_at: new Date().toISOString() }))) return;
+    const ok = await dialog({
+      title: 'Move to trash?',
+      message: `"${n.title || 'Untitled'}" moves to the trash. You can take it out again for ${TRASH_DAYS} days; after that it is deleted for good.`,
+      ok: 'Move to trash',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await this.store.moveNotes([n.id], this.trashBook.id);
+    } catch (e) {
+      if (!(await this.gone(e, 'Delete'))) toast('Delete failed: ' + (e as Error).message, 'error');
+      return;
+    }
+    Object.assign(n, { notebook_id: this.trashBook.id, deleted_at: new Date().toISOString(), starred: false, archived_at: null });
     this.notes = this.notes.filter((x) => x.id !== n.id);
     this.trashedNotes.push(n);
     await this.leaveIfOpen(n.id);
     this.renderNoteList();
-    toast(`Moved "${n.title || 'Untitled'}" to the trash. Restore it from Settings > Data controls.`);
+    toast(`Moved "${n.title || 'Untitled'}" to the trash.`);
   }
 
   /** The note on screen was deleted or put away: open another one. */
@@ -1432,6 +1529,7 @@ export class App {
 
   /** Delete a notebook and every note in it for good. */
   private async eraseNotebook(b: Notebook) {
+    if (b.id === this.store.trashId) return; // the trash itself stays
     const inside = new Set([...this.notes, ...this.trashedNotes].filter((n) => n.notebook_id === b.id).map((n) => n.id));
     for (const id of inside) this.queue.dropNote(id);
     await this.store.deleteNotebook(b.id);
@@ -1440,48 +1538,98 @@ export class App {
     this.trashedNotes = this.trashedNotes.filter((n) => !inside.has(n.id));
     this.notebooks = this.notebooks.filter((x) => x.id !== b.id);
     this.trashedBooks = this.trashedBooks.filter((x) => x.id !== b.id);
-    if (!this.activeBooks().length) this.notebooks = [...this.notebooks, await this.store.createNotebook('My Notebook')];
+    if (!this.activeBooks().length) this.notebooks = [...this.notebooks, await this.store.createNotebook(DEFAULT_NOTEBOOK_NAME)];
     if (this.currentBook?.id === b.id) {
       this.current = null;
       await this.switchNotebook(this.activeBooks()[0]);
     } else this.renderNoteList();
   }
 
-  /** What the trash holds: deleted notebooks (with their notes), and notes deleted on their own. */
+  /** Notes in the trash notebook itself (not those inside a notebook in the trash). */
+  private looseTrash() {
+    return this.trashedNotes.filter((n) => n.notebook_id === this.store.trashId);
+  }
+
+  /** What the trash holds: notes moved there, and notebooks moved there whole (with their notes). */
   private trashContents() {
-    const binned = new Set(this.trashedBooks.map((b) => b.id));
-    const bookName = (id: string | null) => [...this.notebooks, ...this.trashedBooks].find((b) => b.id === id)?.name ?? '';
+    const since = (x: { deleted_at?: string | null; updated_at: string }) => x.deleted_at ?? x.updated_at;
     return {
-      notebooks: this.trashedBooks.map((b) => ({ id: b.id, name: b.name, notes: this.trashedNotes.filter((n) => n.notebook_id === b.id).length, deleted_at: b.deleted_at! })),
-      notes: this.trashedNotes.filter((n) => n.deleted_at && !binned.has(n.notebook_id ?? '')).map((n) => ({ id: n.id, title: n.title, notebook: bookName(n.notebook_id), deleted_at: n.deleted_at! })),
+      notebooks: this.trashedBooks.map((b) => ({ id: b.id, name: b.name, deleted_at: since(b), notes: this.trashedNotes.filter((n) => n.notebook_id === b.id).map((n) => n.title || 'Untitled') })),
+      notes: this.looseTrash().map((n) => ({ id: n.id, title: n.title, deleted_at: since(n) })),
     };
   }
 
-  /** Take a note or notebook out of the trash, back where it was. */
-  private async restoreTrashed(kind: 'note' | 'notebook', id: string) {
-    if (kind === 'note') {
-      const n = this.trashedNotes.find((x) => x.id === id);
-      if (!n || !(await this.setFlags('note', n, { deleted_at: null }))) return;
-      this.trashedNotes = this.trashedNotes.filter((x) => x.id !== id);
-      this.notes.push(n);
-      this.renderNoteList();
-      return toast(`Restored "${n.title || 'Untitled'}".`);
+  /** How many things are in the trash (notes on their own, and notebooks), for the sidebar. */
+  private trashCount() {
+    return this.looseTrash().length + this.trashedBooks.length;
+  }
+
+  private renderTrashButton() {
+    if (!this.trashBtn) return;
+    const n = this.trashCount();
+    this.trashBtn.hidden = !this.trashOn || !this.trashBook;
+    this.trashBtn.innerHTML = `${icons.trash}<span>Trash</span>`;
+    this.trashBtn.append(h('span', { class: 'trash-count' }, n ? String(n) : ''));
+    this.trashBtn.setAttribute('aria-label', n ? `Trash, ${n} item${n === 1 ? '' : 's'}` : 'Trash, empty');
+  }
+
+  /**
+   * Take a note out of the trash: it moves into a notebook picked from the ones there are now.
+   * The list is fetched fresh, and if the notebook is deleted meanwhile (elsewhere) the move fails
+   * and says so.
+   */
+  private async restoreNote(id: string) {
+    await this.resync();
+    const n = this.looseTrash().find((x) => x.id === id);
+    if (!n) return toast('That note is no longer in the trash. It may have been restored or deleted on another device.', 'error');
+    const books = this.activeBooks();
+    const first = books.find((b) => b.id === this.currentBook?.id);
+    const ordered = first ? [first, ...books.filter((b) => b !== first)] : books;
+    const target = await dialog({
+      title: 'Restore note',
+      message: `Move "${n.title || 'Untitled'}" out of the trash into:`,
+      choices: ordered.map((b) => ({ value: b.id, label: b.name })),
+      ok: 'Restore',
+    });
+    if (target === null) return;
+    const book = this.notebooks.find((b) => b.id === target);
+    if (!book) return toast('Restore failed. That notebook no longer exists.', 'error');
+    try {
+      await this.store.moveNotes([n.id], book.id);
+    } catch (e) {
+      if (!(await this.gone(e, 'Restore'))) toast('Restore failed: ' + (e as Error).message, 'error');
+      return;
     }
+    Object.assign(n, { notebook_id: book.id, deleted_at: null });
+    this.trashedNotes = this.trashedNotes.filter((x) => x.id !== n.id);
+    this.notes.push(n);
+    this.renderNoteList();
+    toast(`Restored "${n.title || 'Untitled'}" to "${book.name}".`);
+  }
+
+  /** Take a notebook out of the trash, whole: it comes back as it was, with its notes. */
+  private async restoreNotebook(id: string) {
     const b = this.trashedBooks.find((x) => x.id === id);
-    if (!b || !(await this.setFlags('notebook', b, { deleted_at: null }))) return;
+    if (!b) return;
+    try {
+      await this.store.setNotebookFlags(b.id, { deleted_at: null });
+    } catch (e) {
+      if (!(await this.gone(e, 'Restore'))) toast('Restore failed: ' + (e as Error).message, 'error');
+      return;
+    }
+    b.deleted_at = null;
     this.trashedBooks = this.trashedBooks.filter((x) => x.id !== id);
     this.notebooks.push(b);
-    // Its notes come back with it, except ones that were deleted on their own before.
-    const back = this.trashedNotes.filter((n) => n.notebook_id === id && !n.deleted_at);
-    this.trashedNotes = this.trashedNotes.filter((n) => !back.includes(n));
+    const back = this.trashedNotes.filter((n) => n.notebook_id === id);
+    this.trashedNotes = this.trashedNotes.filter((n) => n.notebook_id !== id);
     this.notes.push(...back);
     this.renderNoteList();
     toast(`Restored "${b.name}".`);
   }
 
-  /** Delete one item in the trash for good, after asking. */
+  /** Delete one thing in the trash for good, after asking: a note in it, or a notebook in it, whole. */
   private async deleteTrashed(kind: 'note' | 'notebook', id: string) {
-    const item = kind === 'note' ? this.trashedNotes.find((x) => x.id === id) : this.trashedBooks.find((x) => x.id === id);
+    const item = kind === 'note' ? this.looseTrash().find((x) => x.id === id) : this.trashedBooks.find((x) => x.id === id);
     if (!item) return;
     const name = 'title' in item ? item.title || 'Untitled' : item.name;
     const ok = await dialog({ title: 'Delete forever?', message: `"${name}" will be deleted permanently${kind === 'notebook' ? ', with its notes' : ''}. This cannot be undone.`, ok: 'Delete forever', danger: true });
@@ -1496,13 +1644,12 @@ export class App {
 
   /** Delete everything in the trash for good, after asking. */
   private async emptyTrash() {
-    const { notebooks, notes } = this.trashContents();
-    if (!notebooks.length && !notes.length) return;
+    if (!this.trashCount()) return;
     const ok = await dialog({ title: 'Empty the trash?', message: 'Everything in the trash will be deleted permanently. This cannot be undone.', ok: 'Empty trash', danger: true });
     if (!ok) return;
     try {
       for (const b of [...this.trashedBooks]) await this.eraseNotebook(b);
-      for (const n of [...this.trashedNotes]) await this.eraseNote(n);
+      for (const n of this.looseTrash()) await this.eraseNote(n);
     } catch (e) {
       toast('Could not empty the trash: ' + (e as Error).message, 'error');
     }
@@ -1514,7 +1661,7 @@ export class App {
     const old = (x: { deleted_at?: string | null }) => !!x.deleted_at && Date.parse(x.deleted_at) < cutoff;
     try {
       for (const b of this.trashedBooks.filter(old)) await this.eraseNotebook(b);
-      for (const n of this.trashedNotes.filter(old)) await this.eraseNote(n);
+      for (const n of this.looseTrash().filter(old)) await this.eraseNote(n);
     } catch (e) {
       console.warn('Trash not emptied', e);
     }
@@ -1592,30 +1739,43 @@ export class App {
     } catch (e) {
       b.name = old;
       this.renderNotebooks();
-      toast('Rename failed: ' + (e as Error).message, 'error');
+      if (!(await this.gone(e, 'Rename'))) toast('Rename failed: ' + (e as Error).message, 'error');
     }
   }
 
-  /** Delete a notebook: into the trash with its notes, where it can be restored for TRASH_DAYS days. */
+  /** Delete a notebook, after asking: it moves to the trash whole, with its notes, and comes back whole. */
   private async deleteNotebook(b: Notebook) {
     const inside = this.notes.filter((n) => n.notebook_id === b.id);
-    if (!(await this.trashWorks())) {
-      const what = inside.length === 1 ? 'its 1 note' : `its ${inside.length} notes`;
+    const what = inside.length === 1 ? 'its 1 note' : `its ${inside.length} notes`;
+    if (!this.trashOn || !this.trashBook) {
       const ok = await dialog({ title: 'Delete notebook?', message: `"${b.name}" and ${what} will be deleted permanently.`, ok: 'Delete notebook', danger: true });
       if (ok) await this.eraseNotebook(b).catch((e: Error) => toast('Delete failed: ' + e.message, 'error'));
       return;
     }
-    if (!(await this.setFlags('notebook', b, { deleted_at: new Date().toISOString() }))) return;
+    const ok = await dialog({
+      title: 'Move notebook to trash?',
+      message: `"${b.name}" and ${what} move to the trash. The notebook can be restored whole for ${TRASH_DAYS} days; after that it is deleted for good.`,
+      ok: 'Move to trash',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await this.store.setNotebookFlags(b.id, { deleted_at: new Date().toISOString() });
+    } catch (e) {
+      if (!(await this.gone(e, 'Delete'))) toast('Delete failed: ' + (e as Error).message, 'error');
+      return;
+    }
+    b.deleted_at = new Date().toISOString();
     this.notebooks = this.notebooks.filter((x) => x.id !== b.id);
     this.trashedBooks.push(b);
-    this.notes = this.notes.filter((n) => !inside.includes(n));
+    this.notes = this.notes.filter((n) => n.notebook_id !== b.id);
     this.trashedNotes.push(...inside);
-    if (!this.activeBooks().length) this.notebooks = [...this.notebooks, await this.store.createNotebook('My Notebook')];
+    if (!this.activeBooks().length) this.notebooks = [...this.notebooks, await this.store.createNotebook(DEFAULT_NOTEBOOK_NAME)];
     if (this.currentBook?.id === b.id) {
       this.current = null;
       await this.switchNotebook(this.activeBooks()[0]);
     } else this.renderNoteList();
-    toast(`Moved "${b.name}" and its notes to the trash. Restore it from Settings > Data controls.`);
+    toast(`Moved "${b.name}" and its notes to the trash.`);
   }
 
   private async moveNote(n: NoteMeta) {
@@ -1643,7 +1803,7 @@ export class App {
       toast(`Moved to "${book.name}".`);
     } catch (e) {
       n.notebook_id = from;
-      toast('Move failed: ' + (e as Error).message, 'error');
+      if (!(await this.gone(e, 'Move'))) toast('Move failed: ' + (e as Error).message, 'error');
     }
   }
 
@@ -1690,7 +1850,13 @@ export class App {
         createNote: async (source, title, strokes) => {
           const book = source.notebook_id ?? this.currentBook?.id;
           if (!book) throw new Error('Open a notebook first.');
-          const n = await this.store.createNote(title, book);
+          let n: NoteMeta;
+          try {
+            n = await this.store.createNote(title, book);
+          } catch (e) {
+            if (e instanceof GoneError) void this.resync(); // its notebook was deleted elsewhere
+            throw e;
+          }
           // The copy's strokes keep their order: their times stay as they were.
           await this.store.upsertStrokes(strokes.map((s) => ({ ...s, note_id: n.id })));
           this.notes.unshift(n);
@@ -1878,7 +2044,7 @@ export class App {
       const extra = res.notebooks.length ? ` into ${res.notebooks.length === 1 ? 'a new notebook' : `${res.notebooks.length} new notebooks`}` : '';
       toast(`Imported ${what}${extra}.` + (res.skipped ? ` ${res.skipped} damaged item${res.skipped === 1 ? ' was' : 's were'} left out.` : ''));
     } catch (e) {
-      toast('Could not import: ' + (e as Error).message, 'error');
+      if (!(await this.gone(e, 'Import'))) toast('Could not import: ' + (e as Error).message, 'error');
     }
   }
 
@@ -2001,7 +2167,7 @@ export class App {
       },
       unarchive: (kind, id) => this.unarchive(kind, id),
       trash: () => this.trashContents(),
-      restoreTrashed: (kind, id) => this.restoreTrashed(kind, id),
+      restoreTrashed: (kind, id) => (kind === 'note' ? this.restoreNote(id) : this.restoreNotebook(id)),
       deleteTrashed: (kind, id) => this.deleteTrashed(kind, id),
       emptyTrash: () => this.emptyTrash(),
       deleteArchived: async (kind, id) => {

@@ -48,10 +48,29 @@ alter table public.notes     add column if not exists archived_at timestamptz;
 alter table public.notebooks add column if not exists starred boolean not null default false;
 alter table public.notebooks add column if not exists archived_at timestamptz;
 
--- The trash: a deleted note or notebook is kept (hidden) with deleted_at set, so it can be restored
--- from Settings > Data controls. The app deletes it for good after 30 days, or when asked.
+-- The trash. It is a notebook of its own (one per user, made by the app): deleting a note moves it
+-- there (notes.deleted_at says since when), and taking it out moves it into a notebook the user picks.
+-- A deleted notebook moves to the trash whole (notebooks.deleted_at set), its notes with it, and can
+-- only be restored whole. The app deletes for good what has been in the trash for 30 days.
 alter table public.notes     add column if not exists deleted_at timestamptz;
 alter table public.notebooks add column if not exists deleted_at timestamptz;
+
+-- A note cannot be put into a notebook that is in the trash (say, deleted on another device a moment
+-- ago): the move fails instead, and the app says so.
+create or replace function public.note_notebook_live() returns trigger
+language plpgsql security invoker set search_path = '' as $$
+begin
+  if new.notebook_id is not null
+     and (tg_op = 'INSERT' or new.notebook_id is distinct from old.notebook_id)
+     and exists (select 1 from public.notebooks b where b.id = new.notebook_id and b.deleted_at is not null) then
+    raise exception 'Lineboard: that notebook is in the trash' using errcode = '23503';
+  end if;
+  return new;
+end $$;
+drop trigger if exists notes_notebook_live on public.notes;
+create trigger notes_notebook_live
+  before insert or update of notebook_id on public.notes
+  for each row execute function public.note_notebook_live();
 
 -- ------------- End-to-end encryption (optional, per user) -------------
 -- When a user turns encryption on, the app encrypts titles, names and ink on the device. Encrypted

@@ -18,7 +18,7 @@ export class SyncQueue {
   state: SyncState = 'saved';
   onState: (s: SyncState) => void = () => {};
   /** A change the server will never accept (e.g. a fair-use limit) was dropped: tell the user why. */
-  onDropped: (message: string) => void = () => {};
+  onDropped: (message: string, error: StoreError) => void = () => {};
   /** The browser's storage is full: waiting changes are kept in memory only, so closing the page would lose them. */
   onStorageFull: () => void = () => {};
   private full = false;
@@ -117,7 +117,7 @@ export class SyncQueue {
           console.error('Dropping unsavable change:', err.message);
           this.ops.shift();
           this.persist();
-          this.onDropped(err.message);
+          this.onDropped(err.message, err);
           continue;
         }
         console.warn('Save failed, will retry:', err);

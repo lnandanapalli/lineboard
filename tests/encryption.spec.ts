@@ -145,7 +145,7 @@ test('a device that lost both secrets can start over with an empty account', asy
   await expect(other.locator('.canvas-area canvas.live')).toBeVisible();
   expect(db.keys).toBeNull();
   // A fresh, readable default notebook.
-  await expect.poll(() => db.notebooks.map((b) => b.name)).toEqual(['My Notebook']);
+  await expect.poll(() => db.notebooks.map((b) => b.name).sort()).toEqual(['My Notebook', 'Trash']);
 });
 
 test('settings are split into sections', async ({ page }) => {

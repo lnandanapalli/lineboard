@@ -54,6 +54,9 @@ export interface NoteMeta {
 /** Flags a note or notebook can have, changed without touching its content or date. */
 export type Flags = { starred?: boolean; archived_at?: string | null; deleted_at?: string | null };
 
+/** The trash notebook's name. */
+export const TRASH_NAME = 'Trash';
+
 /** Days a note or notebook stays in the trash before it is deleted for good. */
 export const TRASH_DAYS = 30;
 

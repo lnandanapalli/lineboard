@@ -45,9 +45,13 @@ your hand sits, scroll the page underneath, and keep writing. That line is where
 - **Stars and the archive.** Star notes (pinned under "Starred", whatever notebook they are in) and notebooks
   (listed first). Archive notes or notebooks to hide them; Settings → Data controls lists them to restore or
   delete. Each row's actions are in its ⋯ menu.
-- **Trash.** Deleting a note or notebook moves it to the trash (Settings → Data controls), where it can be
-  restored, with its ink and history, for 30 days. After that it is deleted for good, or sooner with
-  Delete forever or Empty trash.
+- **Trash.** The trash is a notebook of its own, opened from the bottom of the sidebar (or Settings → Data
+  controls). Deleting a note asks, then moves it there; taking it out asks which notebook to put it in. A
+  deleted notebook goes to the trash whole, its notes listed under it, and can only be restored whole.
+  After 30 days it is deleted for good, or sooner with Delete forever or Empty trash.
+- **Changes from other devices.** Coming back to the tab picks up notes and notebooks changed elsewhere. An
+  action on something another device has deleted meanwhile (renaming it, moving a note into it) fails with
+  a clear message instead of silently doing nothing, and the app catches up.
 - **Clear page.** The toolbar button next to Undo and Redo erases everything on the page after asking. It is
   one undo step, and the page as it was stays in version history.
 - **Search** (Ctrl/⌘ K, or Search in the sidebar): note titles and notebook names, each result labelled. Forgiving

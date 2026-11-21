@@ -73,7 +73,7 @@ type S = { tool: string; text?: string; color: string; width: number; points: nu
 const localState = (page: Page) =>
   page.evaluate(() => {
     const notes = JSON.parse(localStorage.getItem('lb-local-notes') ?? '[]') as { id: string; title: string; notebook_id: string }[];
-    const books = (JSON.parse(localStorage.getItem('lb-local-notebooks') ?? '[]') as { id: string; name: string; deleted_at?: string }[]).filter((b) => !b.deleted_at); // not in the trash
+    const books = (JSON.parse(localStorage.getItem('lb-local-notebooks') ?? '[]') as { id: string; name: string; deleted_at?: string }[]).filter((b) => !b.deleted_at && b.id !== 'trash'); // not in the trash
     const strokes = (id: string) => JSON.parse(localStorage.getItem('lb-local-strokes-' + id) ?? '[]') as S[];
     return { books, notes: notes.map((n) => ({ ...n, strokes: strokes(n.id) })) };
   });
@@ -185,7 +185,8 @@ test('export a notebook, delete it, and import it: the notebook comes back with 
   expect(file.name).toBe('Physics.lbd');
   if (!(await page.locator('.book-panel').isVisible())) await page.locator('.book-button').click();
   await page.locator('.book-list li', { hasText: 'Physics' }).locator('.more-btn').click();
-  await page.getByRole('menuitem', { name: 'Delete' }).click(); // into the trash
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await page.locator('dialog[open]').getByRole('button', { name: 'Move to trash' }).click();
   await expect.poll(async () => (await localState(page)).books.map((b) => b.name)).toEqual(['My Notebook']);
 
   await importBytes(page, file.name, file.bytes);

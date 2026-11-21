@@ -27,7 +27,10 @@ export const setGuestActive = (on: boolean) => (on ? lsSet(GUEST_ACTIVE, true) :
  */
 export async function guestNotesWithInk(local: LocalStore): Promise<NoteMeta[]> {
   const out: NoteMeta[] = [];
+  // What is in the trash stays behind (a notebook in the trash takes its notes with it).
+  const binned = new Set((await local.listNotebooks()).filter((b) => b.deleted_at || b.id === local.trashId).map((b) => b.id));
   for (const n of await local.listNotes()) {
+    if (binned.has(n.notebook_id ?? '')) continue;
     if ((await local.loadStrokes(n.id)).length || (await local.listVersions(n.id).catch(() => [])).length) out.push(n);
   }
   return out;
@@ -50,7 +53,8 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
 
   // Notebooks: reuse an account notebook with the same name (so there is one "My Notebook", not two),
   // otherwise bring the guest's notebook across with its id.
-  const cloudBooks = await cloud.listNotebooks();
+  // Only notebooks in use: never the account's trash, or one in it.
+  const cloudBooks = (await cloud.listNotebooks()).filter((b) => b.id !== cloud.trashId && !b.deleted_at);
   const localBooks = await local.listNotebooks();
   const used = new Set(notes.map((n) => n.notebook_id));
   const bookMap = new Map<string, string>();

@@ -743,6 +743,13 @@ html[data-rotation="90"] .settings-modal, html[data-rotation="270"] .settings-mo
 .archived-kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 .btn.danger-text { color: var(--danger); }
 .trash-empty { margin: 10px 0 0; justify-content: flex-end; }
+.trash-inside { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
+.archived-items .trash-inside li { display: block; padding: 1px 0; border: 0; border-radius: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 10px; background: transparent; cursor: pointer; font: inherit; font-size: 14px; color: var(--ink); text-align: left; }
+.trash-btn:hover { background: var(--bg); }
+.trash-btn[hidden] { display: none; }
+.trash-btn svg { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.trash-btn .trash-count { margin-left: auto; font-size: 12px; color: var(--muted); }
 
 /* ----- Search ----- */
 .search-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); cursor: pointer; font: inherit; text-align: left; }
