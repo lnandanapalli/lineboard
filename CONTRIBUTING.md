@@ -39,7 +39,8 @@ Please add or update a test in `tests/` when you change input handling.
 
 ## Code style
 
-- TypeScript, no UI framework. Keep dependencies minimal.
+- TypeScript and React (function components; Zustand for shared state). The board itself (`src/board.ts`)
+  draws on a canvas directly, without React. Keep dependencies minimal.
 - 2-space indentation, LF line endings (see `.editorconfig`).
 - Plain ASCII in source and docs, except where a symbol is shown to users.
 

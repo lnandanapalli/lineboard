@@ -13,6 +13,8 @@ export const MAX_EMAIL = 254; // the longest address the email standards allow
 
 /** Supabase Auth hashes passwords with bcrypt, which reads at most 72 bytes; it refuses longer ones. */
 export const MAX_PASSWORD = 72;
+/** Shortest password accepted for new passwords; keep in step with the project's Auth setting. */
+export const MIN_PASSWORD = 8;
 /** The encryption passphrase (stretched with PBKDF2, so length costs nothing; this only stops absurd input). */
 export const MAX_PASSPHRASE = 256;
 

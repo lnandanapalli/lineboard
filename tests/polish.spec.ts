@@ -176,3 +176,23 @@ test('changing tools never moves the toolbar: colour and size grey out instead o
   await expect(page.locator('.swatches')).not.toHaveClass(/disabled/);
   await expect(page.locator('.size-btn')).toBeEnabled();
 });
+
+test('toolbar menus open just under their buttons', async ({ page }) => {
+  await setup(page);
+  const check = async (button: ReturnType<Page['locator']>, name: string) => {
+    await button.click();
+    const menu = page.getByRole('menu', { name });
+    await expect(menu).toBeVisible();
+    const b = (await button.boundingBox())!;
+    const m = (await menu.boundingBox())!;
+    expect(m.y).toBeGreaterThanOrEqual(b.y + b.height);
+    expect(m.y).toBeLessThan(b.y + b.height + 20);
+    // Starts near the button (moved left only as far as needed to stay on screen).
+    expect(m.x).toBeLessThanOrEqual(b.x + 1);
+    expect(m.x + m.width).toBeGreaterThan(b.x);
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+  };
+  await check(page.locator('.mode-btn'), 'Mode');
+  await check(page.getByRole('button', { name: 'Select options' }), 'Select');
+});
