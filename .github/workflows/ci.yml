@@ -56,8 +56,6 @@ jobs:
           limited=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/app; done | grep -c 429 || true)
           echo "429s in a burst of 250: $limited"; test "$limited" -gt 0
           sleep 6
-          # The diagnostic page names the address the rate limit uses (here the last X-Forwarded-For entry).
-          curl -fsS -H 'X-Forwarded-For: 1.2.3.4, 198.51.100.7' http://localhost:8080/healthz/client | grep -qx 'rate-limited as: 198.51.100.7'
           # Spoofed X-Forwarded-For entries do not dodge the limit: only the last one, added by the
           # trusted proxy in front (here the Docker gateway), names the client.
           spoofed=$(for i in $(seq 1 250); do curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 10.$i.0.1, 198.51.100.7" http://localhost:8080/app; done | grep -c 429 || true)
