@@ -16,6 +16,7 @@ import { lsGet, lsSet } from '../util';
 import type { Notebook, NoteMeta } from '../types';
 import { Logo } from './Logo';
 import { Mount } from './Mount';
+import { HistoryView } from './History';
 import { Svg } from './Icon';
 import { Dropdown } from './overlays';
 import type { BoardMode } from '../types';
@@ -32,19 +33,20 @@ function IconButton({ icon, title, label, className = '', ...rest }: { icon: str
 /** The notes app: toolbar, sidebar and the board. The logic lives in App (app.ts). */
 export function AppScreen({ app }: { app: App }) {
   const appEl = useRef<HTMLDivElement>(null);
-  const mainEl = useRef<HTMLDivElement>(null);
   const sidebarOpen = useView(app, 'sidebarOpen');
   const historyOpen = useView(app, 'historyOpen');
+  const historyPanel = useView(app, 'historyPanel');
   useLayoutEffect(() => {
-    if (appEl.current && mainEl.current) app.attach(appEl.current, mainEl.current);
+    if (appEl.current) app.attach(appEl.current);
   }, [app]);
   return (
     <div ref={appEl} className={'app' + (sidebarOpen ? ' sidebar-open' : '') + (historyOpen ? ' history-open' : '')}>
       <Toolbar app={app} inert={historyOpen} />
-      <div className="main" ref={mainEl}>
+      <div className="main">
         <Sidebar app={app} inert={historyOpen} />
         <div className="scrim" onClick={() => app.toggleSidebar(false)} />
         <Mount el={app.boardHost} />
+        {historyPanel && <HistoryView panel={historyPanel} />}
       </div>
       <SettingsDialog panel={app.settingsPanel} />
     </div>

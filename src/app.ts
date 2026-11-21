@@ -22,7 +22,8 @@ import { EMPTY_PROFILE, squarePicture, type Profile } from './profile';
 import { applyTheme, clearTheme, isDark, onThemeChange } from './theme';
 import { clip, MAX_IMPORT_FILE, MAX_NOTE_TITLE, MAX_NOTEBOOK_NAME, MAX_PICTURES_AT_ONCE } from './limits';
 import { LocalStore } from './store/localStore';
-import { HISTORY_NEEDS_UPDATE, HistoryPanel, VersionRecorder } from './historyUi';
+import { VersionRecorder } from './versionRecorder';
+import { HISTORY_NEEDS_UPDATE, HistoryPanel } from './ui/History';
 
 
 
@@ -66,7 +67,8 @@ export interface AppView {
   /** Looking at version history: the toolbar and sidebar are out of reach. */
   historyOpen: boolean;
   /** The version history panel is open (its toolbar button shows as pressed). */
-  historyPanel: boolean;
+  /** The version history panel, while it is open. */
+  historyPanel: HistoryPanel | null;
   /** The rotate button shows (the app is turned by hand). */
   rotateShown: boolean;
 }
@@ -126,7 +128,7 @@ export class App {
     sidebarOpen: false,
     bookPanelOpen: false,
     historyOpen: false,
-    historyPanel: false,
+    historyPanel: null,
     rotateShown: false,
   }));
   private bump(...slices: Slice[]) {
@@ -142,7 +144,6 @@ export class App {
   private hint!: HTMLElement;
   /** The app's element and its main area, once React has put them on the page (see attach). */
   private appEl: HTMLElement | null = null;
-  private mainEl: HTMLElement | null = null;
   /** The last strip mode, so F (free on/off) returns to it. */
   private lastStripMode: BoardMode = 'strips';
   settingsPanel!: SettingsPanel;
@@ -231,12 +232,11 @@ export class App {
 
   /**
    * React has put the app on the page: make the board in its element (it measures itself there),
-   * then load the notes. Safe to call again with the same elements.
+   * then load the notes. Safe to call again with the same element.
    */
-  attach(appEl: HTMLElement, mainEl: HTMLElement) {
+  attach(appEl: HTMLElement) {
     if (this.appEl === appEl) return;
     this.appEl = appEl;
-    this.mainEl = mainEl;
     this.buildBoard();
     attachOrientation(appEl);
     const showRotate = () => this.view.setState({ rotateShown: orientation.manual });
@@ -1506,7 +1506,6 @@ export class App {
     if (!(await this.history.enabled)) return toast(HISTORY_NEEDS_UPDATE, 'error');
     this.board.finishText();
     this.toggleSidebar(false);
-    this.view.setState({ historyPanel: true });
     this.historyPanel = new HistoryPanel(
       {
         store: this.store,
@@ -1540,12 +1539,12 @@ export class App {
         openNote: (n) => this.openNote(n),
       },
       note,
-      this.mainEl!,
       () => {
         this.historyPanel = null;
-        this.view.setState({ historyPanel: false });
+        this.view.setState({ historyPanel: null });
       },
     );
+    this.view.setState({ historyPanel: this.historyPanel });
   }
 
   /** The toolbar's export menu (under its button, `anchor`): this note as a picture, or as a Lineboard file. */
