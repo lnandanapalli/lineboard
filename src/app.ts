@@ -150,6 +150,10 @@ export class App {
         void this.resync();
       } else toast('Not saved: ' + m, 'error');
     };
+    // On this device, a save fails only when its storage is full: say so (once per run of failures).
+    this.queue.onRetry = (e, first) => {
+      if (first && this.store.mode === 'local' && e instanceof Error) toast(e.message, 'error');
+    };
     this.queue.onStorageFull = () => toast('This browser’s storage is full, so changes waiting to be saved are kept only until you close the page. Reconnect, or free some space, to keep them.', 'error');
     this.queue.onState = (s) => {
       this.syncState = s;
@@ -1183,7 +1187,7 @@ export class App {
   private renderStatus() {
     const s: SyncState = this.picturesInFlight && this.syncState === 'saved' ? 'saving' : this.syncState;
     const local = this.store.mode === 'local';
-    const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: 'Offline, will retry' }[s];
+    const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: local ? 'Not saved yet, will retry' : 'Offline, will retry' }[s];
     // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.
     this.status.className = 'status ' + s + (this.opts.signIn ? ' compact' : '');
     this.status.textContent = text;

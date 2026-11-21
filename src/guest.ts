@@ -40,6 +40,12 @@ export async function guestNotesWithInk(local: LocalStore): Promise<NoteMeta[]> 
 export function clearGuestData(local: LocalStore) {
   void local.clearAll().catch(() => {});
   for (const k of GUEST_APP_KEYS) lsDel(k);
+  // The save queue keeps each waiting change under its own key.
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith('lb-queue-local:')) lsDel(k);
+  } catch {
+    /* storage unavailable */
+  }
   lsDel(GUEST_MIGRATE);
 }
 
