@@ -1,49 +1,7 @@
-import { logo } from './brand';
-import { h } from './util';
-
-export function publicFooter() {
-  return h('footer', { class: 'site-footer' }, h('span', {}, 'Lineboard · A little more room to think.'),
-    h('nav', { 'aria-label': 'Legal' }, h('a', { href: '/terms' }, 'Terms of service'), h('a', { href: '/privacy' }, 'Privacy policy'), h('a', { href: 'https://github.com/lnandanapalli/lineboard/issues' }, 'Support on GitHub')));
-}
-
-export function renderHome(root: HTMLElement, cloud: boolean, start: () => void, signedIn = false) {
-  document.title = 'Lineboard — Space for your next idea';
-  const tryButton = h('button', { class: 'btn primary hero-cta', type: 'button' }, signedIn ? 'Back to my notes' : 'Try it without an account');
-  tryButton.addEventListener('click', start);
-  const feature = (n: string, title: string, text: string) => h('article', {}, h('span', { class: 'feature-number' }, n), h('h3', {}, title), h('p', {}, text));
-  root.replaceChildren(h('div', { class: 'public-page' },
-    h('header', { class: 'site-header' }, h('a', { class: 'brand', href: '/home', 'aria-label': 'Lineboard home' }, logo(), 'Lineboard'),
-      h('nav', { 'aria-label': 'Main navigation' }, h('a', { href: '/home#how-it-works' }, 'How it works'), cloud && !signedIn ? h('a', { href: '/login' }, 'Log in') : null,
-        cloud && !signedIn ? h('a', { class: 'btn', href: '/signup' }, 'Create account') : h('a', { class: 'btn', href: '/app' }, 'Open notebook'))),
-    h('main', { id: 'home-main' },
-      h('section', { class: 'hero' }, h('div', { class: 'hero-copy' },
-        h('p', { class: 'eyebrow' }, 'YOUR IDEAS. YOUR HANDWRITING.'),
-        h('h1', {}, 'A clear page.', h('br'), h('em', {}, 'A freer mind.')),
-        h('p', { class: 'hero-description' }, 'A handwriting notebook for your tablet. Write above the line, rest your hand below it, and let your thoughts take shape.'),
-        h('div', { class: 'hero-actions' }, tryButton, cloud && !signedIn ? h('a', { href: '/signup' }, 'Create a free account →') : null),
-        h('p', { class: 'hero-note' }, signedIn ? 'You’re signed in. Pick up where you left off.' : 'No active pen required. No account needed to begin.')),
-        h('div', { class: 'notebook-preview', role: 'img', 'aria-label': 'Notebook illustration: handwriting above a line across the page, and a locked, palm-safe area below it' },
-          h('div', { class: 'preview-top' }, h('span', {}, 'My everyday notebook'), h('span', {}, '● Saved on this device')),
-          h('div', { class: 'preview-paper' }, h('span', { class: 'preview-date' }, 'A little space to think'),
-            h('p', { class: 'handwriting' }, 'Good things start', h('br'), 'with a small idea.'),
-            h('p', { class: 'handwriting preview-writing' }, 'Make room for yours.', h('span', { class: 'preview-caret' })),
-            h('div', { class: 'preview-line' }, h('span', { class: 'preview-grip' }, '═')),
-            h('div', { class: 'preview-locked' }, h('span', {}, '🔒'), h('span', {}, 'Rest your hand here'))),
-          h('div', { class: 'preview-caption' }, h('span', { class: 'ink-dot' }), 'Write above the line. Below it is palm-safe.'))),
-      h('section', { class: 'how-section', id: 'how-it-works' }, h('p', { class: 'eyebrow' }, 'LESS FRICTION. MORE FLOW.'), h('h2', {}, 'Made for the way you write.'),
-        h('div', { class: 'feature-grid' },
-          feature('01', 'Draw the line.', 'One line splits the screen. Write above it; below it the screen is locked, so your palm and stray fingers can rest without leaving marks. Drag the line to wherever your hand sits.'),
-          feature('02', 'Find your flow.', 'Write, highlight, add shapes, text and pictures, erase and undo. Lock the page strip by strip, or switch to a free whiteboard when an idea needs the whole page.'),
-          feature('03', 'Keep it together.', cloud ? 'Organize notes into notebooks, export a PNG, or create an account to sync across devices.' : 'Organize notes into notebooks and export a PNG. This installation keeps your work in this browser.'))),
-      h('section', { class: 'home-detail' }, h('div', {}, h('p', { class: 'eyebrow' }, 'START SMALL. THINK BIG.'), h('h2', {}, 'For lecture notes, loose thoughts,', h('br'), 'and everything in between.')),
-        h('div', {}, h('p', {}, 'Use a capacitive stylus or your finger. With an active pen, Lineboard also supports pressure-aware ink.'),
-          h('p', {}, 'Trying it out? Your notes stay in this browser. Export anything important before clearing browser data.')))), publicFooter()));
-  if (location.hash === '#how-it-works') root.querySelector('#how-it-works')?.scrollIntoView();
-}
-
+/** The terms of service and privacy policy (shown by ui/Public.tsx). */
 type PolicySection = [id: string, title: string, ...paragraphs: string[]];
 
-const policies: Record<'terms' | 'privacy', { title: string; intro: string; sections: PolicySection[] }> = {
+export const policies: Record<'terms' | 'privacy', { title: string; intro: string; sections: PolicySection[] }> = {
   terms: {
     title: 'Terms of service', intro: 'The essentials for using Lineboard responsibly.',
     sections: [
@@ -85,17 +43,3 @@ const policies: Record<'terms' | 'privacy', { title: string; intro: string; sect
     ],
   },
 };
-
-export function renderPolicy(root: HTMLElement, kind: keyof typeof policies) {
-  const policy = policies[kind];
-  document.title = `${policy.title} — Lineboard`;
-  root.replaceChildren(h('div', { class: 'public-page' },
-    h('header', { class: 'site-header' }, h('a', { class: 'brand', href: '/home' }, logo(), 'Lineboard'), h('a', { href: '/app' }, 'Back to notebook →')),
-    h('main', { class: 'policy-page' }, h('a', { href: '/home' }, '← Home'), h('p', { class: 'eyebrow' }, 'LAST UPDATED NOVEMBER 19, 2026'),
-      h('h1', {}, policy.title), h('p', { class: 'policy-intro' }, policy.intro),
-      ...policy.sections.map(([id, title, ...paras]) => h('section', { id }, h('h2', {}, title), ...paras.map((t) => h('p', {}, t)))),
-      h('section', { id: 'contact' }, h('h2', {}, 'Contact'), h('p', {}, 'Operator: ', h('a', { href: 'https://github.com/lnandanapalli' }, '@lnandanapalli'), '. For support, ', h('a', { href: 'https://github.com/lnandanapalli/lineboard/issues' }, 'raise a GitHub issue'), '. Issues are public, so for privacy requests the app cannot handle, open an issue asking to be contacted privately, without any personal details in it. Never post private notes, passwords or tokens.')),
-      h('p', {}, h('a', { href: 'https://github.com/lnandanapalli/lineboard' }, 'Lineboard source project'), ' · ', h('a', { href: 'https://supabase.com/privacy' }, 'Supabase privacy policy'))), publicFooter()));
-  // A link to one section (e.g. /privacy#storage) opens at it.
-  if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
-}

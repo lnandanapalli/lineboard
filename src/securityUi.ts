@@ -1,7 +1,6 @@
 import { infoHeading } from './menu';
 import type { Factor } from '@supabase/supabase-js';
-import { MIN_PASSWORD } from './auth';
-import { MAX_PASSWORD } from './limits';
+import { MAX_PASSWORD, MIN_PASSWORD } from './limits';
 import { AccountError, describeDevice, passkeysSupported, type AccountSecurity, type DeviceSession } from './account';
 import { Captcha } from './captcha';
 import { logo } from './brand';
