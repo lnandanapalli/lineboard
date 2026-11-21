@@ -746,11 +746,20 @@ export class App {
     picker.addEventListener('input', () => pick(picker.value));
     const more = h('label', { class: 'swatch-more', title: 'Custom colour' }, picker);
     more.insertAdjacentHTML('beforeend', icons.plus);
-    this.swatches.replaceChildren(...colors.map(swatch), ...(custom ? [custom] : []), more);
+    // Every tool gets the same number of colour slots (the longest palette plus a custom one), so the
+    // toolbar never shifts when the tool changes: unused slots stay empty but keep their space.
+    const slots = Math.max(PEN_COLORS.length, HL_COLORS.length) + 1;
+    const shown = [...colors.map(swatch), ...(custom ? [custom] : [])];
+    const blanks = Array.from({ length: slots - shown.length }, () => h('span', { class: 'swatch-slot', 'aria-hidden': 'true' }));
+    this.swatches.replaceChildren(...shown, ...blanks, more);
     this.renderSizeButton();
-    const hide = this.tool === 'eraser' || this.tool === 'select';
-    this.swatches.style.display = hide ? 'none' : '';
-    this.sizeBtn.style.display = hide ? 'none' : '';
+    // Colour and size mean nothing to the eraser and the selection: grey them out rather than hide
+    // them, so nothing moves.
+    const off = this.tool === 'eraser' || this.tool === 'select';
+    this.swatches.classList.toggle('disabled', off);
+    this.swatches.setAttribute('aria-disabled', String(off));
+    for (const b of this.swatches.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')) b.disabled = off;
+    this.sizeBtn.disabled = off;
   }
 
   /** The size of the tool in use: pen, highlighter, text, or shape outline thickness. */
