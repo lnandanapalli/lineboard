@@ -314,8 +314,16 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
       const prefix = String(body()?.prefix ?? '').replace(/\/$/, '');
       if (!accessOk() || prefix !== USER_ID) return json(route, 200, []);
       const limit = Number(body()?.limit ?? 100);
-      const names = [...db.images.keys()].filter((k) => k.startsWith(prefix + '/')).map((k) => k.slice(prefix.length + 1));
-      return json(route, 200, names.slice(0, limit).map((name) => ({ name, id: crypto.randomUUID(), metadata: { size: db.images!.get(`${prefix}/${name}`)!.body.length } })));
+      const offset = Number(body()?.offset ?? 0);
+      const names = [...db.images.keys()].filter((k) => k.startsWith(prefix + '/')).map((k) => k.slice(prefix.length + 1)).sort();
+      return json(
+        route,
+        200,
+        names.slice(offset, offset + limit).map((name) => {
+          const f = db.images!.get(`${prefix}/${name}`)!;
+          return { name, id: crypto.randomUUID(), metadata: { size: f.body.length, mimetype: f.type } };
+        }),
+      );
     }
     if (path === '/storage/v1/object/images' && method === 'DELETE') {
       db.images ??= new Map();
@@ -511,11 +519,15 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
         return json(route, 200, db[k] ? [db[k]] : []);
       }
       if (method === 'POST') {
+        // One row per user (primary key): a plain insert over an existing row is a conflict.
+        if (db[k] && !prefer.includes('resolution=merge-duplicates')) return json(route, 409, { code: '23505', message: `duplicate key value violates unique constraint "${k === 'keys' ? 'user_keys' : 'user_settings'}_pkey"` });
         db[k] = [body()].flat()[0] as Row;
         return route.fulfill({ status: 201, headers: cors });
       }
       if (method === 'PATCH') {
-        if (db[k]) db[k] = { ...db[k], ...body() };
+        const hit = !!db[k] && match(db[k]!);
+        if (hit) db[k] = { ...db[k], ...body() };
+        if (prefer.includes('return=representation')) return json(route, 200, hit ? [db[k]] : []);
         return route.fulfill({ status: 204, headers: cors });
       }
       if (method === 'DELETE') {

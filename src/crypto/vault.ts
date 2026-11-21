@@ -37,6 +37,16 @@ export const MIN_PASSPHRASE = 10;
 /** Error from a wrong passphrase or recovery key, worded for the user. */
 export class WrongSecretError extends Error {}
 
+/**
+ * New keys were not saved because the account's keys changed meanwhile (encryption was set up on
+ * another device). Nothing was overwritten: the notes stay readable with the keys made there.
+ */
+export class KeysChangedError extends Error {
+  constructor() {
+    super('Encryption was just set up on another device, so nothing was changed here. Reload, then unlock with the passphrase chosen there.');
+  }
+}
+
 const REFRESH_MS = 60_000;
 
 /**
@@ -198,10 +208,31 @@ export class KeyVault {
     return {
       recoveryKey: recovery.text,
       commit: async (remember: boolean) => {
-        const { error } = await this.sb
-          .from('user_keys')
-          .upsert({ ...row, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
-        if (error) throw new Error(error.message || 'Could not save encryption keys');
+        // Never overwrite keys made elsewhere: notes encrypted with them would become unreadable.
+        // With no keys yet, insert (a second device doing the same at once gets a conflict). Keys left
+        // from when encryption was turned off are replaced only if they are still those exact keys.
+        const before = this.row;
+        const stamped = { ...row, updated_at: new Date().toISOString() };
+        let saved: boolean;
+        if (!before) {
+          const { error } = await this.sb.from('user_keys').insert(stamped);
+          if (error && error.code !== '23505') throw new Error(error.message || 'Could not save encryption keys');
+          saved = !error;
+        } else {
+          const { data, error } = await this.sb
+            .from('user_keys')
+            .update(stamped)
+            .eq('user_id', this.userId)
+            .eq('key_id', before.key_id)
+            .eq('state', 'off')
+            .select('user_id');
+          if (error) throw new Error(error.message || 'Could not save encryption keys');
+          saved = !!data?.length;
+        }
+        if (!saved) {
+          await this.refresh().catch(() => {});
+          throw new KeysChangedError();
+        }
         this.row = row;
         this.loadedAt = Date.now();
         this.setKey(key, row.key_id);
