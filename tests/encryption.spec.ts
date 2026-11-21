@@ -264,3 +264,31 @@ test('turning encryption on covers every note (past 1000) and pictures only vers
   expect(pic.type).toBe('application/octet-stream');
   expect(pic.body.subarray(0, 8).equals(png.subarray(0, 8))).toBe(false);
 });
+
+test('signed out from another device: the key remembered on this device is forgotten too', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await signIn(page);
+  await attachBoard(page);
+  await enableEncryption(page); // "Keep this device unlocked" is on
+  const remembered = () =>
+    page.evaluate(
+      () =>
+        new Promise<number>((resolve) => {
+          const req = indexedDB.open('lineboard-keys', 1);
+          req.onupgradeneeded = () => req.result.createObjectStore('keys');
+          req.onsuccess = () => {
+            const c = req.result.transaction('keys').objectStore('keys').count();
+            c.onsuccess = () => {
+              req.result.close();
+              resolve(c.result);
+            };
+          };
+        }),
+    );
+  expect(await remembered()).toBe(1);
+  // Another device signs this one out; it notices when it comes back into view.
+  db.sessions = [];
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await expect(page).toHaveURL(/\/login$/);
+  await expect.poll(remembered).toBe(0);
+});

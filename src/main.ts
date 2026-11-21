@@ -9,7 +9,7 @@ import { config, hasCloud } from './config';
 import { GUEST_MIGRATE, guestNotesWithInk, isGuestActive, keepSeparateKey, migrateGuestData, setGuestActive } from './guest';
 import { LocalStore } from './store/localStore';
 import { SupabaseStore } from './store/supabaseStore';
-import { KeyVault } from './crypto/vault';
+import { forgetAllRememberedKeys, forgetRememberedKey, KeyVault } from './crypto/vault';
 import { renderUnlock } from './encryptionUi';
 import { AccountSecurity } from './account';
 import { renderSecondStep } from './securityUi';
@@ -306,8 +306,23 @@ if (!hasCloud) {
     void show(activeSession);
   });
 
+  // Whose encryption key may be remembered on this device. However the session ends (signing out
+  // here, from another device, a password change, an expired session), the key is forgotten.
+  let keyOwner: string | null = null;
+  const forgetKeyIfSignedOut = (session: Session | null) => {
+    if (!session) {
+      // No one is signed in (also when the session ended while the app was closed): no key stays.
+      keyOwner = null;
+      void forgetAllRememberedKeys().catch(() => {});
+      return;
+    }
+    if (keyOwner && session.user.id !== keyOwner) void forgetRememberedKey(keyOwner).catch(() => {});
+    keyOwner = session.user.id;
+  };
+
   sb.auth.onAuthStateChange((event, session) => {
     activeSession = session;
+    forgetKeyIfSignedOut(session);
     // Defer: calling Supabase from inside this callback can deadlock the auth lock.
     setTimeout(() => {
       if (event === 'PASSWORD_RECOVERY') {

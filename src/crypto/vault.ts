@@ -299,6 +299,11 @@ export class KeyVault {
 
 // ----------------------------- remembered key (IndexedDB) -----------------------------
 
+/** Forget the key remembered on this device for a user (every way of being signed out ends here). */
+export const forgetRememberedKey = (uid: string) => forgetKey(uid);
+/** Forget every remembered key (no one is signed in on this device). */
+export const forgetAllRememberedKeys = () => tx('readwrite', (s) => s.clear()).then(() => {});
+
 const DB_NAME = 'lineboard-keys';
 const STORE = 'keys';
 
