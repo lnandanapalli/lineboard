@@ -99,6 +99,7 @@ function matches(url: URL) {
     } else if (raw === 'is.null') tests.push((r) => r[col] == null);
     else if (raw === 'not.is.null') tests.push((r) => r[col] != null);
     else if (raw.startsWith('lt.')) tests.push((r) => r[col] != null && String(r[col]) < raw.slice(3));
+    else if (raw.startsWith('gt.')) tests.push((r) => r[col] != null && String(r[col]) > raw.slice(3));
   }
   return (r: Row) => tests.every((t) => t(r));
 }
@@ -530,7 +531,11 @@ export async function mockSupabase(page: Page, shared?: MockDb, opts: { captcha?
     // ---- note_images / note_images_state ----
     if (path === '/rest/v1/note_images') {
       db.imageUses ??= [];
-      if (method === 'GET') return json(route, 200, paginate(url, db.imageUses.filter(match)));
+      if (method === 'GET') {
+        const uses = db.imageUses.filter(match);
+        if (url.searchParams.get('order') === 'image_id.asc') uses.sort((a, b) => a.image_id.localeCompare(b.image_id));
+        return json(route, 200, paginate(url, uses));
+      }
       if (method === 'POST') {
         for (const r of [body()].flat() as Row[]) {
           if (!db.notes.some((n) => n.id === r.note_id)) return json(route, 409, { code: '23503', message: 'insert or update on table "note_images" violates foreign key constraint "note_images_note_id_fkey"' });

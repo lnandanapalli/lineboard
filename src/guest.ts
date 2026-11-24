@@ -1,6 +1,8 @@
 import type { LocalStore } from './store/localStore';
 import type { SupabaseStore } from './store/supabaseStore';
-import { withDefaults, type NoteMeta, type Settings } from './types';
+import { withDefaults, type NoteMeta, type Settings, type Stroke } from './types';
+import { SyncQueue } from './sync';
+import type { VersionMeta } from './history';
 import { lsDel, lsGet, lsSet } from './util';
 
 /**
@@ -15,8 +17,9 @@ export const GUEST_MIGRATE = 'lb-guest-migrate';
 /** Per user: they chose to keep this device's notes separate, so don't ask again. */
 export const keepSeparateKey = (uid: string) => `lb-guest-keep-${uid}`;
 
-/** App keys the guest session uses (App namespaces them by user id, which is "local" here). */
-const GUEST_APP_KEYS = ['lb-settings-local', 'lb-queue-local', 'lb-last-note-local', 'lb-last-notebook-local'];
+function requireSavedGuestChanges() {
+  if (SyncQueue.hasPersistedChanges('lb-queue-local')) throw new Error('Guest changes are still waiting to save.');
+}
 
 export const isGuestActive = () => lsGet<boolean>(GUEST_ACTIVE, false);
 export const setGuestActive = (on: boolean) => (on ? lsSet(GUEST_ACTIVE, true) : lsDel(GUEST_ACTIVE));
@@ -36,26 +39,20 @@ export async function guestNotesWithInk(local: LocalStore): Promise<NoteMeta[]> 
   return out;
 }
 
-/** Remove everything the guest session stored on this device. */
-export function clearGuestData(local: LocalStore) {
-  void local.clearAll().catch(() => {});
-  for (const k of GUEST_APP_KEYS) lsDel(k);
-  // The save queue keeps each waiting change under its own key.
-  try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith('lb-queue-local:')) lsDel(k);
-  } catch {
-    /* storage unavailable */
-  }
-  lsDel(GUEST_MIGRATE);
-}
-
 /**
  * Copy the guest's notes, strokes and settings into the signed-in account, then clear them here.
  * Ids are kept, so if this is interrupted (or two tabs run it at once) running it again is safe.
  * Throws on failure and leaves the local copy untouched.
  */
 export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, uid: string): Promise<number> {
+  const move = () => copyGuestData(local, cloud, uid);
+  return navigator.locks ? navigator.locks.request('lb-guest-migration', move) : move();
+}
+
+async function copyGuestData(local: LocalStore, cloud: SupabaseStore, uid: string): Promise<number> {
+  requireSavedGuestChanges();
   const notes = (await guestNotesWithInk(local)).sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+  if (!notes.length) return 0;
 
   // Notebooks: reuse an account notebook with the same name (so there is one "My Notebook", not two),
   // otherwise bring the guest's notebook across with its id.
@@ -73,7 +70,10 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
     }
   }
 
+  const copied: { note: NoteMeta; strokes: Stroke[]; versions: VersionMeta[] }[] = [];
   for (const n of notes) {
+    const versions = await local.listVersions(n.id);
+    if (versions.length && !(await cloud.supportsHistory())) throw new Error('The account cannot save version history yet.');
     // Notes without a (known) notebook stay unassigned; the app files them into the default notebook.
     await cloud.importNotes([{ ...n, notebook_id: (n.notebook_id && bookMap.get(n.notebook_id)) || null }]);
     const strokes = await local.loadStrokes(n.id);
@@ -81,14 +81,13 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
     for (const st of strokes) if (st.tool === 'image' && st.text) await cloud.putImage(st.text, await local.getImage(st.text));
     await cloud.upsertStrokes(strokes);
     // Version history comes along (same ids, so a second run overwrites rather than duplicates).
-    // Pictures only an old version uses are moved too; one no longer on the device is left out.
-    if (await cloud.supportsHistory()) {
-      for (const v of await local.listVersions(n.id).catch(() => [])) {
-        const snap = await local.loadVersion(v);
-        for (const st of snap) if (st.tool === 'image' && st.text && !strokes.some((x) => x.text === st.text)) await local.getImage(st.text).then((b) => cloud.putImage(st.text!, b), () => {});
-        await cloud.saveVersion(v, snap);
-      }
+    // Move pictures used only by old versions before saving those versions.
+    for (const v of versions) {
+      const snap = await local.loadVersion(v);
+      for (const st of snap) if (st.tool === 'image' && st.text && !strokes.some((x) => x.text === st.text)) await cloud.putImage(st.text, await local.getImage(st.text));
+      await cloud.saveVersion(v, snap);
     }
+    copied.push({ note: n, strokes, versions });
   }
 
   // Carry the guest's settings (stylus calibration, strip height...) over if the account has none yet.
@@ -103,6 +102,7 @@ export async function migrateGuestData(local: LocalStore, cloud: SupabaseStore, 
   const lastBook = lsGet<string | null>('lb-last-notebook-local', null);
   if (lastBook && bookMap.has(lastBook)) lsSet(`lb-last-notebook-${uid}`, bookMap.get(lastBook));
 
-  clearGuestData(local);
+  await local.removeMigratedNotes(copied, requireSavedGuestChanges);
+  lsDel(GUEST_MIGRATE);
   return notes.length;
 }

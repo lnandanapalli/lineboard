@@ -318,7 +318,7 @@ function Status({ app }: { app: App }) {
   // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.
   return (
     <div className={'status ' + state + (app.opts.signIn ? ' compact' : '')} title={text} aria-label={text} data-retry-text={retryText}>
-      <span>{text}</span>
+      <div className="status-label"><span>{text}</span></div>
     </div>
   );
 }

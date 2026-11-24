@@ -541,25 +541,37 @@ export class SupabaseStore implements Store {
     if (!noteIds.length || !(await this.supportsImageUses())) return [];
     const { data: state, error: se } = await this.sb.from('note_images_state').select('user_id').limit(1);
     if (se || !state?.length) return [];
-    const out = new Set<string>();
-    for (let i = 0; i < noteIds.length; i += CHUNK) {
-      const { data, error } = await this.sb.from('note_images').select('image_id').in('note_id', noteIds.slice(i, i + CHUNK));
-      check(error);
-      for (const r of (data ?? []) as { image_id: string }[]) out.add(r.image_id);
+    return [...await this.pictureReferences('note_id', noteIds)];
+  }
+
+  private async pictureReferences(column: 'note_id' | 'image_id', ids: string[]): Promise<Set<string>> {
+    const references = new Set<string>();
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      let after: string | undefined;
+      for (;;) {
+        let query = this.sb.from('note_images').select('image_id').in(column, chunk).order('image_id').limit(PAGE);
+        if (after) query = query.gt('image_id', after);
+        const { data, error } = await query;
+        check(error);
+        const rows = (data ?? []) as { image_id: string }[];
+        if (!rows.length) break;
+        for (const row of rows) references.add(row.image_id);
+        // Each page can contain many references to the same picture. Resume at the next id.
+        after = rows[rows.length - 1].image_id;
+      }
     }
-    return [...out];
+    return references;
   }
 
   /** After a delete: remove the candidate files that no remaining note uses. Failures are left for later. */
   private async removeUnusedPictures(candidates: string[]) {
-    const unused: string[] = [];
-    for (let i = 0; i < candidates.length; i += CHUNK) {
-      const chunk = candidates.slice(i, i + CHUNK);
-      const { data, error } = await this.sb.from('note_images').select('image_id').in('image_id', chunk);
-      if (error) return console.warn('Pictures not tidied', error);
-      const used = new Set(((data ?? []) as { image_id: string }[]).map((r) => r.image_id));
-      unused.push(...chunk.filter((c) => !used.has(c) && c !== SupabaseStore.PICTURE_ID));
-    }
+    const used = await this.pictureReferences('image_id', candidates).catch((error) => {
+      console.warn('Pictures not tidied', error);
+      return null;
+    });
+    if (!used) return;
+    const unused = candidates.filter((id) => !used.has(id) && id !== SupabaseStore.PICTURE_ID);
     if (!unused.length) return;
     const { error } = await this.sb.storage.from(IMAGE_BUCKET).remove(unused.map((id) => this.imagePath(id)));
     if (error) console.warn('Pictures not removed', error);

@@ -140,15 +140,16 @@ button { font: inherit; color: inherit; }
 .toggle.on .knob { background: var(--accent); }
 .toggle.on .knob::after { left: 14px; }
 
-.status { font-size: 13px; color: var(--muted); white-space: nowrap; display: grid; grid-template-columns: 8px auto; align-items: center; gap: 6px; flex: none; padding: 0 4px; }
-.status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #16a34a; }
-/* Size the label column to the longest message so a status update cannot wrap the toolbar. */
-.status span, .status::after { grid-area: 1 / 2; }
-.status::after { content: attr(data-retry-text); visibility: hidden; }
-.status.saving::before { background: #f59e0b; }
-.status.retrying::before { background: var(--danger); }
+.status { font-size: 13px; color: var(--muted); white-space: nowrap; display: grid; place-items: center; flex: none; padding: 0 4px; }
+.status-label { display: flex; align-items: center; gap: 6px; }
+.status-label::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #16a34a; }
+/* Reserve the width of the longest message and center the visible dot and label together. */
+.status-label, .status::after { grid-area: 1 / 1; }
+.status::after { content: attr(data-retry-text); visibility: hidden; padding-inline-start: 14px; }
+.status.saving .status-label::before { background: #f59e0b; }
+.status.retrying .status-label::before { background: var(--danger); }
 .status.retrying { color: var(--danger); }
-.status.compact { grid-template-columns: 8px; gap: 0; padding: 0 6px; }
+.status.compact { padding: 0 6px; }
 .status.compact span, .status.compact::after { display: none; }
 
 .main { position: relative; flex: 1; min-height: 0; display: flex; }

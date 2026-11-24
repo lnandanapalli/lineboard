@@ -258,7 +258,12 @@ export class App {
   }
 
   async goSignIn() {
+    this.board?.finishText();
     await this.flush();
+    if (this.queue.pending) {
+      toast('Your changes are still waiting to save on this device. Free some browser storage and try again.', 'error');
+      return;
+    }
     this.opts.signIn?.();
   }
 

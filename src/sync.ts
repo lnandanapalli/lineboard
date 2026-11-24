@@ -9,6 +9,7 @@ interface Entry {
   id: string;
   order: number;
   op: Op;
+  legacyIndex?: number;
 }
 export type SyncState = 'saved' | 'saving' | 'retrying';
 
@@ -48,27 +49,31 @@ export class SyncQueue {
     private key: string,
   ) {
     this.prefix = key + ':';
-    this.migrate();
     this.load();
     window.addEventListener('online', () => this.wake?.());
     // Another tab queued or saved something: keep the count and the overlay current.
     window.addEventListener('storage', (e) => {
-      if (e.key === null || e.key.startsWith(this.prefix)) this.load();
+      if (e.key === null || e.key === this.key || e.key.startsWith(this.prefix)) this.load();
     });
     if (this.entries.length) void this.run();
   }
 
-  /** The old format kept the whole queue in one value; split it into entries. */
-  private migrate() {
-    const old = lsGet<Op[] | null>(this.key, null);
-    if (!Array.isArray(old)) return;
-    for (const op of old) this.write({ id: uuid(), order: nextOrder(), op });
-    lsDel(this.key);
+  static hasPersistedChanges(key: string) {
+    const legacy = lsGet<unknown>(key, null);
+    return (Array.isArray(legacy) && legacy.some(Boolean)) || Object.keys(localStorage).some((k) => k.startsWith(key + ':'));
   }
 
-  /** Read every waiting change from storage (all tabs'), plus this tab's memory-only ones. */
+  private legacyEntries() {
+    const entries = lsGet<(Op | null)[] | null>(this.key, null);
+    return Array.isArray(entries) ? entries : [];
+  }
+
+  /** Read waiting changes, including old queues without duplicating them in storage. */
   private load() {
     const found: Entry[] = [];
+    this.legacyEntries().forEach((op, index) => {
+      if (op) found.push({ id: 'legacy-' + index, order: index, op, legacyIndex: index });
+    });
     try {
       for (let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
@@ -87,18 +92,30 @@ export class SyncQueue {
 
   /** Store one entry; if storage is full, keep it in memory and say so. */
   private write(e: Entry) {
-    const ok = lsSet(this.prefix + e.id, e);
+    const ok = e.legacyIndex === undefined ? lsSet(this.prefix + e.id, e) : this.updateLegacy(e.legacyIndex, e.op);
     if (ok) this.memOnly.delete(e.id);
     else this.memOnly.set(e.id, e);
     if (!ok && !this.full) this.onStorageFull();
     this.full = !ok;
   }
 
+  /** Keep the old positions stable while removing or shrinking individual operations. */
+  private updateLegacy(index: number, op: Op | null) {
+    const entries = this.legacyEntries();
+    if (!entries[index]) return true;
+    entries[index] = op;
+    if (entries.some(Boolean)) return lsSet(this.key, entries);
+    lsDel(this.key);
+    return true;
+  }
+
   /** Remove exactly this change (by its id), wherever it is. */
-  private forget(id: string) {
-    lsDel(this.prefix + id);
-    this.memOnly.delete(id);
-    this.entries = this.entries.filter((e) => e.id !== id);
+  private forget(entry: Entry) {
+    if (entry.legacyIndex === undefined) lsDel(this.prefix + entry.id);
+    else if (!this.updateLegacy(entry.legacyIndex, null)) return false;
+    this.memOnly.delete(entry.id);
+    this.entries = this.entries.filter((e) => e.id !== entry.id);
+    return true;
   }
 
   /** Stop saving (the app is being torn down); queued work stays persisted for the next queue. */
@@ -125,7 +142,7 @@ export class SyncQueue {
     for (const e of [...this.entries]) {
       if (e.op.kind !== 'upsert' || !e.op.strokes.some((s) => s.note_id === noteId)) continue;
       const strokes = e.op.strokes.filter((s) => s.note_id !== noteId);
-      if (!strokes.length) this.forget(e.id);
+      if (!strokes.length) this.forget(e);
       else {
         const next = { ...e, op: { kind: 'upsert' as const, strokes } };
         this.write(next);
@@ -199,7 +216,7 @@ export class SyncQueue {
       try {
         if (e.op.kind === 'upsert') await this.store.upsertStrokes(e.op.strokes);
         else await this.store.deleteStrokes(e.op.ids);
-        this.forget(e.id);
+        if (!this.forget(e)) throw new Error('Could not update the local save queue.');
         delay = 0;
       } catch (err) {
         if (err instanceof StoreError && err.permanent) {
@@ -208,9 +225,10 @@ export class SyncQueue {
           const now = this.entries.find((x) => x.id === e.id);
           if (now && JSON.stringify(now.op) !== JSON.stringify(e.op)) continue;
           console.error('Dropping unsavable change:', err.message);
-          this.forget(e.id);
-          this.onDropped(err.message, err);
-          continue;
+          if (this.forget(e)) {
+            this.onDropped(err.message, err);
+            continue;
+          }
         }
         console.warn('Save failed, will retry:', err);
         this.onRetry(err, delay === 0);

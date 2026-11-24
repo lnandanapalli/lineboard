@@ -109,15 +109,37 @@ test('two tabs queuing at once both keep their changes for the next load', async
   reloaded.stop();
 });
 
-test('the old single-value queue is carried over on load', async () => {
+test('the old single-value queue drains before newer entries', async () => {
   const { SyncQueue } = await import('../src/sync');
   localStorage.setItem(KEY, JSON.stringify([{ kind: 'upsert', strokes: [stroke('old', 'A')] }]));
   const f = fakeStore();
   const q = new SyncQueue(f.store as never, KEY);
   expect(q.pending).toBe(1);
+  expect(localStorage.getItem(KEY)).not.toBeNull();
+  q.upsert([stroke('new', 'A')]);
+  f.release();
+  f.release();
+  await settle();
+  expect(f.sent).toEqual([['old'], ['new']]);
   expect(localStorage.getItem(KEY)).toBeNull();
+  expect(q.pending).toBe(0);
+});
+
+
+test('an old queue stays durable when storage cannot accept new keys', async () => {
+  const { SyncQueue } = await import('../src/sync');
+  const old = JSON.stringify([{ kind: 'upsert', strokes: [stroke('old', 'A')] }]);
+  localStorage.setItem(KEY, old);
+  localStorage.setItem = () => { throw new DOMException('full', 'QuotaExceededError'); };
+  const f = fakeStore();
+  const q = new SyncQueue(f.store as never, KEY);
+  q.stop();
+  expect(localStorage.getItem(KEY)).toBe(old);
+
+  const reloaded = new SyncQueue(f.store as never, KEY);
+  expect(reloaded.overlay('A', []).map((s) => s.id)).toEqual(['old']);
   f.release();
   await settle();
   expect(f.sent).toEqual([['old']]);
-  expect(q.pending).toBe(0);
+  expect(reloaded.pending).toBe(0);
 });
