@@ -243,6 +243,11 @@ test('a device that has not noticed encryption was turned on elsewhere does not 
 test('while a picture is being added, a placeholder shows where it will go', async ({ page }) => {
   const db = await mockSupabase(page);
   await signIn(page);
+  const status = page.locator('.status');
+  const area = page.locator('.canvas-area');
+  await expect(status).toHaveText('Saved');
+  const savedStatusBounds = await status.boundingBox();
+  const savedAreaBounds = await area.boundingBox();
   // Hold the upload until the test lets it go.
   let release!: () => void;
   const held = new Promise<void>((r) => (release = r));
@@ -251,9 +256,10 @@ test('while a picture is being added, a placeholder shows where it will go', asy
     return route.fallback();
   });
   await insertPicture(page);
-  const area = page.locator('.canvas-area');
   await expect(area).toHaveAttribute('aria-busy', 'true');
-  await expect(page.locator('.status')).toHaveText('Saving...');
+  await expect(status).toHaveText('Saving...');
+  expect(await status.boundingBox()).toEqual(savedStatusBounds);
+  expect(await area.boundingBox()).toEqual(savedAreaBounds);
   // The live layer shows the grey placeholder box in the middle of the view.
   const grey = () =>
     page.evaluate(() => {
@@ -268,7 +274,7 @@ test('while a picture is being added, a placeholder shows where it will go', asy
   release();
   // Once saved, the picture takes its place.
   await expect(area).not.toHaveAttribute('aria-busy');
-  await expect(page.locator('.status')).toHaveText('Saved');
+  await expect(status).toHaveText('Saved');
   await expect.poll(() => db.strokes.length).toBe(1);
   await expect.poll(grey).toBeLessThan(100);
 });

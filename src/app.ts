@@ -876,8 +876,8 @@ export class App {
   statusState() {
     const s: SyncState = this.picturesInFlight && this.syncState === 'saved' ? 'saving' : this.syncState;
     const local = this.store.mode === 'local';
-    const text = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: local ? 'Not saved yet, will retry' : 'Offline, will retry' }[s];
-    return { state: s, text };
+    const labels = { saved: local ? 'Saved on device' : 'Saved', saving: 'Saving...', retrying: local ? 'Not saved yet, will retry' : 'Offline, will retry' };
+    return { state: s, text: labels[s], retryText: labels.retrying };
   }
 
   private bumpCurrent() {
