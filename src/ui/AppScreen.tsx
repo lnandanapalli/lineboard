@@ -314,11 +314,11 @@ function StripControls({ app }: { app: App }) {
 
 function Status({ app }: { app: App }) {
   useView(app, 'status');
-  const { state, text } = app.statusState();
+  const { state, text, retryText } = app.statusState();
   // In guest mode the "Sign in to save" button sits next to it, so show just the coloured dot.
   return (
-    <div className={'status ' + state + (app.opts.signIn ? ' compact' : '')} title={text} aria-label={text}>
-      {text}
+    <div className={'status ' + state + (app.opts.signIn ? ' compact' : '')} title={text} aria-label={text} data-retry-text={retryText}>
+      <span>{text}</span>
     </div>
   );
 }

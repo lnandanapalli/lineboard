@@ -140,12 +140,16 @@ button { font: inherit; color: inherit; }
 .toggle.on .knob { background: var(--accent); }
 .toggle.on .knob::after { left: 14px; }
 
-.status { font-size: 13px; color: var(--muted); white-space: nowrap; display: flex; align-items: center; gap: 6px; flex: none; padding: 0 4px; }
+.status { font-size: 13px; color: var(--muted); white-space: nowrap; display: grid; grid-template-columns: 8px auto; align-items: center; gap: 6px; flex: none; padding: 0 4px; }
 .status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #16a34a; }
+/* Size the label column to the longest message so a status update cannot wrap the toolbar. */
+.status span, .status::after { grid-area: 1 / 2; }
+.status::after { content: attr(data-retry-text); visibility: hidden; }
 .status.saving::before { background: #f59e0b; }
 .status.retrying::before { background: var(--danger); }
 .status.retrying { color: var(--danger); }
-.status.compact { font-size: 0; gap: 0; padding: 0 6px; }
+.status.compact { grid-template-columns: 8px; gap: 0; padding: 0 6px; }
+.status.compact span, .status.compact::after { display: none; }
 
 .main { position: relative; flex: 1; min-height: 0; display: flex; }
 .board-host { position: relative; flex: 1; min-width: 0; }
