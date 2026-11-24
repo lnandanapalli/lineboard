@@ -248,6 +248,12 @@ test('while a picture is being added, a placeholder shows where it will go', asy
   await expect(status).toHaveText('Saved');
   const savedStatusBounds = await status.boundingBox();
   const savedAreaBounds = await area.boundingBox();
+  const assertCentered = async () => {
+    const slot = (await status.boundingBox())!;
+    const label = (await status.locator('.status-label').boundingBox())!;
+    expect(Math.abs(slot.x + slot.width / 2 - label.x - label.width / 2)).toBeLessThan(1);
+  };
+  await assertCentered();
   // Hold the upload until the test lets it go.
   let release!: () => void;
   const held = new Promise<void>((r) => (release = r));
@@ -259,6 +265,7 @@ test('while a picture is being added, a placeholder shows where it will go', asy
   await expect(area).toHaveAttribute('aria-busy', 'true');
   await expect(status).toHaveText('Saving...');
   expect(await status.boundingBox()).toEqual(savedStatusBounds);
+  await assertCentered();
   expect(await area.boundingBox()).toEqual(savedAreaBounds);
   // The live layer shows the grey placeholder box in the middle of the view.
   const grey = () =>

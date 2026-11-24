@@ -151,7 +151,7 @@ export function boot() {
       showBusy('Saving the notes from this device to your account...');
       try {
         const moved = await migrateGuestData(local, store, uid);
-        toast(`Saved ${moved === 1 ? '1 note' : `${moved} notes`} from this device to your account.`);
+        if (moved) toast(`Saved ${moved === 1 ? '1 note' : `${moved} notes`} from this device to your account.`);
       } catch (e) {
         console.error('Moving guest notes failed', e);
         toast('Could not save your notes from this device yet. They are still here and will be saved next time you sign in.', 'error');

@@ -99,11 +99,23 @@ test('signed in: picture uses are recorded (older notes once, in the background)
   await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG });
   await expect.poll(() => db.images?.size ?? 0).toBe(1);
   await expect.poll(() => (db.imageUses ?? []).length).toBe(1);
-  await copyNote(page, 'Copy');
+  await page.locator('.toolbar input[type=file][accept^="image/"]').setInputFiles({ name: 'second.png', mimeType: 'image/png', buffer: PNG });
   await expect.poll(() => (db.imageUses ?? []).length).toBe(2);
+  await copyNote(page, 'Copy');
+  await expect.poll(() => (db.imageUses ?? []).length).toBe(4);
+  const shared = [...db.imageUses!].sort((a, b) => a.image_id.localeCompare(b.image_id))[0];
+  // The second picture's surviving reference is beyond the first page.
+  const extraUses = Array.from({ length: 1000 }, () => ({ ...shared, note_id: crypto.randomUUID() }));
+  db.imageUses!.unshift(...extraUses);
+  const nextPage = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname.endsWith('/note_images') && url.searchParams.getAll('image_id').includes('gt.' + shared.image_id);
+  });
   await deleteForever(page, 'Original');
-  await expect.poll(() => (db.imageUses ?? []).length).toBe(1);
-  expect(db.images!.size).toBe(1); // the copy still uses it
+  await nextPage;
+  await expect.poll(() => (db.imageUses ?? []).length).toBe(1002);
+  expect(db.images!.size).toBe(2);
+  db.imageUses = db.imageUses!.filter((use) => !extraUses.includes(use));
   await deleteForever(page, 'Copy');
   await expect.poll(() => db.images!.size).toBe(0);
 });

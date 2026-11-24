@@ -61,6 +61,56 @@ test('signing in from guest mode moves the notes into the account', async ({ pag
   await expect(page.locator('.signin-save')).toHaveCount(0);
 });
 
+test('guest sign-in keeps recoverable trash on this device', async ({ page }) => {
+  const db = await mockSupabase(page);
+  await tryWithoutAccount(page);
+  await writeTwoStrokes(page);
+  const ids = await page.evaluate(() => {
+    const notes = JSON.parse(localStorage.getItem('lb-local-notes')!);
+    const books = JSON.parse(localStorage.getItem('lb-local-notebooks')!);
+    const now = new Date().toISOString();
+    const notebook = { id: crypto.randomUUID(), name: 'Trashed notebook', created_at: now, updated_at: now, deleted_at: now };
+    books.push({ ...notebook, id: 'trash', name: 'Trash', deleted_at: null }, notebook);
+    const originalStrokes = JSON.parse(localStorage.getItem('lb-local-strokes-' + notes[0].id)!);
+    const trashed = ['trash', notebook.id].map((notebook_id) => ({ ...notes[0], id: crypto.randomUUID(), notebook_id, deleted_at: now }));
+    for (const note of trashed) localStorage.setItem('lb-local-strokes-' + note.id, JSON.stringify(originalStrokes.map((s: object) => ({ ...s, id: crypto.randomUUID(), note_id: note.id }))));
+    localStorage.setItem('lb-local-notebooks', JSON.stringify(books));
+    localStorage.setItem('lb-local-notes', JSON.stringify([...notes, ...trashed]));
+    return trashed.map((note) => note.id);
+  });
+
+  await page.locator('.toolbar .signin-save').click();
+  await signIn(page);
+  await attachBoard(page);
+  await expect.poll(() => localNoteCount(page)).toBe(2);
+  expect(db.strokes).toHaveLength(2);
+  expect(await page.evaluate((noteIds) => noteIds.map((id) => JSON.parse(localStorage.getItem('lb-local-strokes-' + id) ?? '[]').length), ids)).toEqual([2, 2]);
+});
+
+test('guest sign-in waits for handwriting that could not be saved locally', async ({ page }) => {
+  const db = await mockSupabase(page);
+  const { cdp, geo } = await tryWithoutAccount(page);
+  await page.evaluate(() => {
+    const setItem = Storage.prototype.setItem;
+    (window as unknown as { allowSaves: () => void }).allowSaves = () => { Storage.prototype.setItem = setItem; window.dispatchEvent(new Event('online')); };
+    Storage.prototype.setItem = function (key, value) {
+      if (key.startsWith('lb-local-strokes-')) throw new DOMException('full', 'QuotaExceededError');
+      return setItem.call(this, key, value);
+    };
+  });
+  await drag(cdp, geo.areaX + 100, stripY(geo, 0), geo.areaX + 300, stripY(geo, 0));
+  await expect(page.locator('.status')).toHaveText('Not saved yet, will retry');
+  await page.locator('.toolbar .signin-save').click();
+  await expect(page.locator('#toast')).toContainText('Your changes are still waiting to save');
+  await expect(page).toHaveURL(/\/app$/);
+  await page.evaluate(() => (window as unknown as { allowSaves: () => void }).allowSaves());
+  await expect(page.locator('.status')).toHaveText('Saved on device');
+  await page.locator('.toolbar .signin-save').click();
+  await signIn(page);
+  await attachBoard(page);
+  expect(db.strokes).toHaveLength(1);
+});
+
 test('"Back to my notes" returns to guest mode with nothing lost', async ({ page }) => {
   const db = await mockSupabase(page);
   await tryWithoutAccount(page);

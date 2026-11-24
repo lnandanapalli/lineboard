@@ -1,6 +1,6 @@
 import { decodeSnapshot, encodeSnapshot, type SnapStroke, type VersionMeta } from '../history';
 import { DEFAULT_NOTEBOOK_NAME, TRASH_NAME, type Flags, type Notebook, type NoteMeta, type Settings, type Stroke } from '../types';
-import { lsGet, lsSet, uuid } from '../util';
+import { lsDel, lsGet, lsSet, uuid } from '../util';
 
 /**
  * Save to localStorage or fail loudly: a write the browser refused (storage full) must not look
@@ -180,6 +180,28 @@ export class LocalStore implements Store {
   async deleteNote(id: string) {
     const candidates = await this.picturesOf([id]);
     await this.removeNote(id);
+    await this.removeUnusedPictures(candidates);
+  }
+
+  /** Remove only the local notes whose contents were copied to the account. */
+  async removeMigratedNotes(copied: { note: NoteMeta; strokes: Stroke[]; versions: VersionMeta[] }[], requireSavedChanges: () => void) {
+    const ids = new Set(copied.map(({ note }) => note.id));
+    const candidates = await this.picturesOf([...ids]);
+    for (const { note, versions } of copied) {
+      const current = await this.listVersions(note.id);
+      if (JSON.stringify(current) !== JSON.stringify(versions)) throw new Error('Local version history changed during sign-in.');
+    }
+    requireSavedChanges();
+    const notes = this.notes();
+    for (const { note, strokes } of copied) {
+      if (JSON.stringify(notes.find((n) => n.id === note.id)) !== JSON.stringify(note) ||
+          JSON.stringify(lsGet<Stroke[]>(this.strokesKey(note.id), [])) !== JSON.stringify(strokes)) {
+        throw new Error('Local notes changed during sign-in.');
+      }
+    }
+    this.saveNotes(notes.filter((n) => !ids.has(n.id)));
+    for (const id of ids) lsDel(this.strokesKey(id));
+    await this.deleteVersions(copied.flatMap(({ versions }) => versions.map((v) => v.id))).catch(() => {});
     await this.removeUnusedPictures(candidates);
   }
 
