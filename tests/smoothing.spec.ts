@@ -104,22 +104,22 @@ test('fast successive pen letters stay separate across hover, capture loss and r
       pointerType, pointerId, isPrimary: true, clientX: rect.left + x * scale, clientY: rect.top + 45 * scale,
       buttons: down ? 1 : 0, pressure: down ? 0.5 : 0,
     }));
+    fire('pointerdown', 320, true, 8, 'touch');
+    fire('pointermove', 328, true, 8, 'touch');
+    fire('pointerdown', 360, true, 9, 'touch');
+    fire('pointermove', 368, true, 9, 'touch');
+    fire('pointerup', 390, false, 9, 'touch');
     for (const [i, end] of ['pointerup', 'lostpointercapture', 'pointermove', 'missed release', 'pointerup'].entries()) {
       const x = 100 + i * 40;
       fire('pointerdown', x, true);
       fire('pointermove', x + 8, true);
       if (end !== 'missed release') fire(end, x + 35, false);
     }
-    fire('pointerdown', 320, true, 8, 'touch');
-    fire('pointermove', 328, true, 8, 'touch');
-    fire('pointerdown', 360, true, 9, 'touch');
-    fire('pointermove', 368, true, 9, 'touch');
-    fire('pointerup', 390, false, 9, 'touch');
   });
   await savesDone(page);
   const strokes = await page.evaluate(() => {
     const key = Object.keys(localStorage).find((k) => k.startsWith('lb-local-strokes-'))!;
     return JSON.parse(localStorage[key]).map((s: { points: number[] }) => s.points.filter((_, i) => i % 3 === 0));
   });
-  expect(strokes).toEqual([[100, 108], [140, 148], [180, 188], [220, 228], [260, 268], [320, 328], [360, 368]]);
+  expect(strokes).toEqual([[320, 328], [360, 368], [100, 108], [140, 148], [180, 188], [220, 228], [260, 268]]);
 });
