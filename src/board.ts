@@ -31,6 +31,8 @@ const SETTLE_MS = 90;
 const PALM_SETTLE_MS = 300;
 const ERASER_RADIUS = 12;
 const MIN_POINT_DIST = 0.6;
+/** Keep small handwriting details while still ignoring duplicate and near-identical samples. */
+const MIN_INK_POINT_DIST = 0.2;
 /** Free mode: two fingers that land within this many ms of each other start a two-finger scroll. */
 const PAN_PAIR_MS = 300;
 /** ...and a stroke the first finger already started is dropped only if it is this young. */
@@ -637,8 +639,7 @@ export class Board {
   }
 
   /** App coordinates (see orientation.ts) to page units. */
-  private appToLogical(x: number, y: number) {
-    const r = appRect(this.live);
+  private appToLogical(x: number, y: number, r = appRect(this.live)) {
     return { x: (x - r.left) / this.scale + this.scrollX, y: (y - r.top) / this.scale + this.scrollY };
   }
 
@@ -666,18 +667,23 @@ export class Board {
   private bindInput() {
     const L = this.live;
     L.addEventListener('pointerdown', (e) => {
+      const previous = this.active;
+      // A fresh primary touch can have a new id. Pens and mice usually reuse theirs.
+      if (previous?.kind === 'draw' && previous.pointerType === e.pointerType && (e.isPrimary || previous.pointerId === e.pointerId)) {
+        this.endContact(previous.pointerId, false);
+      }
       this.down.add(e.pointerId);
       this.onDown(e);
     });
     L.addEventListener('pointermove', (e) => this.onMove(e));
-    const up = (e: PointerEvent, cancelled: boolean) => {
-      this.down.delete(e.pointerId);
-      if (this.refusedTouch?.id === e.pointerId) this.refusedTouch = null;
-      this.onUp(e, cancelled);
+    L.addEventListener('pointerup', (e) => this.endContact(e.pointerId, false));
+    L.addEventListener('pointercancel', (e) => this.endContact(e.pointerId, true));
+    const endUncapturedContact = (e: PointerEvent) => {
+      if (!L.hasPointerCapture(e.pointerId)) this.endContact(e.pointerId, false);
     };
-    L.addEventListener('pointerup', (e) => up(e, false));
-    L.addEventListener('pointercancel', (e) => up(e, true));
-    L.addEventListener('pointerleave', () => {
+    L.addEventListener('lostpointercapture', endUncapturedContact);
+    L.addEventListener('pointerleave', (e) => {
+      endUncapturedContact(e);
       if (this.eraserCursor && !this.active) {
         this.eraserCursor = null;
         this.invalidate('live');
@@ -943,7 +949,12 @@ export class Board {
     }
     const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const list = events.length ? events : [e];
+    const rect = appRect(this.live);
     for (const ev of list) {
+      if (a.kind === 'draw' && e.pointerType !== 'touch' && ev.buttons === 0) {
+        this.endContact(e.pointerId, false);
+        return;
+      }
       // A contact growing past the palm limit: a palm settling right after it lands (drop the
       // stroke), or a finger or soft stylus widening as it presses or tilts in a stroke that has
       // been going for a while (that is writing: keep it, and let automatic detection widen its
@@ -965,7 +976,8 @@ export class Board {
       // Learning takes the biggest the contact gets (a fingertip widens as it presses), so the limit
       // it learns always lets the same strokes through again.
       if (a.pointerType === 'touch' && a.size !== undefined) a.size = Math.max(a.size, contactSize(ev));
-      const pt = this.toLogical(ev.clientX, ev.clientY);
+      const pos = clientToApp(ev.clientX, ev.clientY);
+      const pt = this.appToLogical(pos.x, pos.y, rect);
       if (a.scale) {
         const { ax, ay, bx, by } = a.scale;
         a.scale.f = Math.max(0.05, Math.max((pt.x - ax) / Math.max(1, bx - ax), (pt.y - ay) / Math.max(1, by - ay)));
@@ -999,22 +1011,26 @@ export class Board {
     }
   }
 
-  private onUp(e: PointerEvent, cancelled: boolean) {
+  private endContact(pointerId: number, cancelled: boolean) {
+    this.down.delete(pointerId);
+    if (this.refusedTouch?.id === pointerId) this.refusedTouch = null;
     if (this.preview) {
-      if (this.preview.drag?.pointerId === e.pointerId) this.preview.drag = null;
+      if (this.preview.drag?.pointerId === pointerId) this.preview.drag = null;
       return;
     }
-    if (this.fingers.delete(e.pointerId) && this.pan) {
+    if (this.fingers.delete(pointerId) && this.pan) {
       if (this.fingers.size < 2) this.pan = null;
       return;
     }
     const a = this.active;
-    if (!a || a.pointerId !== e.pointerId) return;
+    if (!a || a.pointerId !== pointerId) return;
     const dur = performance.now() - a.start;
     if (cancelled && dur < SETTLE_MS && a.points.length <= 6) {
       this.cancelActive();
       return;
     }
+    // Lift, hover and capture-loss positions can already lie between letters.
+    // Finish at the last sample taken while the tip was on the surface.
     this.finish();
   }
 
@@ -1085,7 +1101,8 @@ export class Board {
     if (n >= 3) {
       const dx = x - pts[n - 3],
         dy = y - pts[n - 2];
-      if (dx * dx + dy * dy < MIN_POINT_DIST * MIN_POINT_DIST) return;
+      const minDist = a.kind === 'draw' ? MIN_INK_POINT_DIST : MIN_POINT_DIST;
+      if (dx * dx + dy * dy < minDist * minDist) return;
     }
     pts.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
     if (a.kind === 'erase') {
@@ -1796,11 +1813,11 @@ export class Board {
     if (!a.points.length) return;
     // A real stroke written by touch teaches automatic palm detection how big this writer's contact is.
     if (a.kind === 'draw' && a.pointerType === 'touch' && a.size !== undefined && a.points.length >= 12 && performance.now() - a.start >= 60) this.palm.record(a.size);
-    // Finish where the pen actually lifted (the stabilizer trails slightly behind it).
-    if (a.raw && this.settings.smoothing > 0 && a.points.length >= 3) {
+    // Let stabilized ink catch up to the final in-contact sample.
+    if (a.raw && a.points.length >= 3) {
       const [x, y, p] = a.raw;
       const n = a.points.length;
-      if (Math.hypot(x - a.points[n - 3], y - a.points[n - 2]) >= MIN_POINT_DIST) a.points.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
+      if (Math.hypot(x - a.points[n - 3], y - a.points[n - 2]) >= MIN_INK_POINT_DIST) a.points.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
     }
     const isHL = this.tool === 'highlighter';
     const stroke: Stroke = {
@@ -1812,8 +1829,12 @@ export class Board {
       points: a.points,
       created_at: new Date().toISOString(),
     };
-    this.cache(stroke);
-    this.invalidate('ink', 'live');
+    const cached = this.cache(stroke);
+    if (!this.dirty.ink) {
+      this.setPageTransform(this.inkCtx);
+      this.drawStroke(this.inkCtx, cached);
+    }
+    this.invalidate('live');
     this.cb.onStrokesAdded([stroke]);
   }
 
@@ -2329,7 +2350,15 @@ function buildPath(p: number[]): Path2D {
       y = p[i * 3 + 1];
     const nx = p[(i + 1) * 3],
       ny = p[(i + 1) * 3 + 1];
-    path.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+    const dx = x - p[(i - 1) * 3];
+    const dy = y - p[(i - 1) * 3 + 1];
+    // Preserve right-angle and reversing turns. A midpoint curve would cut across the hook.
+    if (dx * (nx - x) + dy * (ny - y) <= 0) {
+      path.lineTo(x, y);
+      path.lineTo((x + nx) / 2, (y + ny) / 2);
+    } else {
+      path.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+    }
   }
   path.lineTo(p[(n - 1) * 3], p[(n - 1) * 3 + 1]);
   return path;
